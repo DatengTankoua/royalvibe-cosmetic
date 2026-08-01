@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import { ObjectEntity, ObjectDocument } from './schemas/object.schema';
 import { CreateObjectDto } from './dto/create-object.dto';
 import { S3Service } from '../s3/s3.service';
+import { EventsGateway } from '../events/events.gateway';
 
 @Injectable()
 export class ObjectsService {
@@ -11,6 +12,7 @@ export class ObjectsService {
     @InjectModel(ObjectEntity.name)
     private objectModel: Model<ObjectDocument>,
     private s3Service: S3Service,
+    private eventsGateway: EventsGateway,
   ) {}
 
   async create(
@@ -21,7 +23,9 @@ export class ObjectsService {
       ...createObjectDto,
       imageUrl,
     });
-    return createdObject.save();
+    const saved = await createdObject.save();
+    this.eventsGateway.emitObjectCreated(saved);
+    return saved;
   }
 
   async findAll(): Promise<ObjectDocument[]> {
@@ -40,6 +44,7 @@ export class ObjectsService {
     const object = await this.findOne(id);
     await this.s3Service.deleteFile(object.imageUrl);
     await this.objectModel.findByIdAndDelete(id).exec();
+    this.eventsGateway.emitObjectDeleted(id);
     return object;
   }
 }
