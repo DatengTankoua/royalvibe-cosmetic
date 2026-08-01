@@ -4,6 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ObjectsModule } from './objects/objects.module';
+import { S3Module } from './s3/s3.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { ObjectsModule } from './objects/objects.module';
       }),
     }),
     ObjectsModule,
+    S3Module,
   ],
   controllers: [AppController],
   providers: [AppService],
