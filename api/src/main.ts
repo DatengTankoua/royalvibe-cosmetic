@@ -6,7 +6,8 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  app.enableCors({ origin: '*' });
+  const corsOrigin = process.env.CORS_ORIGIN?.split(',') ?? true;
+  app.enableCors({ origin: corsOrigin });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
