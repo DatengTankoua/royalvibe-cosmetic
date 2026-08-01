@@ -5,13 +5,7 @@
   "private": true,
   "license": "ISC",
   "type": "module",
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "^11.1.3",
-      "onFail": "download"
-    }
-  },
+  "packageManager": "pnpm@11.18.0",
   "scripts": {
     "prepare": "husky",
     "lint": "pnpm --filter api lint && pnpm --filter web lint",
@@ -23,9 +17,13 @@
     "prettier": "^3.3.3"
   },
   "lint-staged": {
-    "*.{ts,tsx}": [
-      "eslint --fix",
-      "prettier --write"
-    ]
-  }
+  "api/**/*.ts": [
+    "pnpm --filter api exec eslint --fix",
+    "prettier --write"
+  ],
+  "web/**/*.{ts,tsx}": [
+    "pnpm --filter web exec eslint --fix",
+    "prettier --write"
+  ]
+}
 }
