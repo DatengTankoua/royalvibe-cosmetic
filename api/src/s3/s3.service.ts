@@ -17,10 +17,6 @@ export class S3Service {
   constructor(private configService: ConfigService) {
     this.bucket = this.configService.get<string>('S3_BUCKET')!;
     this.endpoint = this.configService.get<string>('S3_ENDPOINT')!;
-    // Some providers (e.g. Supabase Storage) serve public objects from a
-    // different URL than the S3 API endpoint used for authenticated
-    // operations. Falls back to the endpoint for S3-compatible servers
-    // that serve both from the same origin (e.g. MinIO).
     this.publicUrlBase = (
       this.configService.get<string>('S3_PUBLIC_URL') ??
       `${this.endpoint}/${this.bucket}`

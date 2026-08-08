@@ -12,6 +12,11 @@ export class EventsGateway {
   @WebSocketServer()
   server: Server;
 
+  emit(event: string, payload: unknown): void {
+    this.server.emit(event, payload);
+  }
+
+  // Legacy helpers kept for backward compatibility
   emitObjectCreated(object: unknown) {
     this.server.emit('object:created', object);
   }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import Image from "next/image";
 import { toast } from "sonner";
 import { PlusIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,7 +16,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { createObject, getApiErrorMessage } from "@/lib/api";
+import { getApiErrorMessage } from "@/lib/api";
 
 export function CreateObjectDialog() {
   const [open, setOpen] = useState(false);
@@ -55,8 +56,8 @@ export function CreateObjectDialog() {
 
     setIsSubmitting(true);
     try {
-      await createObject({ title, description, image: imageFile });
-      toast.success("Object created");
+      // Legacy stub — product creation now handled via CreateProductDialog
+      toast.info("Utilise la page Sections pour créer des produits");
       resetForm();
       setOpen(false);
     } catch (error) {
@@ -114,10 +115,11 @@ export function CreateObjectDialog() {
               required
             />
             {previewUrl && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
+              <Image
                 src={previewUrl}
                 alt="Preview"
+                width={400}
+                height={300}
                 className="mt-2 h-40 w-full rounded-lg object-cover"
               />
             )}

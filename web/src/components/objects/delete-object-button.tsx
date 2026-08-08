@@ -15,7 +15,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { deleteObject, getApiErrorMessage } from "@/lib/api";
+import { deleteProduct, getApiErrorMessage } from "@/lib/api";
 
 interface DeleteObjectButtonProps {
   id: string;
@@ -34,8 +34,8 @@ export function DeleteObjectButton({
   async function handleDelete() {
     setIsDeleting(true);
     try {
-      await deleteObject(id);
-      toast.success("Object deleted");
+      await deleteProduct(id);
+      toast.success("Produit supprimé");
       setOpen(false);
       onDeleted?.();
     } catch (error) {

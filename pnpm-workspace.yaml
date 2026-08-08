@@ -2,5 +2,6 @@ packages:
   - "api"
   - "web"
 allowBuilds:
+  bcrypt: false
   sharp: true
   unrs-resolver: true
