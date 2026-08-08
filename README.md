@@ -1,33 +1,102 @@
-# Heyama Objects
+# RoyalVibe Cosmétiques & Bijoux — Application de gestion
 
-Objects manager (title, description, image) with a NestJS + MongoDB API,
-S3-compatible image storage (MinIO in dev), and a Next.js frontend with
-real-time updates over Socket.IO.
+Application collaborative de gestion des ventes pour **RoyalVibe Cosmétiques & Bijoux**.
+Produits achetés en Europe (€) et revendus en Afrique (FCFA/XOF).
+
+## Fonctionnalités
+
+- **Catalogue produits** organisé par sections (catégories)
+- **Suivi des ventes** avec historique complet et trail d'audit
+- **Rôles** : Admin (gestion complète) · Vendeur (enregistrement des ventes)
+- **Analytique** : KPIs, classements produits/vendeurs, tendance mensuelle, filtrage par mois
+- **Convertisseur EUR ↔ FCFA** intégré (taux fixe officiel 1 EUR = 655,957 XOF)
+- **Notifications temps réel** via WebSocket (Socket.IO)
+- **PWA** installable sur Android, iOS et desktop
+- Authentification JWT (register / login)
 
 ## Stack
 
-- **API**: NestJS, Mongoose, `class-validator`, `@aws-sdk/client-s3`, `@nestjs/websockets` + `socket.io`
-- **Web**: Next.js (App Router), TypeScript, Tailwind, shadcn/ui (Base UI), `socket.io-client`
-- **Infra**: MongoDB, MinIO (S3-compatible), Docker Compose
-- **Tooling**: pnpm workspaces, ESLint, Prettier, Husky + lint-staged
+| Couche | Techno |
+|---|---|
+| API | NestJS 11, Mongoose, `class-validator`, `@nestjs/jwt`, Socket.IO |
+| Web | Next.js (App Router), React 19, TypeScript 5, Tailwind CSS, `@base-ui/react` |
+| Base de données | MongoDB 7 |
+| Stockage images | MinIO (S3-compatible, dev) |
+| Infra dev | Docker Compose |
+| Monorepo | pnpm workspaces |
 
-## Prerequisites
+## Prérequis
 
 - Node.js 22+
-- pnpm (`corepack enable` or `npm i -g pnpm`)
-- Docker (for MongoDB and MinIO)
+- pnpm (`corepack enable`)
+- Docker Desktop
 
-## Quick start
+## Démarrage rapide (dev)
 
 ```bash
 git clone <repo-url>
 cd heyama-test
 
-# 1. Start MongoDB and MinIO
+# 1. Démarrer MongoDB et MinIO
 docker compose up -d
 
-# 2. Create the MinIO bucket
-# Open http://localhost:9001 (login: minioadmin / minioadmin123)
+# 2. Créer le bucket MinIO
+# Ouvre http://localhost:9001 (minioadmin / minioadmin123)
+# Crée un bucket nommé heyama-objects et passe-le en accès public (lecture)
+
+# 3. Variables d'environnement API
+cp api/.env.example api/.env
+# Vérifie/modifie les valeurs si besoin
+
+# 4. Variables d'environnement Web
+cp web/.env.example web/.env.local
+# NEXT_PUBLIC_API_URL=http://localhost:4000
+
+# 5. Installer les dépendances
+pnpm install
+
+# 6. Lancer les deux serveurs
+pnpm --filter api start:dev   # NestJS sur http://localhost:4000
+pnpm --filter web dev         # Next.js sur http://localhost:3000
+```
+
+## Structure du monorepo
+
+```
+├── api/              # Backend NestJS
+│   └── src/
+│       ├── auth/     # JWT, guards, stratégies
+│       ├── users/    # Gestion des utilisateurs
+│       ├── sections/ # Catégories de produits
+│       ├── products/ # Catalogue + métriques
+│       ├── sales/    # Enregistrement des ventes
+│       ├── audit/    # Historique immuable
+│       ├── analytics/# Agrégations MongoDB
+│       ├── events/   # Passerelle WebSocket
+│       └── s3/       # Upload images (MinIO/S3)
+├── web/              # Frontend Next.js
+│   └── src/
+│       ├── app/      # Pages (App Router)
+│       ├── components/
+│       ├── hooks/    # useProducts, useSections, useSocket
+│       └── lib/      # api.ts, auth.ts, currency.ts
+├── docker-compose.yml          # Dev
+├── docker-compose.prod.yml     # Production
+└── nginx/nginx.conf            # Reverse proxy prod
+```
+
+## Production
+
+Voir [docker-compose.prod.yml](docker-compose.prod.yml) et [nginx/nginx.conf](nginx/nginx.conf).
+
+```bash
+cp .env.prod.example .env.prod
+# Remplis tous les secrets dans .env.prod
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+```
+
+Consulte la section **Production** dans [api/README.md](api/README.md) pour les détails.
+
 # → Buckets → Create bucket → name it "heyama-objects"
 # → Bucket → Anonymous access → add a "readonly" policy on prefix "*"
 #   (so uploaded images are publicly viewable from the browser)

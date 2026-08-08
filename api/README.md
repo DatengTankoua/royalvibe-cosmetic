@@ -1,6 +1,98 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# RoyalVibe — API (NestJS)
+
+API REST + WebSocket de l'application **RoyalVibe Cosmétiques & Bijoux**.
+
+## Stack
+
+- NestJS 11 · TypeScript · Mongoose (MongoDB 7)
+- `@nestjs/jwt` + Passport (authentification JWT)
+- `@nestjs/websockets` + Socket.IO (temps réel)
+- `@aws-sdk/client-s3` (upload images MinIO/S3)
+- `class-validator` / `class-transformer`
+- `bcryptjs` (hash des mots de passe)
+
+## Modules
+
+| Module | Description |
+|---|---|
+| `auth` | Register, login, JWT guards, `@Public()` decorator |
+| `users` | Schéma User, rôles Admin/Seller |
+| `sections` | Catégories de produits (CRUD admin) |
+| `products` | Catalogue + métriques (stock, profit, statut) |
+| `sales` | Enregistrement des ventes, décrémentation du stock |
+| `audit` | Journal immuable de chaque modification produit |
+| `analytics` | Agrégations MongoDB : KPIs, classements, tendance mensuelle |
+| `events` | Passerelle WebSocket (product:created/updated/deleted, sale:created) |
+| `s3` | Upload et suppression d'images (S3-compatible) |
+
+## Lancer en dev
+
+```bash
+# Depuis la racine du monorepo
+pnpm --filter api start:dev
+# ou depuis api/
+pnpm start:dev
+```
+
+L'API tourne sur [http://localhost:4000](http://localhost:4000).
+
+## Variables d'environnement
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Description |
+|---|---|
+| `PORT` | Port de l'API (défaut : 4000) |
+| `MONGODB_URI` | URI MongoDB |
+| `JWT_SECRET` | Secret JWT (long string aléatoire en prod) |
+| `CORS_ORIGIN` | Origines autorisées (ex: `https://royalvibe.com`) |
+| `S3_ENDPOINT` | URL MinIO/S3 |
+| `S3_REGION` | Région S3 |
+| `S3_ACCESS_KEY` | Clé d'accès S3 |
+| `S3_SECRET_KEY` | Secret S3 |
+| `S3_BUCKET` | Nom du bucket |
+| `S3_FORCE_PATH_STYLE` | `true` pour MinIO |
+| `S3_PUBLIC_URL` | URL publique pour les images (si différente de `S3_ENDPOINT`) |
+
+## Endpoints principaux
+
+```
+POST /auth/register
+POST /auth/login
+GET  /auth/me
+
+GET  /sections
+POST /sections           (admin)
+GET  /sections/:id
+
+GET  /products?sectionId=
+POST /products           (admin)
+GET  /products/:id
+PATCH /products/:id      (admin)
+DELETE /products/:id     (admin)
+
+GET  /sales
+POST /sales
+
+GET  /audit/:productId
+
+GET  /analytics/overview?month=YYYY-MM
+GET  /analytics/products/ranking?month=YYYY-MM
+GET  /analytics/sellers/ranking?month=YYYY-MM
+GET  /analytics/monthly
+```
+
+## Build production
+
+```bash
+pnpm build    # compile TypeScript → dist/
+node dist/main
+```
+
+Ou via Docker (voir `Dockerfile` à la racine du dossier `api/`).
+
 
 [circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
 [circleci-url]: https://circleci.com/gh/nestjs/nest
