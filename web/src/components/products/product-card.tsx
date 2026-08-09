@@ -112,7 +112,7 @@ export function ProductCard({
               {product.remainingQuantity} / {product.initialQuantity}
             </span>
             <span className="text-muted-foreground">Vendus</span>
-            <span className="text-right">{product.unitsSold}</span>
+            <span className="text-right">{product.unitsSold ?? 0}</span>
             <span className="text-muted-foreground">Bénéfice estimé</span>
             <span
               className={`text-right font-semibold ${product.estimatedProfit >= 0 ? "text-green-600" : "text-red-600"}`}

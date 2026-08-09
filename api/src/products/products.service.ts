@@ -210,13 +210,18 @@ export class ProductsService {
   }
 
   private withMetrics(p: ProductDocument): ProductWithMetrics {
-    const unitsSold = p.initialQuantity - p.remainingQuantity;
-    const totalPurchaseCost = p.purchasePrice * p.initialQuantity;
-    const estimatedRevenue = p.salePrice * unitsSold;
-    const estimatedProfit = estimatedRevenue - p.purchasePrice * unitsSold;
+    // Guard against NaN if prices are missing (malformed documents)
+    const buyPrice = Number(p.purchasePrice) || 0;
+    const sellPrice = Number(p.salePrice) || 0;
+    const initQty = Number(p.initialQuantity) || 0;
+    const remQty = Number(p.remainingQuantity) || 0;
+    const unitsSold = initQty - remQty;
+    const totalPurchaseCost = buyPrice * initQty;
+    const estimatedRevenue = sellPrice * unitsSold;
+    const estimatedProfit = estimatedRevenue - buyPrice * unitsSold;
     return {
       product: p,
-      status: computeStatus(p.remainingQuantity, p.initialQuantity),
+      status: computeStatus(remQty, initQty),
       unitsSold,
       totalPurchaseCost,
       estimatedRevenue,
