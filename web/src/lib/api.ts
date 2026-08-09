@@ -250,6 +250,49 @@ export async function deleteProduct(id: string): Promise<void> {
   await apiClient.delete(`/products/${id}`);
 }
 
+// ─── Trash ───────────────────────────────────────────────────────────────────
+
+export interface ApiTrashedSection extends ApiSection {
+  deletedAt: string;
+}
+export interface ApiTrashedProduct {
+  _id: string;
+  sectionId: string;
+  name: string;
+  imageUrl: string;
+  purchasePrice: number;
+  salePrice: number;
+  initialQuantity: number;
+  remainingQuantity: number;
+  deletedAt: string;
+  createdAt: string;
+}
+
+export async function fetchTrash(): Promise<{
+  sections: ApiTrashedSection[];
+  products: ApiTrashedProduct[];
+}> {
+  const { data } = await apiClient.get("/trash");
+  return data;
+}
+
+export async function restoreSection(id: string): Promise<ApiSection> {
+  const { data } = await apiClient.patch<ApiSection>(`/sections/${id}/restore`);
+  return data;
+}
+
+export async function permanentDeleteSection(id: string): Promise<void> {
+  await apiClient.delete(`/sections/${id}/permanent`);
+}
+
+export async function restoreProduct(id: string): Promise<void> {
+  await apiClient.patch(`/products/${id}/restore`);
+}
+
+export async function permanentDeleteProduct(id: string): Promise<void> {
+  await apiClient.delete(`/products/${id}/permanent`);
+}
+
 // ─── Sales ───────────────────────────────────────────────────────────────────
 
 export async function fetchSales(productId?: string): Promise<ApiSale[]> {

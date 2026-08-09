@@ -12,6 +12,7 @@ import { ProductsModule } from './products/products.module';
 import { SalesModule } from './sales/sales.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { AuditModule } from './audit/audit.module';
+import { TrashModule } from './trash/trash.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { AuditModule } from './audit/audit.module';
     SalesModule,
     AuditModule,
     AnalyticsModule,
+    TrashModule,
   ],
   controllers: [AppController],
   providers: [AppService],

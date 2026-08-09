@@ -10,6 +10,7 @@ import {
   LayoutGridIcon,
   LogOutIcon,
   ShoppingBagIcon,
+  Trash2Icon,
 } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 import { CurrencyConverter } from "@/components/currency/currency-converter";
@@ -65,6 +66,16 @@ export function Navbar() {
               <Link href="/sales" className={navLink}>
                 <ShoppingBagIcon className="h-4 w-4" />
                 Ventes
+              </Link>
+            )}
+            {user?.role === "admin" && (
+              <Link
+                href="/corbeille"
+                className={navLink + " text-muted-foreground"}
+                title="Corbeille"
+              >
+                <Trash2Icon className="h-4 w-4" />
+                <span className="hidden sm:inline">Corbeille</span>
               </Link>
             )}
             <button

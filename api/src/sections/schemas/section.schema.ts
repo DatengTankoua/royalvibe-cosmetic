@@ -10,6 +10,9 @@ export class Section {
 
   @Prop({ trim: true, default: '' })
   description: string;
+
+  @Prop({ type: Date, default: null })
+  deletedAt: Date | null;
 }
 
 export const SectionSchema = SchemaFactory.createForClass(Section);

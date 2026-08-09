@@ -16,7 +16,17 @@ export class SectionsService {
   }
 
   async findAll(): Promise<SectionDocument[]> {
-    return this.sectionModel.find().sort({ createdAt: -1 }).exec();
+    return this.sectionModel
+      .find({ deletedAt: null })
+      .sort({ createdAt: -1 })
+      .exec();
+  }
+
+  async findTrashed(): Promise<SectionDocument[]> {
+    return this.sectionModel
+      .find({ deletedAt: { $ne: null } })
+      .sort({ deletedAt: -1 })
+      .exec();
   }
 
   async findOne(id: string): Promise<SectionDocument> {
@@ -33,7 +43,26 @@ export class SectionsService {
     return section;
   }
 
+  /** Soft-delete: moves to trash */
   async remove(id: string): Promise<SectionDocument> {
+    const section = await this.sectionModel
+      .findByIdAndUpdate(id, { deletedAt: new Date() }, { new: true })
+      .exec();
+    if (!section) throw new NotFoundException(`Section ${id} not found`);
+    return section;
+  }
+
+  /** Restore from trash */
+  async restore(id: string): Promise<SectionDocument> {
+    const section = await this.sectionModel
+      .findByIdAndUpdate(id, { deletedAt: null }, { new: true })
+      .exec();
+    if (!section) throw new NotFoundException(`Section ${id} not found`);
+    return section;
+  }
+
+  /** Permanently delete from trash */
+  async permanentDelete(id: string): Promise<SectionDocument> {
     const section = await this.sectionModel.findByIdAndDelete(id).exec();
     if (!section) throw new NotFoundException(`Section ${id} not found`);
     return section;
