@@ -152,8 +152,8 @@ export function ProductCard({
             <AlertDialogTitle>Supprimer ce produit ?</AlertDialogTitle>
             <AlertDialogDescription>
               Tu es sur le point de supprimer <strong>{product.name}</strong>.
-              Cette action est irréversible et supprimera également toutes les
-              données associées.
+              Tu peux restaurer ou supprimer définitivement ce produit depuis la
+              corbeille.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

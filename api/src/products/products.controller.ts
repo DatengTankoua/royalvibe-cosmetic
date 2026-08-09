@@ -78,6 +78,13 @@ export class ProductsController {
     return this.productsService.update(id, dto, user._id.toString());
   }
 
+  @Patch(':id/restore')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  restore(@Param('id', ParseObjectIdPipe) id: string) {
+    return this.productsService.restore(id);
+  }
+
   @Delete(':id')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
@@ -86,5 +93,12 @@ export class ProductsController {
     @CurrentUser() user: User,
   ) {
     return this.productsService.remove(id, user._id.toString());
+  }
+
+  @Delete(':id/permanent')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  permanentDelete(@Param('id', ParseObjectIdPipe) id: string) {
+    return this.productsService.permanentDelete(id);
   }
 }

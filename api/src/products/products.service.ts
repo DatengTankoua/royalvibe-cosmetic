@@ -66,9 +66,8 @@ export class ProductsService {
   }
 
   async findAll(sectionId?: string): Promise<ProductWithMetrics[]> {
-    const filter = sectionId
-      ? { sectionId: new Types.ObjectId(sectionId) }
-      : {};
+    const filter: Record<string, unknown> = { deletedAt: null };
+    if (sectionId) filter.sectionId = new Types.ObjectId(sectionId);
     const products = await this.productModel
       .find(filter)
       .sort({ createdAt: -1 })
@@ -184,12 +183,36 @@ export class ProductsService {
   async remove(id: string, actorId: string): Promise<ProductDocument> {
     const product = await this.productModel.findById(id).exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
-    await this.s3Service.deleteFile(product.imageUrl);
     await this.auditService.log(id, AuditAction.DELETED, actorId, {
       name: product.name,
     });
-    await product.deleteOne();
+    product.deletedAt = new Date();
+    const saved = await product.save();
     this.eventsGateway.emit('product:deleted', id);
+    return saved;
+  }
+
+  async findTrashed(): Promise<ProductDocument[]> {
+    return this.productModel
+      .find({ deletedAt: { $ne: null } })
+      .sort({ deletedAt: -1 })
+      .exec();
+  }
+
+  async restore(id: string): Promise<ProductDocument> {
+    const product = await this.productModel
+      .findByIdAndUpdate(id, { deletedAt: null }, { new: true })
+      .exec();
+    if (!product) throw new NotFoundException(`Product ${id} not found`);
+    this.eventsGateway.emit('product:created', product);
+    return product;
+  }
+
+  async permanentDelete(id: string): Promise<ProductDocument> {
+    const product = await this.productModel.findById(id).exec();
+    if (!product) throw new NotFoundException(`Product ${id} not found`);
+    await this.s3Service.deleteFile(product.imageUrl);
+    await product.deleteOne();
     return product;
   }
 

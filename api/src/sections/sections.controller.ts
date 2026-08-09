@@ -47,10 +47,24 @@ export class SectionsController {
     return this.sectionsService.update(id, dto);
   }
 
+  @Patch(':id/restore')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  restore(@Param('id', ParseObjectIdPipe) id: string) {
+    return this.sectionsService.restore(id);
+  }
+
   @Delete(':id')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
   remove(@Param('id', ParseObjectIdPipe) id: string) {
     return this.sectionsService.remove(id);
+  }
+
+  @Delete(':id/permanent')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  permanentDelete(@Param('id', ParseObjectIdPipe) id: string) {
+    return this.sectionsService.permanentDelete(id);
   }
 }

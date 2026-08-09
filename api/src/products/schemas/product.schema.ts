@@ -25,6 +25,9 @@ export class Product {
 
   @Prop({ required: true, min: 0 })
   remainingQuantity: number;
+
+  @Prop({ type: Date, default: null })
+  deletedAt: Date | null;
 }
 
 export const ProductSchema = SchemaFactory.createForClass(Product);
