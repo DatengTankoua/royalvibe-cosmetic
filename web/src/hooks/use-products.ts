@@ -80,6 +80,7 @@ export function useProducts(sectionId?: string) {
         purchasePrice?: number;
         salePrice?: number;
         additionalStock?: number;
+        newRemainingQuantity?: number;
       },
     ) => {
       const p = await updateProduct(id, payload);

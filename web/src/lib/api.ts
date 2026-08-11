@@ -236,6 +236,7 @@ export async function updateProduct(
     purchasePrice?: number;
     salePrice?: number;
     additionalStock?: number;
+    newRemainingQuantity?: number;
     sectionId?: string;
   },
 ): Promise<ApiProduct> {

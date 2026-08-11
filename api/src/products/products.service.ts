@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Product, ProductDocument } from './schemas/product.schema';
@@ -44,11 +48,36 @@ export class ProductsService {
     private auditService: AuditService,
   ) {}
 
+  /** Throws 409 if another product shares the same name (active or trashed) */
+  private async assertUniqueProductName(
+    name: string,
+    excludeId?: string,
+  ): Promise<void> {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const query: Record<string, unknown> = {
+      name: new RegExp(`^${escaped}$`, 'i'),
+    };
+    if (excludeId) query._id = { $ne: new Types.ObjectId(excludeId) };
+    const existing = await this.productModel.findOne(query).exec();
+    if (existing) {
+      throw new ConflictException({
+        message: 'DUPLICATE_PRODUCT',
+        existing: {
+          _id: existing._id,
+          name: existing.name,
+          deletedAt: existing.deletedAt,
+          sectionId: existing.sectionId,
+        },
+      });
+    }
+  }
+
   async create(
     dto: CreateProductDto,
     imageUrl: string,
     actorId: string,
   ): Promise<ProductDocument> {
+    await this.assertUniqueProductName(dto.name);
     const product = await this.productModel.create({
       ...dto,
       sectionId: new Types.ObjectId(dto.sectionId),
@@ -159,6 +188,17 @@ export class ProductsService {
         actorId,
         stockChange,
       );
+    }
+
+    if (
+      dto.newRemainingQuantity !== undefined &&
+      dto.newRemainingQuantity !== product.remainingQuantity
+    ) {
+      await this.auditService.log(id, AuditAction.STOCK_CHANGED, actorId, {
+        previousRemainingQuantity: product.remainingQuantity,
+        newRemainingQuantity: dto.newRemainingQuantity,
+      });
+      product.remainingQuantity = dto.newRemainingQuantity;
     }
 
     if (dto.sectionId) {

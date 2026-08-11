@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import axios from "axios";
 import { ArrowLeftRightIcon, PlusIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { EUR_TO_XOF, fmtEur } from "@/lib/currency";
 import { CurrencyConverter } from "@/components/currency/currency-converter";
+import {
+  DuplicateWarningDialog,
+  type DuplicateItem,
+} from "@/components/ui/duplicate-warning-dialog";
 
 interface CreateProductDialogProps {
   sectionId: string;
@@ -39,6 +44,15 @@ export function CreateProductDialog({
   const [quantity, setQuantity] = useState("");
   const [image, setImage] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
+  const [duplicate, setDuplicate] = useState<DuplicateItem | null>(null);
+
+  const resetForm = () => {
+    setName("");
+    setPurchasePrice("");
+    setSalePrice("");
+    setQuantity("");
+    setImage(null);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,12 +72,19 @@ export function CreateProductDialog({
       });
       toast.success("Produit ajouté");
       setOpen(false);
-      setName("");
-      setPurchasePrice("");
-      setSalePrice("");
-      setQuantity("");
-      setImage(null);
+      resetForm();
     } catch (err: unknown) {
+      if (axios.isAxiosError(err) && err.response?.status === 409) {
+        const body = err.response.data as {
+          message: string;
+          existing: DuplicateItem & { sectionId: string };
+        };
+        if (body.message === "DUPLICATE_PRODUCT") {
+          setOpen(false);
+          setDuplicate(body.existing);
+          return;
+        }
+      }
       toast.error(err instanceof Error ? err.message : "Erreur");
     } finally {
       setLoading(false);
@@ -170,6 +191,11 @@ export function CreateProductDialog({
         </DialogContent>
       </Dialog>
       <CurrencyConverter open={converterOpen} onOpenChange={setConverterOpen} />
+      <DuplicateWarningDialog
+        type="product"
+        item={duplicate}
+        onClose={() => setDuplicate(null)}
+      />
     </>
   );
 }
