@@ -11,6 +11,7 @@ import {
   SquareIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -32,6 +33,7 @@ import {
 import { useAuth } from "@/contexts/auth-context";
 import { useTrash } from "@/hooks/use-trash";
 import { fmtXof } from "@/lib/currency";
+import Image from "next/image";
 
 type ConfirmAction =
   | { kind: "restore-section"; id: string; name: string }
@@ -81,7 +83,8 @@ export default function TrashPage() {
   const toggleSection = (id: string) => {
     setSelectedSections((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -97,7 +100,8 @@ export default function TrashPage() {
   const toggleProduct = (id: string) => {
     setSelectedProducts((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -465,6 +469,20 @@ export default function TrashPage() {
                     key={p._id}
                     className={`transition-shadow hover:shadow-md ${selectedProducts.has(p._id) ? "ring-2 ring-primary" : ""}`}
                   >
+                    <Link
+                      href={`/products/${p._id}`}
+                      className="relative block aspect-video overflow-hidden bg-muted"
+                    >
+                      <Image
+                        src={p.imageUrl}
+                        alt={p.name}
+                        fill
+                        unoptimized
+                        priority={false}
+                        loading="lazy"
+                        className="object-cover"
+                      />
+                    </Link>
                     <CardHeader className="pb-2">
                       <div className="flex items-start gap-2">
                         <button

@@ -236,15 +236,19 @@ export async function updateProduct(
     purchasePrice?: number;
     salePrice?: number;
     additionalStock?: number;
-    newRemainingQuantity?: number;
     sectionId?: string;
   },
 ): Promise<ApiProduct> {
-  const { data } = await apiClient.patch<ApiProduct>(
-    `/products/${id}`,
-    payload,
-  );
-  return data;
+  const { data } = await apiClient.patch<{
+    product: ApiProduct;
+    status: string;
+    unitsSold: number;
+    totalPurchaseCost: number;
+    estimatedRevenue: number;
+    estimatedProfit: number;
+  }>(`/products/${id}`, payload);
+  const { product, ...metrics } = data;
+  return { ...product, ...metrics } as ApiProduct;
 }
 
 export async function deleteProduct(id: string): Promise<void> {

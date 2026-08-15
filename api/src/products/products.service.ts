@@ -136,7 +136,7 @@ export class ProductsService {
     id: string,
     dto: UpdateProductDto,
     actorId: string,
-  ): Promise<ProductDocument> {
+  ): Promise<ProductWithMetrics> {
     const product = await this.productModel.findById(id).exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
 
@@ -190,17 +190,6 @@ export class ProductsService {
       );
     }
 
-    if (
-      dto.newRemainingQuantity !== undefined &&
-      dto.newRemainingQuantity !== product.remainingQuantity
-    ) {
-      await this.auditService.log(id, AuditAction.STOCK_CHANGED, actorId, {
-        previousRemainingQuantity: product.remainingQuantity,
-        newRemainingQuantity: dto.newRemainingQuantity,
-      });
-      product.remainingQuantity = dto.newRemainingQuantity;
-    }
-
     if (dto.sectionId) {
       const newId = new Types.ObjectId(dto.sectionId);
       if (!product.sectionId.equals(newId)) {
@@ -216,8 +205,9 @@ export class ProductsService {
     }
 
     const saved = await product.save();
-    this.eventsGateway.emit('product:updated', saved);
-    return saved;
+    const enriched = this.withMetrics(saved);
+    this.eventsGateway.emit('product:updated', enriched);
+    return enriched;
   }
 
   async remove(id: string, actorId: string): Promise<ProductDocument> {

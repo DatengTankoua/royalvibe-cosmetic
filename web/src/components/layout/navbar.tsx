@@ -42,6 +42,7 @@ export function Navbar() {
               alt="RoyalVibe"
               width={36}
               height={36}
+              style={{ width: 36, height: 36 }}
               className="rounded-full object-cover"
             />
             <span className="font-bold text-base leading-tight hidden sm:block">
