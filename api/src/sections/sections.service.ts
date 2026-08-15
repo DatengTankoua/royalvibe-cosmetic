@@ -1,6 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Section, SectionDocument } from './schemas/section.schema';
 import { CreateSectionDto } from './dto/create-section.dto';
 import { UpdateSectionDto } from './dto/update-section.dto';
@@ -11,7 +15,31 @@ export class SectionsService {
     @InjectModel(Section.name) private sectionModel: Model<SectionDocument>,
   ) {}
 
+  /** Throws 409 if another section shares the same name (active or trashed) */
+  private async assertUniqueName(
+    name: string,
+    excludeId?: string,
+  ): Promise<void> {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const query: Record<string, unknown> = {
+      name: new RegExp(`^${escaped}$`, 'i'),
+    };
+    if (excludeId) query._id = { $ne: new Types.ObjectId(excludeId) };
+    const existing = await this.sectionModel.findOne(query).exec();
+    if (existing) {
+      throw new ConflictException({
+        message: 'DUPLICATE_SECTION',
+        existing: {
+          _id: existing._id,
+          name: existing.name,
+          deletedAt: existing.deletedAt,
+        },
+      });
+    }
+  }
+
   async create(dto: CreateSectionDto): Promise<SectionDocument> {
+    await this.assertUniqueName(dto.name);
     return this.sectionModel.create(dto);
   }
 
@@ -36,6 +64,7 @@ export class SectionsService {
   }
 
   async update(id: string, dto: UpdateSectionDto): Promise<SectionDocument> {
+    if (dto.name) await this.assertUniqueName(dto.name, id);
     const section = await this.sectionModel
       .findByIdAndUpdate(id, dto, { new: true })
       .exec();

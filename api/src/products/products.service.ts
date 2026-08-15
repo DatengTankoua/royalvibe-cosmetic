@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Product, ProductDocument } from './schemas/product.schema';
@@ -44,11 +48,36 @@ export class ProductsService {
     private auditService: AuditService,
   ) {}
 
+  /** Throws 409 if another product shares the same name (active or trashed) */
+  private async assertUniqueProductName(
+    name: string,
+    excludeId?: string,
+  ): Promise<void> {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const query: Record<string, unknown> = {
+      name: new RegExp(`^${escaped}$`, 'i'),
+    };
+    if (excludeId) query._id = { $ne: new Types.ObjectId(excludeId) };
+    const existing = await this.productModel.findOne(query).exec();
+    if (existing) {
+      throw new ConflictException({
+        message: 'DUPLICATE_PRODUCT',
+        existing: {
+          _id: existing._id,
+          name: existing.name,
+          deletedAt: existing.deletedAt,
+          sectionId: existing.sectionId,
+        },
+      });
+    }
+  }
+
   async create(
     dto: CreateProductDto,
     imageUrl: string,
     actorId: string,
   ): Promise<ProductDocument> {
+    await this.assertUniqueProductName(dto.name);
     const product = await this.productModel.create({
       ...dto,
       sectionId: new Types.ObjectId(dto.sectionId),
@@ -107,7 +136,7 @@ export class ProductsService {
     id: string,
     dto: UpdateProductDto,
     actorId: string,
-  ): Promise<ProductDocument> {
+  ): Promise<ProductWithMetrics> {
     const product = await this.productModel.findById(id).exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
 
@@ -176,8 +205,9 @@ export class ProductsService {
     }
 
     const saved = await product.save();
-    this.eventsGateway.emit('product:updated', saved);
-    return saved;
+    const enriched = this.withMetrics(saved);
+    this.eventsGateway.emit('product:updated', enriched);
+    return enriched;
   }
 
   async remove(id: string, actorId: string): Promise<ProductDocument> {

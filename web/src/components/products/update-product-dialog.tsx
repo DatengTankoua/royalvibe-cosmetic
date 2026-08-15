@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { fmtXof } from "@/lib/currency";
 import type { ApiProduct } from "@/lib/api";
 
 interface UpdateProductDialogProps {
@@ -34,33 +35,42 @@ export function UpdateProductDialog({
   onOpenChange,
   onUpdated,
 }: UpdateProductDialogProps) {
-  const [name, setName] = useState(product?.name ?? "");
-  const [purchasePrice, setPurchasePrice] = useState(
-    String(product?.purchasePrice ?? ""),
-  );
-  const [salePrice, setSalePrice] = useState(String(product?.salePrice ?? ""));
+  const [name, setName] = useState("");
+  const [purchasePrice, setPurchasePrice] = useState("");
+  const [salePrice, setSalePrice] = useState("");
   const [additionalStock, setAdditionalStock] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // Sync when product changes
-  if (product && name === "" && product.name) setName(product.name);
+  // Sync fields whenever the targeted product changes
+  useEffect(() => {
+    if (product) {
+      setName(product.name);
+      setPurchasePrice(String(product.purchasePrice));
+      setSalePrice(String(product.salePrice));
+      setAdditionalStock("");
+    }
+  }, [product]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!product) return;
     setLoading(true);
     try {
+      const qty = parseInt(additionalStock, 10);
       await onUpdated(product._id, {
-        name: name || undefined,
-        purchasePrice: purchasePrice ? parseFloat(purchasePrice) : undefined,
-        salePrice: salePrice ? parseFloat(salePrice) : undefined,
-        additionalStock: additionalStock
-          ? parseInt(additionalStock, 10)
-          : undefined,
+        name: name !== product.name ? name : undefined,
+        purchasePrice:
+          purchasePrice !== String(product.purchasePrice)
+            ? parseFloat(purchasePrice)
+            : undefined,
+        salePrice:
+          salePrice !== String(product.salePrice)
+            ? parseFloat(salePrice)
+            : undefined,
+        additionalStock: !isNaN(qty) && qty > 0 ? qty : undefined,
       });
       toast.success("Produit mis à jour");
       onOpenChange(false);
-      setAdditionalStock("");
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Erreur");
     } finally {
@@ -82,11 +92,12 @@ export function UpdateProductDialog({
                 id="u-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                required
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="u-buy">Prix achat (FCFA)</Label>
+                <Label htmlFor="u-buy">Prix d&apos;achat (FCFA)</Label>
                 <Input
                   id="u-buy"
                   type="number"
@@ -94,10 +105,14 @@ export function UpdateProductDialog({
                   step="1"
                   value={purchasePrice}
                   onChange={(e) => setPurchasePrice(e.target.value)}
+                  required
                 />
+                <p className="text-xs text-muted-foreground">
+                  Actuel : {fmtXof(product.purchasePrice)}
+                </p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="u-sell">Prix vente (FCFA)</Label>
+                <Label htmlFor="u-sell">Prix de vente (FCFA)</Label>
                 <Input
                   id="u-sell"
                   type="number"
@@ -105,7 +120,11 @@ export function UpdateProductDialog({
                   step="1"
                   value={salePrice}
                   onChange={(e) => setSalePrice(e.target.value)}
+                  required
                 />
+                <p className="text-xs text-muted-foreground">
+                  Actuel : {fmtXof(product.salePrice)}
+                </p>
               </div>
             </div>
             <div className="space-y-2">
@@ -113,12 +132,16 @@ export function UpdateProductDialog({
               <Input
                 id="u-stock"
                 type="number"
-                min="0"
+                min="1"
                 step="1"
-                placeholder="0"
                 value={additionalStock}
                 onChange={(e) => setAdditionalStock(e.target.value)}
+                placeholder="0"
               />
+              <p className="text-xs text-muted-foreground">
+                Stock restant : {product.remainingQuantity} · Vendu :{" "}
+                {product.unitsSold ?? 0}
+              </p>
             </div>
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Mise à jour…" : "Enregistrer"}

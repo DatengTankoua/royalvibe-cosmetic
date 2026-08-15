@@ -49,6 +49,7 @@ const fmt = fmtXof;
 interface ProductCardProps {
   product: ApiProduct;
   isAdmin: boolean;
+  priority?: boolean;
   onDelete: (id: string) => void;
   onEdit: (product: ApiProduct) => void;
 }
@@ -56,6 +57,7 @@ interface ProductCardProps {
 export function ProductCard({
   product,
   isAdmin,
+  priority = false,
   onDelete,
   onEdit,
 }: ProductCardProps) {
@@ -76,6 +78,8 @@ export function ProductCard({
             alt={product.name}
             fill
             unoptimized
+            priority={priority}
+            loading={priority ? "eager" : "lazy"}
             className="object-cover"
           />
         </Link>
@@ -149,11 +153,13 @@ export function ProductCard({
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Supprimer ce produit ?</AlertDialogTitle>
+            <AlertDialogTitle>
+              Placer ce produit dans la corbeille ?
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Tu es sur le point de supprimer <strong>{product.name}</strong>.
-              Tu peux restaurer ou supprimer définitivement ce produit depuis la
-              corbeille.
+              Tu es sur le point de placer <strong>{product.name}</strong> dans
+              la corbeille. Tu peux restaurer ou supprimer définitivement ce
+              produit depuis la corbeille.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -162,7 +168,7 @@ export function ProductCard({
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => onDelete(product._id)}
             >
-              Supprimer définitivement
+              Placer dans la corbeille
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -180,7 +186,12 @@ export function ProductCard({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Annuler</AlertDialogCancel>
-            <AlertDialogAction onClick={() => onEdit(product)}>
+            <AlertDialogAction
+              onClick={() => {
+                setConfirmEdit(false);
+                onEdit(product);
+              }}
+            >
               Continuer
             </AlertDialogAction>
           </AlertDialogFooter>

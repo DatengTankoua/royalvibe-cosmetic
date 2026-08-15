@@ -1,18 +1,38 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
+import { SearchIcon } from "lucide-react";
 import { toast } from "sonner";
 import { useSections } from "@/hooks/use-sections";
 import { SectionCard } from "@/components/sections/section-card";
 import { CreateSectionDialog } from "@/components/sections/create-section-dialog";
+import { Input } from "@/components/ui/input";
 import { useAuth } from "@/contexts/auth-context";
 
 export default function Home() {
   const { user, isLoading: authLoading } = useAuth();
   const router = useRouter();
-  const { sections, isLoading, error, addSection, removeSection } =
-    useSections();
+  const [query, setQuery] = useState("");
+  const {
+    sections,
+    isLoading,
+    error,
+    addSection,
+    removeSection,
+    renameSection,
+  } = useSections();
+
+  const filtered = useMemo(
+    () =>
+      query.trim()
+        ? sections.filter((s) =>
+            s.name.toLowerCase().includes(query.toLowerCase()),
+          )
+        : sections,
+    [sections, query],
+  );
 
   useEffect(() => {
     if (!authLoading && !user) router.push("/auth/login");
@@ -29,9 +49,17 @@ export default function Home() {
     }
   };
 
+  const handleRename = async (
+    id: string,
+    name: string,
+    description: string,
+  ) => {
+    await renameSection(id, name, description);
+  };
+
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-6 py-10">
-      <div className="flex items-center justify-between">
+    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-8 sm:px-6 sm:py-10">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Catalogue</h1>
           <p className="text-sm text-muted-foreground">
@@ -47,6 +75,17 @@ export default function Home() {
         )}
       </div>
 
+      {/* Search bar */}
+      <div className="relative">
+        <SearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          className="pl-9"
+          placeholder="Rechercher un catalogue…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
+
       {isLoading && (
         <p className="text-sm text-muted-foreground">Chargement…</p>
       )}
@@ -59,14 +98,20 @@ export default function Home() {
           {user.role === "admin" && "Crée la première section ci-dessus."}
         </p>
       )}
-      {!isLoading && !error && sections.length > 0 && (
+      {!isLoading && !error && sections.length > 0 && filtered.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          Aucun résultat pour « {query} ».
+        </p>
+      )}
+      {!isLoading && !error && filtered.length > 0 && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {sections.map((s) => (
+          {filtered.map((s) => (
             <SectionCard
               key={s._id}
               section={s}
               isAdmin={user.role === "admin"}
               onDelete={handleDelete}
+              onRename={user.role === "admin" ? handleRename : undefined}
             />
           ))}
         </div>

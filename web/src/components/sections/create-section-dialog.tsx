@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import axios from "axios";
 import { PlusIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DuplicateWarningDialog,
+  type DuplicateItem,
+} from "@/components/ui/duplicate-warning-dialog";
 
 interface CreateSectionDialogProps {
   onCreated: (name: string, description: string) => Promise<void>;
@@ -23,6 +28,12 @@ export function CreateSectionDialog({ onCreated }: CreateSectionDialogProps) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
+  const [duplicate, setDuplicate] = useState<DuplicateItem | null>(null);
+
+  const resetForm = () => {
+    setName("");
+    setDescription("");
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,9 +42,19 @@ export function CreateSectionDialog({ onCreated }: CreateSectionDialogProps) {
       await onCreated(name, description);
       toast.success("Section créée");
       setOpen(false);
-      setName("");
-      setDescription("");
+      resetForm();
     } catch (err: unknown) {
+      if (axios.isAxiosError(err) && err.response?.status === 409) {
+        const body = err.response.data as {
+          message: string;
+          existing: DuplicateItem;
+        };
+        if (body.message === "DUPLICATE_SECTION") {
+          setOpen(false);
+          setDuplicate(body.existing);
+          return;
+        }
+      }
       toast.error(err instanceof Error ? err.message : "Erreur");
     } finally {
       setLoading(false);
@@ -46,6 +67,7 @@ export function CreateSectionDialog({ onCreated }: CreateSectionDialogProps) {
         <PlusIcon className="mr-1 h-4 w-4" />
         Nouvelle section
       </Button>
+
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
@@ -77,6 +99,12 @@ export function CreateSectionDialog({ onCreated }: CreateSectionDialogProps) {
           </form>
         </DialogContent>
       </Dialog>
+
+      <DuplicateWarningDialog
+        type="section"
+        item={duplicate}
+        onClose={() => setDuplicate(null)}
+      />
     </>
   );
 }

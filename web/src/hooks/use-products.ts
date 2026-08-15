@@ -39,8 +39,18 @@ export function useProducts(sectionId?: string) {
       setProducts((prev) =>
         prev.some((x) => x._id === p._id) ? prev : [p, ...prev],
       );
-    const onUpdated = (p: ApiProduct) =>
-      setProducts((prev) => prev.map((x) => (x._id === p._id ? p : x)));
+    const onUpdated = (data: {
+      product: ApiProduct;
+      unitsSold: number;
+      status: string;
+      totalPurchaseCost: number;
+      estimatedRevenue: number;
+      estimatedProfit: number;
+    }) => {
+      const { product, ...metrics } = data;
+      const flat = { ...product, ...metrics } as ApiProduct;
+      setProducts((prev) => prev.map((x) => (x._id === flat._id ? flat : x)));
+    };
     const onDeleted = (id: string) =>
       setProducts((prev) => prev.filter((x) => x._id !== id));
     socket.on("product:created", onCreated);

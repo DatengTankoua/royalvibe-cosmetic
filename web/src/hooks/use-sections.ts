@@ -5,6 +5,7 @@ import {
   fetchSections,
   createSection,
   deleteSection,
+  updateSection,
   getApiErrorMessage,
   type ApiSection,
 } from "@/lib/api";
@@ -58,5 +59,21 @@ export function useSections() {
     setSections((prev) => prev.filter((s) => s._id !== id));
   }, []);
 
-  return { sections, isLoading, error, addSection, removeSection };
+  const renameSection = useCallback(
+    async (id: string, name: string, description?: string) => {
+      const updated = await updateSection(id, { name, description });
+      setSections((prev) => prev.map((s) => (s._id === id ? updated : s)));
+      return updated;
+    },
+    [],
+  );
+
+  return {
+    sections,
+    isLoading,
+    error,
+    addSection,
+    removeSection,
+    renameSection,
+  };
 }
