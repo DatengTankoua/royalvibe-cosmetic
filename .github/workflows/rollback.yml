@@ -1,0 +1,68 @@
+name: Manual Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: "Commit SHA to rollback to (leave empty for HEAD~1)"
+        required: false
+        type: string
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: Rollback Production
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Resolve target SHA
+        id: target
+        run: |
+          if [ -n "${{ inputs.target_sha }}" ]; then
+            TARGET="${{ inputs.target_sha }}"
+          else
+            TARGET=$(ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+              "cd ${{ secrets.DEPLOY_PATH }} && git rev-parse HEAD~1")
+          fi
+          echo "sha=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Rolling back to: $TARGET"
+
+      - name: Checkout target SHA on server
+        run: |
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "cd ${{ secrets.DEPLOY_PATH }} && \
+             git fetch origin && \
+             git checkout ${{ steps.target.outputs.sha }}"
+
+      - name: Rebuild and restart containers
+        run: |
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "cd ${{ secrets.DEPLOY_PATH }} && \
+             docker compose -f docker-compose.prod.yml up -d --build --remove-orphans"
+
+      - name: Wait for containers
+        run: sleep 30
+
+      - name: Health check
+        run: |
+          for i in 1 2 3; do
+            echo "Health check attempt $i/3..."
+            if curl -fsS --max-time 10 "${{ secrets.HEALTH_URL }}" > /dev/null; then
+              echo "Rollback to ${{ steps.target.outputs.sha }} successful"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "ERROR: Rollback health check failed — manual intervention required"
+          exit 1
