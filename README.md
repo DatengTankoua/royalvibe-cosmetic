@@ -3,103 +3,256 @@
 Application collaborative de gestion des ventes pour **RoyalVibe Cosmétiques & Bijoux**.
 Produits achetés en Europe (€) et revendus en Afrique (FCFA/XOF).
 
+---
+
+## Sommaire
+
+1. [Fonctionnalités](#fonctionnalités)
+2. [Stack technique](#stack-technique)
+3. [Prérequis](#prérequis)
+4. [Démarrage rapide](#démarrage-rapide-dev)
+5. [Structure du monorepo](#structure-du-monorepo)
+6. [Rôles utilisateurs](#rôles-utilisateurs)
+7. [Commandes utiles](#commandes-utiles)
+8. [Déploiement production](#déploiement-production)
+9. [CI/CD et rollback](#cicd-et-rollback)
+
+---
+
 ## Fonctionnalités
 
-- **Catalogue produits** organisé par sections (catégories)
-- **Suivi des ventes** avec historique complet et trail d'audit
-- **Rôles** : Admin (gestion complète) · Vendeur (enregistrement des ventes)
-- **Analytique** : KPIs, classements produits/vendeurs, tendance mensuelle, filtrage par mois
-- **Convertisseur EUR ↔ FCFA** intégré (taux fixe officiel 1 EUR = 655,957 XOF)
-- **Notifications temps réel** via WebSocket (Socket.IO)
+- **Catalogue produits** organisé par sections (catégories hiérarchiques)
+- **Suivi des ventes** avec historique complet et journal d'audit immuable
+- **Corbeille** : suppression douce avec restauration ou suppression définitive
+- **Analytique** : KPIs globaux, classements produits/vendeurs, tendance mensuelle, filtre par mois
+- **Convertisseur EUR ↔ FCFA** intégré (taux fixe officiel : 1 EUR = 655,957 XOF)
+- **Notifications temps réel** via WebSocket (Socket.IO) à chaque création/modification
 - **PWA** installable sur Android, iOS et desktop
-- Authentification JWT (register / login)
+- Authentification JWT (register / login) avec deux rôles : Admin et Vendeur
 
-## Stack
+## Stack technique
 
-| Couche | Techno |
+| Couche | Technologie |
 |---|---|
-| API | NestJS 11, Mongoose, `class-validator`, `@nestjs/jwt`, Socket.IO |
-| Web | Next.js (App Router), React 19, TypeScript 5, Tailwind CSS, `@base-ui/react` |
+| API | NestJS 11 · TypeScript · Mongoose · `@nestjs/jwt` · Socket.IO |
+| Web | Next.js 16 (App Router) · React 19 · TypeScript 5 · Tailwind CSS · `@base-ui/react` |
 | Base de données | MongoDB 7 |
-| Stockage images | MinIO (S3-compatible, dev) |
-| Infra dev | Docker Compose |
+| Stockage images | MinIO (S3-compatible) en dev, remplaçable par AWS S3 / Supabase en prod |
+| Reverse proxy | Nginx (prod uniquement) |
 | Monorepo | pnpm workspaces |
+| Qualité | Husky + lint-staged + ESLint + Prettier |
 
 ## Prérequis
 
-- Node.js 22+
-- pnpm (`corepack enable`)
-- Docker Desktop
+| Outil | Version minimale | Installation |
+|---|---|---|
+| Node.js | 22+ | [nodejs.org](https://nodejs.org) |
+| pnpm | 11+ | `corepack enable` |
+| Docker Desktop | — | [docker.com](https://www.docker.com/products/docker-desktop) |
+| Git | — | [git-scm.com](https://git-scm.com) |
 
 ## Démarrage rapide (dev)
+
+### 1 · Cloner le dépôt
 
 ```bash
 git clone <repo-url>
 cd heyama-test
-
-# 1. Démarrer MongoDB et MinIO
-docker compose up -d
-
-# 2. Créer le bucket MinIO
-# Ouvre http://localhost:9001 (minioadmin / minioadmin123)
-# Crée un bucket nommé heyama-objects et passe-le en accès public (lecture)
-
-# 3. Variables d'environnement API
-cp api/.env.example api/.env
-# Vérifie/modifie les valeurs si besoin
-
-# 4. Variables d'environnement Web
-cp web/.env.example web/.env.local
-# NEXT_PUBLIC_API_URL=http://localhost:4000
-
-# 5. Installer les dépendances
-pnpm install
-
-# 6. Lancer les deux serveurs
-pnpm --filter api start:dev   # NestJS sur http://localhost:4000
-pnpm --filter web dev         # Next.js sur http://localhost:3000
 ```
+
+### 2 · Installer les dépendances
+
+```bash
+pnpm install
+```
+
+### 3 · Démarrer MongoDB et MinIO
+
+```bash
+docker compose up -d
+```
+
+Services lancés :
+- **MongoDB** → `mongodb://localhost:27017`
+- **MinIO (S3)** → `http://localhost:9000`
+- **MinIO Console** → `http://localhost:9001` (admin : `minioadmin` / `minioadmin123`)
+- **Mongo Express** → `http://localhost:8081`
+
+### 4 · Créer le bucket MinIO
+
+1. Ouvrir [http://localhost:9001](http://localhost:9001)
+2. Se connecter avec `minioadmin` / `minioadmin123`
+3. **Buckets → Create Bucket** → nom : `heyama-objects`
+4. Aller dans le bucket → **Access Policy** → passer en `public`
+
+> Cette étape est nécessaire pour que les images des produits soient accessibles publiquement.
+
+### 5 · Configurer les variables d'environnement
+
+```bash
+cp api/.env.example api/.env       # Les valeurs par défaut fonctionnent avec docker-compose.yml
+cp web/.env.example web/.env.local # NEXT_PUBLIC_API_URL=http://localhost:4000
+```
+
+### 6 · Lancer les serveurs de développement
+
+Dans deux terminaux séparés :
+
+```bash
+# Terminal 1 — API NestJS (http://localhost:4000)
+pnpm --filter api start:dev
+
+# Terminal 2 — Web Next.js (http://localhost:3000)
+pnpm --filter web dev
+```
+
+Ou depuis les dossiers respectifs :
+
+```bash
+cd api && pnpm start:dev
+cd web && pnpm dev
+```
+
+### 7 · Créer le premier compte Admin
+
+L'API étant lancée, créer un compte via `curl` ou [Postman](https://www.postman.com) :
+
+```bash
+curl -X POST http://localhost:4000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Admin", "email": "admin@example.com", "password": "motdepasse"}'
+```
+
+> Le premier utilisateur enregistré aura le rôle `admin` par défaut. Modifiable directement en base via Mongo Express.
+
+---
 
 ## Structure du monorepo
 
 ```
-├── api/              # Backend NestJS
-│   └── src/
-│       ├── auth/     # JWT, guards, stratégies
-│       ├── users/    # Gestion des utilisateurs
-│       ├── sections/ # Catégories de produits
-│       ├── products/ # Catalogue + métriques
-│       ├── sales/    # Enregistrement des ventes
-│       ├── audit/    # Historique immuable
-│       ├── analytics/# Agrégations MongoDB
-│       ├── events/   # Passerelle WebSocket
-│       └── s3/       # Upload images (MinIO/S3)
-├── web/              # Frontend Next.js
-│   └── src/
-│       ├── app/      # Pages (App Router)
-│       ├── components/
-│       ├── hooks/    # useProducts, useSections, useSocket
-│       └── lib/      # api.ts, auth.ts, currency.ts
-├── docker-compose.yml          # Dev
-├── docker-compose.prod.yml     # Production
-└── nginx/nginx.conf            # Reverse proxy prod
+heyama-test/
+├── api/                        # Backend NestJS
+│   ├── src/
+│   │   ├── auth/               # JWT, guards, stratégies Passport
+│   │   ├── users/              # Schéma User, rôles Admin/Seller
+│   │   ├── sections/           # Catégories hiérarchiques (CRUD admin)
+│   │   ├── products/           # Catalogue + métriques calculées
+│   │   ├── sales/              # Enregistrement ventes, décrémentation stock
+│   │   ├── audit/              # Journal immuable de chaque modification
+│   │   ├── analytics/          # Agrégations MongoDB : KPIs, classements
+│   │   ├── events/             # Passerelle WebSocket (Socket.IO)
+│   │   ├── s3/                 # Upload/suppression images (MinIO/S3)
+│   │   └── trash/              # Suppression douce + restauration
+│   ├── .env.example
+│   └── Dockerfile
+├── web/                        # Frontend Next.js
+│   ├── src/
+│   │   ├── app/                # Pages Next.js App Router
+│   │   ├── components/         # Composants UI réutilisables
+│   │   ├── hooks/              # useProducts, useSections, useSocket, useTrash…
+│   │   └── lib/                # api.ts, auth.ts, currency.ts, utils.ts
+│   ├── .env.example
+│   └── Dockerfile
+├── nginx/nginx.conf            # Reverse proxy (prod)
+├── docker-compose.yml          # Infra dev (MongoDB + MinIO)
+├── docker-compose.prod.yml     # Stack complète de production
+├── .github/workflows/
+│   ├── deploy.yml              # Déploiement automatique + rollback auto
+│   └── rollback.yml            # Rollback manuel (workflow_dispatch)
+└── pnpm-workspace.yaml
 ```
 
-## Production
+## Rôles utilisateurs
 
-Voir [docker-compose.prod.yml](docker-compose.prod.yml) et [nginx/nginx.conf](nginx/nginx.conf).
+| Rôle | Permissions |
+|---|---|
+| **Admin** | CRUD complet : sections, produits, consultation analytics |
+| **Seller** | Enregistrement des ventes uniquement |
+
+## Commandes utiles
 
 ```bash
-cp .env.prod.example .env.prod
-# Remplis tous les secrets dans .env.prod
+# Lancer toute l'infra dev (MongoDB + MinIO)
+docker compose up -d
+
+# Arrêter l'infra dev
+docker compose down
+
+# Installer toutes les dépendances du monorepo
+pnpm install
+
+# Lancer l'API en dev (http://localhost:4000)
+pnpm --filter api start:dev
+
+# Lancer le web en dev (http://localhost:3000)
+pnpm --filter web dev
+
+# Linter les deux packages
+pnpm lint
+
+# Formatter tout le monorepo
+pnpm format
+
+# Build de l'API
+pnpm --filter api build
+
+# Build du web
+pnpm --filter web build
+
+# Tests API
+pnpm --filter api test
+pnpm --filter api test:e2e
+```
+
+## Déploiement production
+
+La production utilise `docker-compose.prod.yml` qui orchestre : MongoDB, MinIO, API NestJS, Next.js et Nginx.
+
+### Variables d'environnement production
+
+Créer un fichier `.env.prod` à la racine :
+
+```env
+MONGO_USER=royalvibe
+MONGO_PASSWORD=<mot-de-passe-fort>
+JWT_SECRET=<chaine-aleatoire-256-bits>
+WEB_URL=https://royalvibe.tondomaine.com
+API_URL=https://api.royalvibe.tondomaine.com
+S3_PUBLIC_URL=https://s3.royalvibe.tondomaine.com
+MINIO_USER=<minio-admin>
+MINIO_PASSWORD=<minio-mot-de-passe-fort>
+```
+
+### Commande de déploiement
+
+```bash
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 
-Consulte la section **Production** dans [api/README.md](api/README.md) pour les détails.
+### Nginx
 
-# → Buckets → Create bucket → name it "heyama-objects"
-# → Bucket → Anonymous access → add a "readonly" policy on prefix "*"
-#   (so uploaded images are publicly viewable from the browser)
+Éditer `nginx/nginx.conf` pour remplacer `royalvibe.tondomaine.com` par votre domaine réel et placer les certificats SSL dans `nginx/certs/`.
+
+## CI/CD et rollback
+
+Le dossier `.github/workflows/` contient deux workflows GitHub Actions :
+
+| Fichier | Déclencheur | Description |
+|---|---|---|
+| `deploy.yml` | Push sur `main` | Build + deploy + health check + **rollback automatique** si health check échoue |
+| `rollback.yml` | Manuel (`workflow_dispatch`) | Rollback vers un SHA précis ou vers `HEAD~1` |
+
+### Secrets GitHub requis
+
+Configurer dans **Settings → Secrets and variables → Actions** :
+
+| Secret | Description |
+|---|---|
+| `SSH_HOST` | IP ou domaine du serveur de production |
+| `SSH_USER` | Utilisateur SSH (ex : `ubuntu`) |
+| `SSH_PRIVATE_KEY` | Clé privée SSH complète |
+| `DEPLOY_PATH` | Chemin du projet sur le serveur (ex : `/home/ubuntu/royalvibe`) |
+| `HEALTH_URL` | URL testée après déploiement (ex : `https://royalvibe.tondomaine.com`) |
 
 # 3. Install dependencies
 pnpm install
