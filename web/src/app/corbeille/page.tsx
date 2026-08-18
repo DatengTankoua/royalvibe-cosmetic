@@ -346,14 +346,16 @@ export default function TrashPage() {
                           )}
                         </button>
                         <div className="flex-1 min-w-0">
-                          <CardTitle className="text-sm truncate">
-                            {s.name}
-                          </CardTitle>
-                          {s.description && (
-                            <CardDescription className="text-xs line-clamp-1">
-                              {s.description}
-                            </CardDescription>
-                          )}
+                          <Link href={`/sections/${s._id}`} className="block">
+                            <CardTitle className="text-sm truncate">
+                              {s.name}
+                            </CardTitle>
+                            {s.description && (
+                              <CardDescription className="text-xs line-clamp-1">
+                                {s.description}
+                              </CardDescription>
+                            )}
+                          </Link>
                         </div>
                       </div>
                     </CardHeader>

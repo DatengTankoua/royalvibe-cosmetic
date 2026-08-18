@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument } from 'mongoose';
+import { HydratedDocument, Types } from 'mongoose';
 
 export type SectionDocument = HydratedDocument<Section>;
 
@@ -13,6 +13,9 @@ export class Section {
 
   @Prop({ type: Date, default: null })
   deletedAt: Date | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'Section', default: null })
+  parentId: Types.ObjectId | null;
 }
 
 export const SectionSchema = SchemaFactory.createForClass(Section);

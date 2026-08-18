@@ -15,6 +15,7 @@ export interface ApiSection {
   _id: string;
   name: string;
   description: string;
+  parentId?: string | null;
   createdAt: string;
 }
 
@@ -141,8 +142,9 @@ export async function fetchMe(): Promise<ApiUser> {
 
 // ─── Sections ────────────────────────────────────────────────────────────────
 
-export async function fetchSections(): Promise<ApiSection[]> {
-  const { data } = await apiClient.get<ApiSection[]>("/sections");
+export async function fetchSections(parentId?: string): Promise<ApiSection[]> {
+  const params = parentId ? { parentId } : {};
+  const { data } = await apiClient.get<ApiSection[]>("/sections", { params });
   return data;
 }
 
@@ -154,6 +156,7 @@ export async function fetchSection(id: string): Promise<ApiSection> {
 export async function createSection(payload: {
   name: string;
   description?: string;
+  parentId?: string;
 }): Promise<ApiSection> {
   const { data } = await apiClient.post<ApiSection>("/sections", payload);
   return data;

@@ -1,4 +1,10 @@
-import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import {
+  IsMongoId,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 export class CreateSectionDto {
   @IsString()
@@ -9,4 +15,8 @@ export class CreateSectionDto {
   @IsString()
   @MaxLength(1000)
   description: string = '';
+
+  @IsOptional()
+  @IsMongoId()
+  parentId?: string;
 }

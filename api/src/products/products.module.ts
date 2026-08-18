@@ -7,12 +7,14 @@ import { ProductsController } from './products.controller';
 import { S3Module } from '../s3/s3.module';
 import { EventsModule } from '../events/events.module';
 import { AuditModule } from '../audit/audit.module';
+import { Section, SectionSchema } from '../sections/schemas/section.schema';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Product.name, schema: ProductSchema },
       { name: Sale.name, schema: SaleSchema },
+      { name: Section.name, schema: SectionSchema },
     ]),
     S3Module,
     EventsModule,

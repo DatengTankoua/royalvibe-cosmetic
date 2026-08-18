@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -13,6 +14,7 @@ import { S3Service } from '../s3/s3.service';
 import { EventsGateway } from '../events/events.gateway';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/schemas/audit-log.schema';
+import { Section, SectionDocument } from '../sections/schemas/section.schema';
 
 export type ProductStatus = 'in_stock' | 'low_stock' | 'out_of_stock';
 
@@ -43,6 +45,7 @@ export class ProductsService {
   constructor(
     @InjectModel(Product.name) private productModel: Model<ProductDocument>,
     @InjectModel(Sale.name) private saleModel: Model<SaleDocument>,
+    @InjectModel(Section.name) private sectionModel: Model<SectionDocument>,
     private s3Service: S3Service,
     private eventsGateway: EventsGateway,
     private auditService: AuditService,
@@ -78,6 +81,16 @@ export class ProductsService {
     actorId: string,
   ): Promise<ProductDocument> {
     await this.assertUniqueProductName(dto.name);
+
+    // Ensure the target section has no active sub-sections
+    const subSectionCount = await this.sectionModel.countDocuments({
+      parentId: new Types.ObjectId(dto.sectionId),
+      deletedAt: null,
+    });
+    if (subSectionCount > 0) {
+      throw new BadRequestException('SECTION_HAS_SUBSECTIONS');
+    }
+
     const product = await this.productModel.create({
       ...dto,
       sectionId: new Types.ObjectId(dto.sectionId),

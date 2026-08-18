@@ -11,7 +11,7 @@ import {
 } from "@/lib/api";
 import { useSocket } from "@/hooks/use-socket";
 
-export function useSections() {
+export function useSections(parentId?: string) {
   const [sections, setSections] = useState<ApiSection[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -19,14 +19,14 @@ export function useSections() {
 
   const load = useCallback(async () => {
     try {
-      const data = await fetchSections();
+      const data = await fetchSections(parentId);
       setSections(data);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [parentId]);
 
   useEffect(() => {
     void load();
@@ -48,11 +48,18 @@ export function useSections() {
     };
   }, [socket]);
 
-  const addSection = useCallback(async (name: string, description?: string) => {
-    const s = await createSection({ name, description });
-    setSections((prev) => [s, ...prev]);
-    return s;
-  }, []);
+  const addSection = useCallback(
+    async (name: string, description?: string, sectionParentId?: string) => {
+      const s = await createSection({
+        name,
+        description,
+        parentId: sectionParentId,
+      });
+      setSections((prev) => [s, ...prev]);
+      return s;
+    },
+    [],
+  );
 
   const removeSection = useCallback(async (id: string) => {
     await deleteSection(id);
