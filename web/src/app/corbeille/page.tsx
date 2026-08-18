@@ -246,7 +246,7 @@ export default function TrashPage() {
 
   return (
     <>
-      <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-6 py-10">
+      <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-6 sm:px-6 sm:py-10">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-semibold">
             <Trash2Icon className="h-6 w-6 text-muted-foreground" />
@@ -274,7 +274,7 @@ export default function TrashPage() {
                 Catalogues ({sections.length})
               </h2>
               {sections.length > 0 && (
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -412,7 +412,7 @@ export default function TrashPage() {
                 Produits ({products.length})
               </h2>
               {products.length > 0 && (
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant="ghost"
                     size="sm"

@@ -58,7 +58,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <AuthProvider>
           <Navbar />
-          <main className="flex-1 flex flex-col">{children}</main>
+          <main className="flex-1 flex flex-col pb-16 md:pb-0">{children}</main>
           <Toaster />
         </AuthProvider>
         <PwaRegister />

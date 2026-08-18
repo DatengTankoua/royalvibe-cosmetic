@@ -16,7 +16,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { CurrencyConverter } from "@/components/currency/currency-converter";
 
 const navLink =
-  "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-sm hover:bg-muted transition-colors";
+  "inline-flex items-center gap-2 rounded-md px-2.5 py-1 text-sm hover:bg-muted transition-colors";
 
 export function Navbar() {
   const { user, logout } = useAuth();
@@ -32,11 +32,25 @@ export function Navbar() {
     router.push("/auth/login");
   };
 
+  const isActive = (href: string) =>
+    href === "/" ? pathname === "/" : pathname.startsWith(href);
+
+  const bottomItemClass = (href: string) =>
+    `flex flex-col items-center justify-center gap-0.5 flex-1 py-2 transition-colors ${
+      isActive(href)
+        ? "text-primary"
+        : "text-muted-foreground hover:text-foreground"
+    }`;
+
+  const bottomBtnClass = () =>
+    "flex flex-col items-center justify-center gap-0.5 flex-1 py-2 transition-colors text-muted-foreground hover:text-foreground";
+
   return (
     <>
-      <header className="border-b bg-background">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-6">
-          <Link href="/" className="flex items-center gap-2 mr-4">
+      {/* ── Top header ── */}
+      <header className="border-b bg-background sticky top-0 z-40">
+        <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4 sm:px-6">
+          <Link href="/" className="flex items-center gap-2 mr-auto sm:mr-4">
             <Image
               src="/logo.jpg"
               alt="RoyalVibe"
@@ -45,16 +59,17 @@ export function Navbar() {
               style={{ width: 36, height: 36 }}
               className="rounded-full object-cover"
             />
-            <span className="font-bold text-base leading-tight hidden sm:block">
+            <span className="font-bold text-base leading-tight">
               RoyalVibe
               <br />
-              <span className="text-xs font-normal text-muted-foreground">
+              <span className="text-xs font-normal text-muted-foreground hidden sm:inline">
                 Cosmétiques & Bijoux
               </span>
             </span>
           </Link>
 
-          <nav className="flex items-center gap-1 flex-1">
+          {/* Desktop nav */}
+          <nav className="hidden md:flex items-center gap-1 flex-1">
             <Link href="/" className={navLink}>
               <LayoutGridIcon className="h-4 w-4" />
               Catalogue
@@ -73,10 +88,9 @@ export function Navbar() {
               <Link
                 href="/corbeille"
                 className={navLink + " text-muted-foreground"}
-                title="Corbeille"
               >
                 <Trash2Icon className="h-4 w-4" />
-                <span className="hidden sm:inline">Corbeille</span>
+                Corbeille
               </Link>
             )}
             <button
@@ -85,14 +99,15 @@ export function Navbar() {
               title="Convertisseur EUR ↔ CFA"
             >
               <ArrowLeftRightIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">EUR ↔ CFA</span>
+              EUR ↔ CFA
             </button>
           </nav>
 
-          <div className="flex items-center gap-3">
+          {/* Desktop user */}
+          <div className="hidden md:flex items-center gap-3">
             {user ? (
               <>
-                <span className="text-sm text-muted-foreground hidden sm:block">
+                <span className="text-sm text-muted-foreground">
                   {user.name}
                   {user.role === "admin" && (
                     <span className="ml-1 text-xs bg-primary text-primary-foreground rounded px-1">
@@ -103,6 +118,7 @@ export function Navbar() {
                 <button
                   onClick={handleLogout}
                   className={navLink + " text-muted-foreground"}
+                  title="Se déconnecter"
                 >
                   <LogOutIcon className="h-4 w-4" />
                 </button>
@@ -118,6 +134,53 @@ export function Navbar() {
           </div>
         </div>
       </header>
+
+      {/* ── Bottom nav bar (mobile only) ── */}
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 flex h-16 items-stretch border-t bg-background">
+        <Link href="/" className={bottomItemClass("/")}>
+          <LayoutGridIcon className="h-5 w-5" />
+          <span className="text-[10px]">Catalogue</span>
+        </Link>
+
+        <Link href="/analytics" className={bottomItemClass("/analytics")}>
+          <BarChart3Icon className="h-5 w-5" />
+          <span className="text-[10px]">Analytics</span>
+        </Link>
+
+        {user && (
+          <Link href="/sales" className={bottomItemClass("/sales")}>
+            <ShoppingBagIcon className="h-5 w-5" />
+            <span className="text-[10px]">Ventes</span>
+          </Link>
+        )}
+
+        {user?.role === "admin" && (
+          <Link href="/corbeille" className={bottomItemClass("/corbeille")}>
+            <Trash2Icon className="h-5 w-5" />
+            <span className="text-[10px]">Corbeille</span>
+          </Link>
+        )}
+
+        <button
+          onClick={() => setConverterOpen(true)}
+          className={bottomBtnClass()}
+          aria-label="Convertisseur EUR ↔ CFA"
+        >
+          <ArrowLeftRightIcon className="h-5 w-5" />
+          <span className="text-[10px]">EUR↔CFA</span>
+        </button>
+
+        {user && (
+          <button
+            onClick={handleLogout}
+            className={bottomBtnClass()}
+            aria-label="Se déconnecter"
+          >
+            <LogOutIcon className="h-5 w-5" />
+            <span className="text-[10px]">Quitter</span>
+          </button>
+        )}
+      </nav>
 
       <CurrencyConverter open={converterOpen} onOpenChange={setConverterOpen} />
     </>

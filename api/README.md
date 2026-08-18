@@ -5,36 +5,32 @@ API REST + WebSocket de l'application **RoyalVibe Cosmétiques & Bijoux**.
 ## Stack
 
 - NestJS 11 · TypeScript · Mongoose (MongoDB 7)
-- `@nestjs/jwt` + Passport (authentification JWT)
+- `@nestjs/jwt` + Passport (authentification JWT Bearer)
 - `@nestjs/websockets` + Socket.IO (temps réel)
-- `@aws-sdk/client-s3` (upload images MinIO/S3)
-- `class-validator` / `class-transformer`
+- `@aws-sdk/client-s3` (upload images MinIO/S3-compatible)
+- `class-validator` / `class-transformer` (validation des DTOs)
 - `bcryptjs` (hash des mots de passe)
 
-## Modules
+---
 
-| Module | Description |
-|---|---|
-| `auth` | Register, login, JWT guards, `@Public()` decorator |
-| `users` | Schéma User, rôles Admin/Seller |
-| `sections` | Catégories de produits (CRUD admin) |
-| `products` | Catalogue + métriques (stock, profit, statut) |
-| `sales` | Enregistrement des ventes, décrémentation du stock |
-| `audit` | Journal immuable de chaque modification produit |
-| `analytics` | Agrégations MongoDB : KPIs, classements, tendance mensuelle |
-| `events` | Passerelle WebSocket (product:created/updated/deleted, sale:created) |
-| `s3` | Upload et suppression d'images (S3-compatible) |
+## Prérequis
+
+- Node.js 22+, pnpm 11+
+- MongoDB 7 et MinIO en cours d'exécution (voir `docker-compose.yml` à la racine)
 
 ## Lancer en dev
 
 ```bash
 # Depuis la racine du monorepo
 pnpm --filter api start:dev
-# ou depuis api/
+
+# Ou depuis le dossier api/
 pnpm start:dev
 ```
 
-L'API tourne sur [http://localhost:4000](http://localhost:4000).
+L'API écoute sur [http://localhost:4000](http://localhost:4000).
+
+Le mode `--watch` recompile automatiquement à chaque modification de fichier.
 
 ## Variables d'environnement
 
@@ -42,114 +38,135 @@ L'API tourne sur [http://localhost:4000](http://localhost:4000).
 cp .env.example .env
 ```
 
-| Variable | Description |
+Toutes les valeurs par défaut du `.env.example` sont compatibles avec le `docker-compose.yml` de dev.
+
+| Variable | Défaut | Description |
+|---|---|---|
+| `PORT` | `4000` | Port d'écoute |
+| `MONGODB_URI` | `mongodb://localhost:27017/heyama` | URI de connexion MongoDB |
+| `JWT_SECRET` | `change-me-...` | Secret JWT — **changer en production** |
+| `CORS_ORIGIN` | `http://localhost:3000` | Origines autorisées (séparées par virgule) |
+| `S3_ENDPOINT` | `http://localhost:9000` | URL MinIO ou S3 |
+| `S3_REGION` | `us-east-1` | Région S3 |
+| `S3_ACCESS_KEY` | `minioadmin` | Clé d'accès S3 |
+| `S3_SECRET_KEY` | `minioadmin123` | Secret S3 |
+| `S3_BUCKET` | `heyama-objects` | Nom du bucket |
+| `S3_FORCE_PATH_STYLE` | `true` | Obligatoire pour MinIO |
+| `S3_PUBLIC_URL` | _(vide)_ | URL publique des images si différente de `S3_ENDPOINT` |
+
+---
+
+## Modules
+
+| Module | Rôle |
 |---|---|
-| `PORT` | Port de l'API (défaut : 4000) |
-| `MONGODB_URI` | URI MongoDB |
-| `JWT_SECRET` | Secret JWT (long string aléatoire en prod) |
-| `CORS_ORIGIN` | Origines autorisées (ex: `https://royalvibe.com`) |
-| `S3_ENDPOINT` | URL MinIO/S3 |
-| `S3_REGION` | Région S3 |
-| `S3_ACCESS_KEY` | Clé d'accès S3 |
-| `S3_SECRET_KEY` | Secret S3 |
-| `S3_BUCKET` | Nom du bucket |
-| `S3_FORCE_PATH_STYLE` | `true` pour MinIO |
-| `S3_PUBLIC_URL` | URL publique pour les images (si différente de `S3_ENDPOINT`) |
+| `auth` | Register, login, stratégie JWT Passport, guard global, décorateurs `@Public()` et `@CurrentUser()` |
+| `users` | Schéma Mongoose `User`, rôles `admin` / `seller` |
+| `sections` | Catégories hiérarchiques (CRUD réservé aux admins, lecture ouverte) |
+| `products` | Catalogue + calcul des métriques (stock, bénéfice, statut) à chaque lecture |
+| `sales` | Enregistrement des ventes, décrémentation automatique du stock |
+| `audit` | Journal immuable : enregistre chaque action sur les produits avec l'acteur et les détails |
+| `analytics` | Agrégations MongoDB : KPIs globaux, classements produits/vendeurs, tendance mensuelle |
+| `events` | Passerelle WebSocket — émet les événements `product:created`, `product:updated`, `product:deleted`, `sale:created` |
+| `s3` | Upload (multipart/form-data via Multer) et suppression d'images |
+| `trash` | Suppression douce (soft delete) avec restauration ou suppression définitive |
 
-## Endpoints principaux
+---
+
+## Référence API
+
+> Toutes les routes sont protégées par JWT sauf `POST /auth/register` et `POST /auth/login`.
+> Inclure le header : `Authorization: Bearer <token>`
+
+### Auth
 
 ```
-POST /auth/register
-POST /auth/login
-GET  /auth/me
-
-GET  /sections
-POST /sections           (admin)
-GET  /sections/:id
-
-GET  /products?sectionId=
-POST /products           (admin)
-GET  /products/:id
-PATCH /products/:id      (admin)
-DELETE /products/:id     (admin)
-
-GET  /sales
-POST /sales
-
-GET  /audit/:productId
-
-GET  /analytics/overview?month=YYYY-MM
-GET  /analytics/products/ranking?month=YYYY-MM
-GET  /analytics/sellers/ranking?month=YYYY-MM
-GET  /analytics/monthly
+POST /auth/register   { name, email, password }  → { access_token, user }
+POST /auth/login      { email, password }         → { access_token, user }
+GET  /auth/me                                     → user courant
 ```
 
-## Build production
+### Sections
+
+```
+GET    /sections              → liste (filtre optionnel : ?parentId=)
+GET    /sections/:id          → détail
+POST   /sections              (admin) { name, description?, parentId? }
+PATCH  /sections/:id          (admin) { name?, description? }
+DELETE /sections/:id          (admin) → soft delete
+PATCH  /sections/:id/restore  (admin) → restauration depuis la corbeille
+DELETE /sections/:id/permanent (admin) → suppression définitive
+```
+
+### Produits
+
+```
+GET    /products              → liste avec métriques (filtre : ?sectionId=)
+GET    /products/:id          → détail + ventes + audit
+POST   /products              (admin) multipart/form-data: { sectionId, name, purchasePrice, salePrice, initialQuantity, image }
+PATCH  /products/:id          (admin) { name?, purchasePrice?, salePrice?, additionalStock?, sectionId? }
+DELETE /products/:id          (admin) → soft delete
+PATCH  /products/:id/restore  (admin) → restauration
+DELETE /products/:id/permanent (admin) → suppression définitive
+```
+
+### Ventes
+
+```
+GET  /sales              → liste (filtre : ?productId=)
+POST /sales              { productId, quantity, salePrice, buyerName?, buyerContact? }
+```
+
+### Analytics
+
+```
+GET /analytics/overview            → KPIs globaux (filtre : ?month=YYYY-MM)
+GET /analytics/products/ranking    → classement produits (filtre : ?month=YYYY-MM)
+GET /analytics/sellers/ranking     → classement vendeurs (filtre : ?month=YYYY-MM)
+GET /analytics/monthly             → tendance sur 12 mois
+```
+
+### Corbeille
+
+```
+GET /trash   → { sections: [...], products: [...] }
+```
+
+---
+
+## WebSocket (Socket.IO)
+
+Connexion : `ws://localhost:4000` (ou port configuré).
+
+| Événement émis | Payload | Déclencheur |
+|---|---|---|
+| `product:created` | `{ productId }` | Création d'un produit |
+| `product:updated` | `{ productId }` | Modification d'un produit |
+| `product:deleted` | `{ productId }` | Suppression d'un produit |
+| `sale:created` | `{ saleId, productId }` | Enregistrement d'une vente |
+
+---
+
+## Commandes
 
 ```bash
-pnpm build    # compile TypeScript → dist/
-node dist/main
+pnpm start:dev      # dev avec rechargement automatique
+pnpm start:debug    # dev avec débogueur Node.js attachable
+pnpm build          # compile TypeScript → dist/
+pnpm start:prod     # démarre le build de production
+pnpm test           # tests unitaires
+pnpm test:e2e       # tests end-to-end
+pnpm test:cov       # couverture de code
+pnpm lint           # ESLint avec auto-fix
 ```
 
-Ou via Docker (voir `Dockerfile` à la racine du dossier `api/`).
-
-
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
-
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
-
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
+## Build production (Docker)
 
 ```bash
-$ pnpm install
+docker build -t royalvibe-api ./api
 ```
 
-## Compile and run the project
-
-```bash
-# development
-$ pnpm run start
-
-# watch mode
-$ pnpm run start:dev
-
-# production mode
-$ pnpm run start:prod
-```
-
-## Run tests
-
-```bash
-# unit tests
-$ pnpm run test
-
-# e2e tests
-$ pnpm run test:e2e
-
-# test coverage
-$ pnpm run test:cov
-```
-
-## Deployment
+Voir `Dockerfile` pour les détails du build multi-stage.
 
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
 
