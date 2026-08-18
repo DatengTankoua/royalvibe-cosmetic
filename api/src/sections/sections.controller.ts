@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { SectionsService } from './sections.service';
@@ -28,8 +29,8 @@ export class SectionsController {
   }
 
   @Get()
-  findAll() {
-    return this.sectionsService.findAll();
+  findAll(@Query('parentId') parentId?: string) {
+    return this.sectionsService.findAll(parentId);
   }
 
   @Get(':id')

@@ -21,9 +21,13 @@ import {
 
 interface CreateSectionDialogProps {
   onCreated: (name: string, description: string) => Promise<void>;
+  label?: string;
 }
 
-export function CreateSectionDialog({ onCreated }: CreateSectionDialogProps) {
+export function CreateSectionDialog({
+  onCreated,
+  label,
+}: CreateSectionDialogProps) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -65,7 +69,7 @@ export function CreateSectionDialog({ onCreated }: CreateSectionDialogProps) {
     <>
       <Button size="sm" onClick={() => setOpen(true)}>
         <PlusIcon className="mr-1 h-4 w-4" />
-        Nouvelle section
+        {label ?? "Nouvelle section"}
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
