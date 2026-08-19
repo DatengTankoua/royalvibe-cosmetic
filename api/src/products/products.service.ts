@@ -259,6 +259,19 @@ export class ProductsService {
     return product;
   }
 
+  /** Adjusts remainingQuantity by delta (positive = restore, negative = consume) */
+  async adjustStock(productId: string, delta: number): Promise<void> {
+    const product = await this.productModel.findById(productId).exec();
+    if (!product) return; // product may have been permanently deleted
+    if (product.remainingQuantity + delta < 0) {
+      throw new BadRequestException(
+        `Insufficient stock. Available: ${product.remainingQuantity}`,
+      );
+    }
+    product.remainingQuantity += delta;
+    await product.save();
+  }
+
   /** Called by SalesService to decrement stock */
   async decrementStock(
     productId: string,

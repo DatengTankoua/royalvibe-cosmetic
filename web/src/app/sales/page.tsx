@@ -49,9 +49,13 @@ export default function SalesPage() {
         <div className="space-y-2">
           {sales.map((s) => {
             const productName =
-              typeof s.productId === "object" ? s.productId.name : "—";
+              s.productId && typeof s.productId === "object"
+                ? s.productId.name
+                : (s.productName ?? "—");
             const sellerName =
-              typeof s.sellerId === "object" ? s.sellerId.name : "—";
+              s.sellerId && typeof s.sellerId === "object"
+                ? s.sellerId.name
+                : "—";
             return (
               <Card key={s._id}>
                 <CardContent className="py-3 flex justify-between gap-4 text-sm">

@@ -47,7 +47,8 @@ export interface ApiProductDetail extends ApiProduct {
 
 export interface ApiSale {
   _id: string;
-  productId: string | { _id: string; name: string };
+  productId: string | { _id: string; name: string } | null;
+  productName?: string;
   quantity: number;
   salePrice: number;
   sellerId: { _id: string; name: string; email: string };
@@ -319,6 +320,18 @@ export async function createSale(payload: {
 }): Promise<ApiSale> {
   const { data } = await apiClient.post<ApiSale>("/sales", payload);
   return data;
+}
+
+export async function updateSale(
+  id: string,
+  payload: { quantity?: number; salePrice?: number },
+): Promise<ApiSale> {
+  const { data } = await apiClient.patch<ApiSale>(`/sales/${id}`, payload);
+  return data;
+}
+
+export async function deleteSale(id: string): Promise<void> {
+  await apiClient.delete(`/sales/${id}`);
 }
 
 // ─── Analytics ───────────────────────────────────────────────────────────────
