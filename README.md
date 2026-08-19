@@ -37,7 +37,7 @@ Produits achetés en Europe (€) et revendus en Afrique (FCFA/XOF).
 | API | NestJS 11 · TypeScript · Mongoose · `@nestjs/jwt` · Socket.IO |
 | Web | Next.js 16 (App Router) · React 19 · TypeScript 5 · Tailwind CSS · `@base-ui/react` |
 | Base de données | MongoDB 7 |
-| Stockage images | MinIO (S3-compatible) en dev, remplaçable par AWS S3 / Supabase en prod |
+| Stockage images | MinIO (S3-compatible) en dev · Supabase Storage en prod |
 | Reverse proxy | Nginx (prod uniquement) |
 | Monorepo | pnpm workspaces |
 | Qualité | Husky + lint-staged + ESLint + Prettier |
@@ -206,32 +206,37 @@ pnpm --filter api test:e2e
 
 ## Déploiement production
 
-La production utilise `docker-compose.prod.yml` qui orchestre : MongoDB, MinIO, API NestJS, Next.js et Nginx.
+Les services sont déployés séparément sur des plateformes managées :
+
+| Service | Plateforme | Déclencheur |
+|---|---|---|
+| `web/` (Next.js) | Vercel | Push sur `main` (intégration GitHub native) |
+| `api/` (NestJS) | Railway | Push sur `main` (intégration GitHub native) |
+| Base de données | MongoDB Atlas | Managé |
+| Stockage images | Supabase Storage | Managé |
 
 ### Variables d'environnement production
 
-Créer un fichier `.env.prod` à la racine :
+À configurer dans les dashboards Railway et Vercel :
 
+**Railway (API)** :
 ```env
-MONGO_USER=royalvibe
-MONGO_PASSWORD=<mot-de-passe-fort>
+PORT=4000
+MONGODB_URI=<uri-atlas>
 JWT_SECRET=<chaine-aleatoire-256-bits>
-WEB_URL=https://royalvibe.tondomaine.com
-API_URL=https://api.royalvibe.tondomaine.com
-S3_PUBLIC_URL=https://s3.royalvibe.tondomaine.com
-MINIO_USER=<minio-admin>
-MINIO_PASSWORD=<minio-mot-de-passe-fort>
+CORS_ORIGIN=https://<votre-domaine-vercel>.vercel.app
+S3_ENDPOINT=<supabase-s3-endpoint>
+S3_REGION=<supabase-region>
+S3_ACCESS_KEY=<supabase-access-key>
+S3_SECRET_KEY=<supabase-secret-key>
+S3_BUCKET=<supabase-bucket-name>
+S3_PUBLIC_URL=<supabase-public-url>
 ```
 
-### Commande de déploiement
-
-```bash
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+**Vercel (Web)** :
+```env
+NEXT_PUBLIC_API_URL=https://<votre-service>.railway.app
 ```
-
-### Nginx
-
-Éditer `nginx/nginx.conf` pour remplacer `royalvibe.tondomaine.com` par votre domaine réel et placer les certificats SSL dans `nginx/certs/`.
 
 ## CI/CD et rollback
 
@@ -239,8 +244,8 @@ Le dossier `.github/workflows/` contient deux workflows GitHub Actions :
 
 | Fichier | Déclencheur | Description |
 |---|---|---|
-| `deploy.yml` | Push sur `main` | Build + deploy + health check + **rollback automatique** si health check échoue |
-| `rollback.yml` | Manuel (`workflow_dispatch`) | Rollback vers un SHA précis ou vers `HEAD~1` |
+| `deploy.yml` | Fin de déploiement Railway/Vercel (`deployment_status`) | Health check API + Web → **rollback automatique** si l'un échoue |
+| `rollback.yml` | Manuel (`workflow_dispatch`) | Rollback ciblé : `web`, `api`, ou `both` |
 
 ### Secrets GitHub requis
 
@@ -248,11 +253,12 @@ Configurer dans **Settings → Secrets and variables → Actions** :
 
 | Secret | Description |
 |---|---|
-| `SSH_HOST` | IP ou domaine du serveur de production |
-| `SSH_USER` | Utilisateur SSH (ex : `ubuntu`) |
-| `SSH_PRIVATE_KEY` | Clé privée SSH complète |
-| `DEPLOY_PATH` | Chemin du projet sur le serveur (ex : `/home/ubuntu/royalvibe`) |
-| `HEALTH_URL` | URL testée après déploiement (ex : `https://royalvibe.tondomaine.com`) |
+| `RAILWAY_TOKEN` | Railway → votre projet → Settings → Tokens |
+| `VERCEL_TOKEN` | vercel.com → Account Settings → Tokens |
+| `VERCEL_ORG_ID` | Champ `orgId` dans `web/.vercel/project.json` |
+| `VERCEL_PROJECT_ID` | Champ `projectId` dans `web/.vercel/project.json` |
+| `API_HEALTH_URL` | URL du endpoint `/health` de l'API Railway |
+| `WEB_HEALTH_URL` | URL de production du frontend Vercel |
 
 # 3. Install dependencies
 pnpm install
