@@ -67,6 +67,8 @@ export class AnalyticsService {
       {
         $group: {
           _id: '$productId',
+          // capture name snapshot so deleted products are still labelled
+          productNameSnapshot: { $first: '$productName' },
           totalUnitsSold: { $sum: '$quantity' },
           totalRevenue: { $sum: { $multiply: ['$salePrice', '$quantity'] } },
           transactionCount: { $sum: 1 },
@@ -80,16 +82,25 @@ export class AnalyticsService {
           as: 'product',
         },
       },
-      { $unwind: '$product' },
+      // preserveNullAndEmpty keeps groups whose product was permanently deleted
+      { $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
       {
         $addFields: {
           totalCOGS: {
-            $multiply: ['$product.purchasePrice', '$totalUnitsSold'],
+            $multiply: [
+              { $ifNull: ['$product.purchasePrice', 0] },
+              '$totalUnitsSold',
+            ],
           },
           netProfit: {
             $subtract: [
               '$totalRevenue',
-              { $multiply: ['$product.purchasePrice', '$totalUnitsSold'] },
+              {
+                $multiply: [
+                  { $ifNull: ['$product.purchasePrice', 0] },
+                  '$totalUnitsSold',
+                ],
+              },
             ],
           },
         },
@@ -97,9 +108,9 @@ export class AnalyticsService {
       {
         $project: {
           productId: '$_id',
-          productName: '$product.name',
-          imageUrl: '$product.imageUrl',
-          remainingQuantity: '$product.remainingQuantity',
+          productName: { $ifNull: ['$product.name', '$productNameSnapshot'] },
+          imageUrl: { $ifNull: ['$product.imageUrl', null] },
+          remainingQuantity: { $ifNull: ['$product.remainingQuantity', 0] },
           totalUnitsSold: 1,
           totalRevenue: 1,
           netProfit: 1,

@@ -8,6 +8,10 @@ export class Sale {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Product' })
   productId: Types.ObjectId;
 
+  // snapshot so the name survives permanent product deletion
+  @Prop()
+  productName?: string;
+
   @Prop({ required: true, min: 1 })
   quantity: number;
 

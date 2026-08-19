@@ -28,6 +28,7 @@ export class SalesService {
     const sale = await this.saleModel.create({
       ...dto,
       productId: new Types.ObjectId(dto.productId),
+      productName: product.name,
       sellerId: new Types.ObjectId(sellerId),
     });
 

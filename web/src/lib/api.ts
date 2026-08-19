@@ -47,7 +47,8 @@ export interface ApiProductDetail extends ApiProduct {
 
 export interface ApiSale {
   _id: string;
-  productId: string | { _id: string; name: string };
+  productId: string | { _id: string; name: string } | null;
+  productName?: string;
   quantity: number;
   salePrice: number;
   sellerId: { _id: string; name: string; email: string };
