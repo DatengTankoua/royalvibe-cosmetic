@@ -1,93 +1,71 @@
-name: Deploy to Production
+name: Post-Deploy Health Check & Rollback
 
+# Fires when Railway or Vercel update their deployment status on GitHub
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  deployment_status:
 
 concurrency:
-  group: production-deploy
+  group: health-check-${{ github.event.deployment.environment }}
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy & Health Check
+  health-check:
+    # Only react to successful production deployments on main
+    if: |
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment.ref == 'main'
+    name: Health Check & Auto Rollback
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
-      - name: Configure SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
-
-      # Saves the SHA currently running on the server BEFORE any changes
-      - name: Save previous commit SHA
-        id: prev
-        run: |
-          PREV=$(ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "cd ${{ secrets.DEPLOY_PATH }} && git rev-parse HEAD")
-          echo "sha=$PREV" >> "$GITHUB_OUTPUT"
-          echo "Previous SHA: $PREV"
-
-      - name: Pull latest code on server
-        run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "cd ${{ secrets.DEPLOY_PATH }} && git pull origin main"
-
-      - name: Build & start containers
-        id: build
-        run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "cd ${{ secrets.DEPLOY_PATH }} && \
-             docker compose -f docker-compose.prod.yml up -d --build --remove-orphans"
-
-      - name: Wait for containers to be ready
+      - name: Wait for app to stabilize
         run: sleep 30
 
-      - name: Health check
-        id: health
+      - name: Health check API
+        id: api
+        continue-on-error: true
         run: |
           for i in 1 2 3; do
-            echo "Health check attempt $i/3..."
-            if curl -fsS --max-time 10 "${{ secrets.HEALTH_URL }}" > /dev/null; then
-              echo "Health check passed"
-              exit 0
+            echo "API check $i/3..."
+            if curl -fsS --max-time 10 "${{ secrets.API_HEALTH_URL }}" > /dev/null; then
+              echo "API OK"; exit 0
             fi
             sleep 10
           done
-          echo "Health check failed after 3 attempts"
-          exit 1
+          echo "API health check failed"; exit 1
 
-      # ── Rollback (only if build succeeded but health check failed) ──────────
-      - name: Rollback to previous version
-        if: failure() && steps.build.outcome == 'success'
+      - name: Health check Web
+        id: web
+        continue-on-error: true
         run: |
-          echo "Rolling back to ${{ steps.prev.outputs.sha }}..."
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "cd ${{ secrets.DEPLOY_PATH }} && \
-             git checkout ${{ steps.prev.outputs.sha }} && \
-             docker compose -f docker-compose.prod.yml up -d --build --remove-orphans"
+          for i in 1 2 3; do
+            echo "Web check $i/3..."
+            if curl -fsS --max-time 10 "${{ secrets.WEB_HEALTH_URL }}" > /dev/null; then
+              echo "Web OK"; exit 0
+            fi
+            sleep 10
+          done
+          echo "Web health check failed"; exit 1
 
-      - name: Verify rollback health check
-        if: failure() && steps.build.outcome == 'success'
+      - name: Rollback API → Railway (redeploy previous commit)
+        if: steps.api.outcome == 'failure'
         run: |
-          sleep 20
-          curl -fsS --max-time 10 "${{ secrets.HEALTH_URL }}" && \
-            echo "Rollback successful — previous version is live" || \
-            echo "WARNING: Rollback health check also failed — manual intervention required"
+          git checkout HEAD~1
+          npx --yes @railway/cli@latest up --service api --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
-      - name: Notify success
-        if: success()
-        run: echo "Deployed commit ${{ github.sha }} successfully"
+      - name: Rollback Web → Vercel
+        if: steps.web.outcome == 'failure'
+        run: npx --yes vercel rollback --yes --token ${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
-      - name: Notify failure
-        if: failure()
-        run: |
-          echo "Deployment of ${{ github.sha }} failed."
-          echo "Previous SHA was: ${{ steps.prev.outputs.sha }}"
+      - name: Fail the run if a rollback was triggered
+        if: steps.api.outcome == 'failure' || steps.web.outcome == 'failure'
+        run: exit 1

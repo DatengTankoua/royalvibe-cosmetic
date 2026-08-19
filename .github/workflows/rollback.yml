@@ -3,8 +3,16 @@ name: Manual Rollback
 on:
   workflow_dispatch:
     inputs:
+      service:
+        description: "Service to rollback"
+        required: true
+        type: choice
+        options:
+          - web
+          - api
+          - both
       target_sha:
-        description: "Commit SHA to rollback to (leave empty for HEAD~1)"
+        description: "Commit SHA to rollback to (Railway only — leave empty for previous deploy)"
         required: false
         type: string
 
@@ -13,56 +21,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  rollback:
-    name: Rollback Production
+  # ── Rollback Next.js on Vercel (instant — no rebuild needed) ─────────────────
+  rollback-web:
+    name: Rollback Web → Vercel
+    if: inputs.service == 'web' || inputs.service == 'both'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    timeout-minutes: 5
     steps:
-      - name: Configure SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+      - uses: actions/checkout@v4
+      - name: Rollback to previous Vercel deployment
+        run: npx --yes vercel rollback --yes --token ${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
-      - name: Resolve target SHA
-        id: target
+  # ── Rollback NestJS API on Railway ───────────────────────────────────────────
+  rollback-api:
+    name: Rollback API → Railway
+    if: inputs.service == 'api' || inputs.service == 'both'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Checkout target SHA if provided, otherwise HEAD~1
+          ref: ${{ inputs.target_sha || '' }}
+          fetch-depth: 0
+      - name: Resolve and log target SHA
         run: |
-          if [ -n "${{ inputs.target_sha }}" ]; then
-            TARGET="${{ inputs.target_sha }}"
-          else
-            TARGET=$(ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-              "cd ${{ secrets.DEPLOY_PATH }} && git rev-parse HEAD~1")
-          fi
-          echo "sha=$TARGET" >> "$GITHUB_OUTPUT"
-          echo "Rolling back to: $TARGET"
-
-      - name: Checkout target SHA on server
-        run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "cd ${{ secrets.DEPLOY_PATH }} && \
-             git fetch origin && \
-             git checkout ${{ steps.target.outputs.sha }}"
-
-      - name: Rebuild and restart containers
-        run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "cd ${{ secrets.DEPLOY_PATH }} && \
-             docker compose -f docker-compose.prod.yml up -d --build --remove-orphans"
-
-      - name: Wait for containers
-        run: sleep 30
-
-      - name: Health check
-        run: |
-          for i in 1 2 3; do
-            echo "Health check attempt $i/3..."
-            if curl -fsS --max-time 10 "${{ secrets.HEALTH_URL }}" > /dev/null; then
-              echo "Rollback to ${{ steps.target.outputs.sha }} successful"
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "ERROR: Rollback health check failed — manual intervention required"
-          exit 1
+          echo "Rolling back API to: $(git rev-parse HEAD)"
+      - name: Redeploy target SHA to Railway
+        run: npx --yes @railway/cli@latest up --service api --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
