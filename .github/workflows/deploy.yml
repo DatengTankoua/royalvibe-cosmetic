@@ -1,57 +1,71 @@
-name: Deploy to Production
+name: Post-Deploy Health Check & Rollback
 
+# Fires when Railway or Vercel update their deployment status on GitHub
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  deployment_status:
 
 concurrency:
-  group: production-deploy
+  group: health-check-${{ github.event.deployment.environment }}
   cancel-in-progress: false
 
 jobs:
-  # ── Detect which parts of the repo changed ──────────────────────────────────
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      api: ${{ steps.filter.outputs.api }}
-      web: ${{ steps.filter.outputs.web }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            api:
-              - 'api/**'
-            web:
-              - 'web/**'
-
-  # ── Deploy NestJS API to Railway ─────────────────────────────────────────────
-  deploy-api:
-    name: Deploy API → Railway
-    needs: changes
-    if: needs.changes.outputs.api == 'true' || github.event_name == 'workflow_dispatch'
+  health-check:
+    # Only react to successful production deployments on main
+    if: |
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment.ref == 'main'
+    name: Health Check & Auto Rollback
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Deploy to Railway
-        run: npx --yes @railway/cli@latest up --service api --detach
+        with:
+          fetch-depth: 2
+
+      - name: Wait for app to stabilize
+        run: sleep 30
+
+      - name: Health check API
+        id: api
+        continue-on-error: true
+        run: |
+          for i in 1 2 3; do
+            echo "API check $i/3..."
+            if curl -fsS --max-time 10 "${{ secrets.API_HEALTH_URL }}" > /dev/null; then
+              echo "API OK"; exit 0
+            fi
+            sleep 10
+          done
+          echo "API health check failed"; exit 1
+
+      - name: Health check Web
+        id: web
+        continue-on-error: true
+        run: |
+          for i in 1 2 3; do
+            echo "Web check $i/3..."
+            if curl -fsS --max-time 10 "${{ secrets.WEB_HEALTH_URL }}" > /dev/null; then
+              echo "Web OK"; exit 0
+            fi
+            sleep 10
+          done
+          echo "Web health check failed"; exit 1
+
+      - name: Rollback API → Railway (redeploy previous commit)
+        if: steps.api.outcome == 'failure'
+        run: |
+          git checkout HEAD~1
+          npx --yes @railway/cli@latest up --service api --detach
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
-  # ── Deploy Next.js web to Vercel ─────────────────────────────────────────────
-  deploy-web:
-    name: Deploy Web → Vercel
-    needs: changes
-    if: needs.changes.outputs.web == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Deploy to Vercel
-        run: npx --yes vercel --prod --yes --cwd web --token ${{ secrets.VERCEL_TOKEN }}
+      - name: Rollback Web → Vercel
+        if: steps.web.outcome == 'failure'
+        run: npx --yes vercel rollback --yes --token ${{ secrets.VERCEL_TOKEN }}
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Fail the run if a rollback was triggered
+        if: steps.api.outcome == 'failure' || steps.web.outcome == 'failure'
+        run: exit 1
