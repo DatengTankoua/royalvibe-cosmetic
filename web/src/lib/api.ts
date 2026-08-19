@@ -322,6 +322,18 @@ export async function createSale(payload: {
   return data;
 }
 
+export async function updateSale(
+  id: string,
+  payload: { quantity?: number; salePrice?: number },
+): Promise<ApiSale> {
+  const { data } = await apiClient.patch<ApiSale>(`/sales/${id}`, payload);
+  return data;
+}
+
+export async function deleteSale(id: string): Promise<void> {
+  await apiClient.delete(`/sales/${id}`);
+}
+
 // ─── Analytics ───────────────────────────────────────────────────────────────
 
 export async function fetchOverview(

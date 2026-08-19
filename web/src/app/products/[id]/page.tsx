@@ -8,15 +8,18 @@ import {
   TrendingUpIcon,
   TrendingDownIcon,
   MinusIcon,
+  PencilIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RecordSaleDialog } from "@/components/products/record-sale-dialog";
+import { EditSaleDialog } from "@/components/products/edit-sale-dialog";
 import {
   fetchProduct,
   getApiErrorMessage,
   type ApiProductDetail,
   type ApiAuditLog,
+  type ApiSale,
 } from "@/lib/api";
 import { useAuth } from "@/contexts/auth-context";
 import { fmtXof } from "@/lib/currency";
@@ -31,6 +34,8 @@ const AUDIT_LABELS: Record<string, string> = {
   name_changed: "Nom modifié",
   section_changed: "Section changée",
   deleted: "Produit supprimé",
+  sale_updated: "Vente modifiée",
+  sale_cancelled: "Vente annulée",
 };
 
 function ProfitIndicator({ profit }: { profit: number }) {
@@ -69,6 +74,23 @@ function AuditEntry({ log }: { log: ApiAuditLog }) {
             {log.details.buyerName ? ` — ${String(log.details.buyerName)}` : ""}
           </p>
         )}
+        {log.action === "sale_cancelled" && log.details && (
+          <p className="text-xs mt-0.5">
+            {String(log.details.quantity)} unité(s) à{" "}
+            {fmt(Number(log.details.salePrice))} annulée(s)
+          </p>
+        )}
+        {log.action === "sale_updated" && log.details && (
+          <p className="text-xs mt-0.5">
+            {log.details.quantity
+              ? `Qté : ${(log.details.quantity as { from: number; to: number }).from} → ${(log.details.quantity as { from: number; to: number }).to}`
+              : ""}
+            {log.details.quantity && log.details.salePrice ? " · " : ""}
+            {log.details.salePrice
+              ? `Prix : ${fmt(Number((log.details.salePrice as { from: number }).from))} → ${fmt(Number((log.details.salePrice as { to: number }).to))}`
+              : ""}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -81,6 +103,7 @@ export default function ProductDetailPage() {
   const [detail, setDetail] = useState<ApiProductDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [editSale, setEditSale] = useState<ApiSale | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -238,13 +261,24 @@ export default function ProductDetailPage() {
                           {s.buyerName ? ` → ${s.buyerName}` : ""}
                         </p>
                       </div>
-                      <div className="text-right shrink-0">
-                        <p>
-                          {s.quantity} × {fmt(s.salePrice)}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          = {fmt(s.quantity * s.salePrice)}
-                        </p>
+                      <div className="flex items-start gap-3">
+                        <div className="text-right shrink-0">
+                          <p>
+                            {s.quantity} × {fmt(s.salePrice)}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            = {fmt(s.quantity * s.salePrice)}
+                          </p>
+                        </div>
+                        {user.role === "admin" && (
+                          <button
+                            onClick={() => setEditSale(s as ApiSale)}
+                            className="mt-0.5 rounded p-1 hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                            title="Modifier"
+                          >
+                            <PencilIcon className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -272,6 +306,16 @@ export default function ProductDetailPage() {
           </Card>
         </div>
       )}
+
+      <EditSaleDialog
+        sale={editSale}
+        open={editSale !== null}
+        onOpenChange={(v) => {
+          if (!v) setEditSale(null);
+        }}
+        onUpdated={load}
+        onDeleted={load}
+      />
     </div>
   );
 }
