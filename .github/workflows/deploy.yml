@@ -10,84 +10,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy & Health Check
+  # ── Detect which parts of the repo changed ──────────────────────────────────
+  changes:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api:
+              - 'api/**'
+            web:
+              - 'web/**'
 
-      - name: Configure SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+  # ── Deploy NestJS API to Railway ─────────────────────────────────────────────
+  deploy-api:
+    name: Deploy API → Railway
+    needs: changes
+    if: needs.changes.outputs.api == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to Railway
+        run: npx --yes @railway/cli@latest up --service api --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
-      # Saves the SHA currently running on the server BEFORE any changes
-      - name: Save previous commit SHA
-        id: prev
-        run: |
-          PREV=$(ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "cd ${{ secrets.DEPLOY_PATH }} && git rev-parse HEAD")
-          echo "sha=$PREV" >> "$GITHUB_OUTPUT"
-          echo "Previous SHA: $PREV"
-
-      - name: Pull latest code on server
-        run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "cd ${{ secrets.DEPLOY_PATH }} && git pull origin main"
-
-      - name: Build & start containers
-        id: build
-        run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "cd ${{ secrets.DEPLOY_PATH }} && \
-             docker compose -f docker-compose.prod.yml up -d --build --remove-orphans"
-
-      - name: Wait for containers to be ready
-        run: sleep 30
-
-      - name: Health check
-        id: health
-        run: |
-          for i in 1 2 3; do
-            echo "Health check attempt $i/3..."
-            if curl -fsS --max-time 10 "${{ secrets.HEALTH_URL }}" > /dev/null; then
-              echo "Health check passed"
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "Health check failed after 3 attempts"
-          exit 1
-
-      # ── Rollback (only if build succeeded but health check failed) ──────────
-      - name: Rollback to previous version
-        if: failure() && steps.build.outcome == 'success'
-        run: |
-          echo "Rolling back to ${{ steps.prev.outputs.sha }}..."
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "cd ${{ secrets.DEPLOY_PATH }} && \
-             git checkout ${{ steps.prev.outputs.sha }} && \
-             docker compose -f docker-compose.prod.yml up -d --build --remove-orphans"
-
-      - name: Verify rollback health check
-        if: failure() && steps.build.outcome == 'success'
-        run: |
-          sleep 20
-          curl -fsS --max-time 10 "${{ secrets.HEALTH_URL }}" && \
-            echo "Rollback successful — previous version is live" || \
-            echo "WARNING: Rollback health check also failed — manual intervention required"
-
-      - name: Notify success
-        if: success()
-        run: echo "Deployed commit ${{ github.sha }} successfully"
-
-      - name: Notify failure
-        if: failure()
-        run: |
-          echo "Deployment of ${{ github.sha }} failed."
-          echo "Previous SHA was: ${{ steps.prev.outputs.sha }}"
+  # ── Deploy Next.js web to Vercel ─────────────────────────────────────────────
+  deploy-web:
+    name: Deploy Web → Vercel
+    needs: changes
+    if: needs.changes.outputs.web == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to Vercel
+        run: npx --yes vercel --prod --yes --cwd web --token ${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
