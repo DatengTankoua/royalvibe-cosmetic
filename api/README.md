@@ -75,8 +75,14 @@ Toutes les valeurs par défaut du `.env.example` sont compatibles avec le `docke
 
 ## Référence API
 
-> Toutes les routes sont protégées par JWT sauf `POST /auth/register` et `POST /auth/login`.
+> Toutes les routes sont protégées par JWT sauf `POST /auth/register`, `POST /auth/login` et `GET /health`.
 > Inclure le header : `Authorization: Bearer <token>`
+
+### Health
+
+```
+GET /health   → { status: "ok" }  (public — utilisé par le CI/CD pour les health checks)
+```
 
 ### Auth
 
