@@ -80,7 +80,7 @@ export function CurrencyConverter({
 
           {/* XOF → EUR */}
           <div className="space-y-2">
-            <Label htmlFor="xof-input">Franc CFA (XOF)</Label>
+            <Label htmlFor="xof-input">Franc CFA (FCFA)</Label>
             <Input
               id="xof-input"
               type="number"
@@ -101,7 +101,7 @@ export function CurrencyConverter({
           </div>
 
           <p className="text-xs text-muted-foreground border-t pt-3">
-            Taux fixe officiel : 1 EUR = {EUR_TO_XOF.toFixed(3)} XOF
+            Taux fixe officiel : 1 EUR = {EUR_TO_XOF.toFixed(3)} FCFA
             <br />
             (Parité fixe FCFA zone UEMOA / Banque de France)
           </p>

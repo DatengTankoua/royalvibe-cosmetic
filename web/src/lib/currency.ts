@@ -11,12 +11,11 @@ export function xofToEur(xof: number): number {
 
 export function fmtXof(n: number): string {
   const safe = isNaN(n) || !isFinite(n) ? 0 : n;
-  return new Intl.NumberFormat("fr-FR", {
-    style: "currency",
-    currency: "XOF",
+  const formatted = new Intl.NumberFormat("fr-FR", {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(safe);
+  return `${formatted} FCFA`;
 }
 
 export function fmtEur(n: number): string {
