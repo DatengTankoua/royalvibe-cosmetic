@@ -19,6 +19,7 @@ export default function Home() {
     sections,
     isLoading,
     error,
+    reload,
     addSection,
     removeSection,
     renameSection,
@@ -90,7 +91,15 @@ export default function Home() {
         <p className="text-sm text-muted-foreground">Chargement…</p>
       )}
       {!isLoading && error && (
-        <p className="text-sm text-destructive">{error}</p>
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-destructive">{error}</p>
+          <button
+            onClick={() => void reload()}
+            className="text-sm text-primary underline underline-offset-2 hover:no-underline"
+          >
+            Réessayer
+          </button>
+        </div>
       )}
       {!isLoading && !error && sections.length === 0 && (
         <p className="text-sm text-muted-foreground">

@@ -92,6 +92,7 @@ export default function AnalyticsPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState<string>(""); // "" = toutes périodes
+  const [retryKey, setRetryKey] = useState(0);
   const [outOfStockProducts, setOutOfStockProducts] = useState<ApiProduct[]>(
     [],
   );
@@ -106,6 +107,7 @@ export default function AnalyticsPage() {
     // monthly trend and out-of-stock list are always global (no month filter)
     const month = selectedMonth || undefined;
     setLoading(true);
+    setError(null);
     Promise.all([
       fetchOverview(month),
       fetchProductsRanking(month),
@@ -126,7 +128,7 @@ export default function AnalyticsPage() {
       })
       .catch((err) => setError(getApiErrorMessage(err)))
       .finally(() => setLoading(false));
-  }, [user, selectedMonth]);
+  }, [user, selectedMonth, retryKey]);
 
   if (authLoading || !user) return null;
 
@@ -158,7 +160,17 @@ export default function AnalyticsPage() {
       </div>
 
       {loading && <p className="text-sm text-muted-foreground">Chargement…</p>}
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {!loading && error && (
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-destructive">{error}</p>
+          <button
+            onClick={() => setRetryKey((k) => k + 1)}
+            className="text-sm text-primary underline underline-offset-2 hover:no-underline"
+          >
+            Réessayer
+          </button>
+        </div>
+      )}
 
       {overview && (
         <>

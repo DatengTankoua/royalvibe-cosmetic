@@ -79,6 +79,7 @@ export function useSections(parentId?: string) {
     sections,
     isLoading,
     error,
+    reload: load,
     addSection,
     removeSection,
     renameSection,

@@ -143,7 +143,15 @@ export default function ProductDetailPage() {
         <p className="text-sm text-muted-foreground">Chargement…</p>
       )}
       {!isLoading && error && (
-        <p className="text-sm text-destructive">{error}</p>
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-destructive">{error}</p>
+          <button
+            onClick={() => void load()}
+            className="text-sm text-primary underline underline-offset-2 hover:no-underline"
+          >
+            Réessayer
+          </button>
+        </div>
       )}
 
       {!isLoading && detail && (

@@ -15,6 +15,7 @@ export default function SalesPage() {
   const [sales, setSales] = useState<ApiSale[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     if (!authLoading && !user) router.push("/auth/login");
@@ -22,11 +23,13 @@ export default function SalesPage() {
 
   useEffect(() => {
     if (!user) return;
+    setIsLoading(true);
+    setError(null);
     fetchSales()
       .then(setSales)
       .catch((err) => setError(getApiErrorMessage(err)))
       .finally(() => setIsLoading(false));
-  }, [user]);
+  }, [user, retryKey]);
 
   if (authLoading || !user) return null;
 
@@ -37,7 +40,17 @@ export default function SalesPage() {
       {isLoading && (
         <p className="text-sm text-muted-foreground">Chargement…</p>
       )}
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {!isLoading && error && (
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-destructive">{error}</p>
+          <button
+            onClick={() => setRetryKey((k) => k + 1)}
+            className="text-sm text-primary underline underline-offset-2 hover:no-underline"
+          >
+            Réessayer
+          </button>
+        </div>
+      )}
 
       {!isLoading && sales.length === 0 && (
         <p className="text-sm text-muted-foreground">
