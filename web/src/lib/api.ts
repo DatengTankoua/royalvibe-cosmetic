@@ -1,5 +1,5 @@
 import axios from "axios";
-import { getToken } from "./auth";
+import { getToken, clearAuth } from "./auth";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -116,6 +116,23 @@ apiClient.interceptors.request.use((config) => {
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error: unknown) => {
+    if (
+      axios.isAxiosError(error) &&
+      error.response?.status === 401 &&
+      !error.config?.url?.startsWith("/auth/")
+    ) {
+      clearAuth();
+      if (typeof window !== "undefined") {
+        window.location.replace("/auth/login");
+      }
+    }
+    return Promise.reject(error);
+  },
+);
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -381,16 +398,25 @@ export async function fetchMonthlyTrend(): Promise<MonthlyTrend[]> {
 
 export function getApiErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
-    const body = error.response?.data as
+    if (!error.response) {
+      return "Impossible de joindre le serveur. Vérifiez votre connexion.";
+    }
+    const status = error.response.status;
+    const body = error.response.data as
       { message?: string | string[] } | undefined;
+
+    if (status === 403) return "Accès refusé.";
+    if (status === 404) return "Ressource introuvable.";
+    if (status >= 500)
+      return "Erreur serveur. Réessayez dans quelques instants.";
     if (body?.message) {
       return Array.isArray(body.message)
         ? body.message.join(", ")
         : body.message;
     }
-    return error.message;
+    return `Erreur ${status}.`;
   }
-  return "Something went wrong";
+  return "Une erreur inattendue s'est produite.";
 }
 
 // Legacy re-exports so existing object components don't break immediately

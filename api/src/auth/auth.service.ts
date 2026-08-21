@@ -21,7 +21,10 @@ export class AuthService {
     dto: RegisterDto,
   ): Promise<{ access_token: string; user: Omit<UserDocument, 'password'> }> {
     const existing = await this.usersService.findByEmail(dto.email);
-    if (existing) throw new BadRequestException('Email already in use');
+    if (existing)
+      throw new BadRequestException(
+        'Si cette adresse est valide, un email de confirmation a déjà été envoyé.',
+      );
 
     const hashed = await bcrypt.hash(dto.password, 10);
     const user = await this.usersService.create({
@@ -38,10 +41,12 @@ export class AuthService {
     dto: LoginDto,
   ): Promise<{ access_token: string; user: Omit<UserDocument, 'password'> }> {
     const user = await this.usersService.findByEmail(dto.email);
-    if (!user) throw new UnauthorizedException('Invalid credentials');
+    if (!user)
+      throw new UnauthorizedException('Email ou mot de passe incorrect!');
 
     const valid = await bcrypt.compare(dto.password, user.password);
-    if (!valid) throw new UnauthorizedException('Invalid credentials');
+    if (!valid)
+      throw new UnauthorizedException('Email ou mot de passe incorrect!');
 
     const token = this.sign(user);
     return { access_token: token, user: this.sanitize(user) };

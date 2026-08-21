@@ -33,6 +33,7 @@ import {
 import { useAuth } from "@/contexts/auth-context";
 import { useTrash } from "@/hooks/use-trash";
 import { fmtXof } from "@/lib/currency";
+import { getApiErrorMessage } from "@/lib/api";
 import Image from "next/image";
 
 type ConfirmAction =
@@ -53,6 +54,7 @@ export default function TrashPage() {
     products,
     isLoading,
     error,
+    reload,
     doRestoreSection,
     doPermanentDeleteSection,
     doRestoreProduct,
@@ -163,8 +165,8 @@ export default function TrashPage() {
           setSelectedProducts(new Set());
           break;
       }
-    } catch {
-      toast.error("Une erreur est survenue");
+    } catch (err) {
+      toast.error(getApiErrorMessage(err));
     } finally {
       setConfirm(null);
     }
@@ -262,7 +264,15 @@ export default function TrashPage() {
           <p className="text-sm text-muted-foreground">Chargement…</p>
         )}
         {!isLoading && error && (
-          <p className="text-sm text-destructive">{error}</p>
+          <div className="flex items-center gap-3">
+            <p className="text-sm text-destructive">{error}</p>
+            <button
+              onClick={() => void reload()}
+              className="text-sm text-primary underline underline-offset-2 hover:no-underline"
+            >
+              Réessayer
+            </button>
+          </div>
         )}
 
         {/* ── Catalogues ── */}

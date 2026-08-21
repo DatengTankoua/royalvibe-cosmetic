@@ -80,6 +80,7 @@ export function useTrash() {
     products,
     isLoading,
     error,
+    reload: load,
     doRestoreSection,
     doPermanentDeleteSection,
     doRestoreProduct,
