@@ -50,7 +50,7 @@ export function Navbar() {
       {/* ── Top header ── */}
       <header className="border-b bg-background sticky top-0 z-40">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4 sm:px-6">
-          <Link href="/" className="flex items-center gap-2 mr-auto sm:mr-4">
+          <Link href="/" className="flex items-center gap-2 sm:mr-4">
             <Image
               src="/logo.jpg"
               alt="RoyalVibe"
@@ -102,6 +102,20 @@ export function Navbar() {
               EUR ↔ CFA
             </button>
           </nav>
+
+          {/* Mobile user (top-right, visible on small screens) */}
+          {user && (
+            <div className="flex md:hidden items-center gap-1 ml-auto">
+              <span className="text-sm font-medium truncate max-w-[110px]">
+                {user.name}
+              </span>
+              {user.role === "admin" && (
+                <span className="text-xs bg-primary text-primary-foreground rounded px-1">
+                  admin
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Desktop user */}
           <div className="hidden md:flex items-center gap-3">
