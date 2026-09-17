@@ -79,18 +79,24 @@ describe('RolesGuard', () => {
       );
     });
 
-    it('documents the unauthenticated contract: RolesGuard alone does NOT 403 a missing user — it assumes JwtAuthGuard ran first', () => {
-      // Current code: `user.role` with user === undefined throws a
-      // TypeError (unhandled => 500) instead of a clean 403. In
-      // production this is masked because JwtAuthGuard is a global
-      // APP_GUARD registered BEFORE RolesGuard (auth.module.ts) and
-      // rejects unauthenticated requests with 401 first.
-      // Pinned here so any future "graceful degradation" change is
-      // deliberate. (Documented current behaviour, not a regression.)
+    it('refuses a role-gated operation cleanly with a 403-class error when request.user is absent (no TypeError)', () => {
+      // Required behaviour (phase 0B.1): a missing user with a required
+      // role is a controlled rejection (ForbiddenException), never an
+      // unhandled TypeError that would surface as a 500.
       const guard = makeGuard([UserRole.ADMIN]);
-      expect(() => guard.canActivate(makeContext(undefined))).toThrow(
-        TypeError,
-      );
+      let thrown: unknown;
+      try {
+        guard.canActivate(makeContext(undefined));
+      } catch (e: unknown) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(ForbiddenException);
+      expect(thrown).not.toBeInstanceOf(TypeError);
+    });
+
+    it('does not throw when the user is missing and no role is required', () => {
+      const guard = makeGuard(null);
+      expect(guard.canActivate(makeContext(undefined))).toBe(true);
     });
   });
 
@@ -112,6 +118,14 @@ describe('RolesGuard', () => {
       ['products.permanentDelete', ProductsController, 'permanentDelete'],
       ['sales.update', SalesController, 'update'],
       ['sales.remove', SalesController, 'remove'],
+      ['analytics.getOverview', AnalyticsController, 'getOverview'],
+      [
+        'analytics.getProductsRanking',
+        AnalyticsController,
+        'getProductsRanking',
+      ],
+      ['analytics.getSellersRanking', AnalyticsController, 'getSellersRanking'],
+      ['analytics.getMonthlyTrend', AnalyticsController, 'getMonthlyTrend'],
       ['trash.findAll (controller-level @Roles)', TrashController, 'findAll'],
     ];
 
@@ -132,18 +146,6 @@ describe('RolesGuard', () => {
         ['products.findOne', ProductsController, 'findOne'],
         ['sales.create', SalesController, 'create'],
         ['sales.findAll', SalesController, 'findAll'],
-        ['analytics.getOverview', AnalyticsController, 'getOverview'],
-        [
-          'analytics.getProductsRanking',
-          AnalyticsController,
-          'getProductsRanking',
-        ],
-        [
-          'analytics.getSellersRanking',
-          AnalyticsController,
-          'getSellersRanking',
-        ],
-        ['analytics.getMonthlyTrend', AnalyticsController, 'getMonthlyTrend'],
       ];
 
     it.each(anyAuthRoute.map(([label]) => [label]))(
@@ -162,19 +164,28 @@ describe('RolesGuard', () => {
       );
     });
 
-    it('DEFECT (C-2, documented, NOT fixed here): every analytics endpoint requires no role — a seller may read all KPIs and the seller ranking (emails + revenue of every seller)', () => {
+    it('SECURITY (C-2, fixed in phase 0B.1): every analytics endpoint requires the ADMIN role — a seller is refused', () => {
+      // The metadata must be declared on (or inherited by) every
+      // analytics handler, and the guard decision must refuse the
+      // seller on top of that.
       for (const method of [
         'getOverview',
         'getProductsRanking',
         'getSellersRanking',
         'getMonthlyTrend',
       ] as const) {
-        expect(readRoles(AnalyticsController, method)).toBeUndefined();
+        expect(readRoles(AnalyticsController, method)).toEqual([
+          UserRole.ADMIN,
+        ]);
       }
-      const guard = makeGuard(null);
-      expect(guard.canActivate(makeContext({ role: UserRole.SELLER }))).toBe(
-        true,
-      );
+      const guard = makeGuard([UserRole.ADMIN]);
+      let thrown: unknown;
+      try {
+        guard.canActivate(makeContext({ role: UserRole.SELLER }));
+      } catch (e: unknown) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(ForbiddenException);
     });
   });
 });

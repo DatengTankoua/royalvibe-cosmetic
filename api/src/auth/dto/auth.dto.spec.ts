@@ -172,16 +172,43 @@ describe('DTO validation (same ValidationPipe options as production)', () => {
   });
 
   describe('CreateSectionDto', () => {
-    it('rejects an empty name but not a whitespace-only one (IsNotEmpty limitation — documented)', async () => {
-      expect(
-        (await collectErrors({ name: '', description: '' }, CreateSectionDto))
-          .length,
-      ).toBeGreaterThan(0);
-      // Documented limitation: whitespace-only passes @IsNotEmpty.
+    it('accepts a normal name', async () => {
       expect(
         (
           await collectErrors(
-            { name: '   ', description: '' },
+            { name: 'Parfums', description: '' },
+            CreateSectionDto,
+          )
+        ).length,
+      ).toBe(0);
+    });
+
+    it('rejects an empty name', async () => {
+      const errors = await collectErrors(
+        { name: '', description: '' },
+        CreateSectionDto,
+      );
+      expect(errors.some((e) => e.property === 'name')).toBe(true);
+    });
+
+    it('rejects a whitespace-only name (sec: whitespace-only sections must be impossible)', async () => {
+      const errors = await collectErrors(
+        { name: '   ', description: '' },
+        CreateSectionDto,
+      );
+      expect(errors.some((e) => e.property === 'name')).toBe(true);
+    });
+
+    it('rejects an absent name', async () => {
+      const errors = await collectErrors({ description: '' }, CreateSectionDto);
+      expect(errors.some((e) => e.property === 'name')).toBe(true);
+    });
+
+    it('documents surrounding-whitespace behaviour: names are NOT trimmed by the DTO; leading/trailing spaces still pass validation (the schema-level trim applies at storage time)', async () => {
+      expect(
+        (
+          await collectErrors(
+            { name: '  Parfums  ', description: '' },
             CreateSectionDto,
           )
         ).length,

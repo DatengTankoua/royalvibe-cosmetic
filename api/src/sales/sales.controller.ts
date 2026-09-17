@@ -16,6 +16,7 @@ import { UpdateSaleDto } from './dto/update-sale.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
 import { User, UserRole } from '../users/schemas/user.schema';
 
 @Controller('sales')
@@ -36,7 +37,7 @@ export class SalesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
   update(
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: UpdateSaleDto,
     @CurrentUser() user: User,
   ) {
@@ -47,7 +48,10 @@ export class SalesController {
   @HttpCode(204)
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
-  remove(@Param('id') id: string, @CurrentUser() user: User) {
+  remove(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @CurrentUser() user: User,
+  ) {
     return this.salesService.remove(id, user._id.toString());
   }
 }

@@ -23,7 +23,9 @@ export class RolesGuard implements CanActivate {
     const { user } = context
       .switchToHttp()
       .getRequest<Request & { user: User }>();
-    if (!required.includes(user.role)) {
+    // A missing user must be a controlled 403, never an unhandled
+    // TypeError (which would surface as a 500).
+    if (!user || !required.includes(user.role)) {
       throw new ForbiddenException('Insufficient permissions');
     }
     return true;
