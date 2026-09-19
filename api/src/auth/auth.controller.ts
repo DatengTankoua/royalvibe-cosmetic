@@ -1,10 +1,29 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Post,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { User } from '../users/schemas/user.schema';
+
+/**
+ * Registre public ouvert (phase 0B.5) — désactivé PAR DÉFAUT.
+ * Seule la valeur exacte 'true' l'active ; toute autre valeur
+ * (absente, 'false', invalide) le désactive. Le backend reste
+ * l'autorité finale, quel que soit le flag frontend
+ * (NEXT_PUBLIC_REGISTRATION_ENABLED ne porte que l'affichage).
+ * Fermeture TEMPORAIRE, remplacée par : inscription du gérant
+ * (OWNER), création de son organisation, invitation des vendeurs.
+ */
+export function isPublicRegistrationEnabled(): boolean {
+  return process.env.PUBLIC_REGISTRATION_ENABLED === 'true';
+}
 
 @Controller('auth')
 export class AuthController {
@@ -13,6 +32,15 @@ export class AuthController {
   @Public()
   @Post('register')
   register(@Body() dto: RegisterDto) {
+    // Garde AVANT toute logique : AuthService.register n'est JAMAIS
+    // appelée en cas de refus (403 + code stable REGISTRATION_DISABLED).
+    const enabled = isPublicRegistrationEnabled();
+    if (!enabled) {
+      throw new ForbiddenException({
+        code: 'REGISTRATION_DISABLED',
+        message: "L'inscription est actuellement désactivée.",
+      });
+    }
     return this.authService.register(dto);
   }
 

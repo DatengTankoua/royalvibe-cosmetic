@@ -240,6 +240,8 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
       process.env.JWT_SECRET = TEST_JWT_SECRET;
       process.env.CORS_ORIGIN = ALLOWED_ORIGIN;
       process.env.NODE_ENV = 'test';
+      // 0B.5 : activé explicitement pour les fixtures (désactivé par défaut).
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
       // S3 : valeurs locales factices (aucun test 0B.3 n'appelle S3).
       process.env.S3_ENDPOINT = 'http://127.0.0.1:65535';
       process.env.S3_REGION = 'us-east-1';

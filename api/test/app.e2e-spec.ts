@@ -88,6 +88,11 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       // CORS strict (0B.4) : valeur parsée UNE FOIS par le parser strict de
       // 0B.3 — jamais de repli ouvert (`?? true`), comme dans main.ts.
       process.env.CORS_ORIGIN = E2E_CORS_ORIGIN;
+      // 0B.5 : l'inscription publique est désactivée par défaut — les
+      // fixtures existent UNIQUEMENT parce que la variable est activée
+      // explicitement ICI (valeur exacte 'true') pour l'environnement de
+      // test (lue par ConfigModule au boot de AppModule).
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
 
       moduleFixture = await Test.createTestingModule({
         imports: [AppModule],
@@ -361,6 +366,55 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       expect(() => parseCORSOrigin('   ', 'production')).toThrow(
         OriginConfigError,
       );
+    });
+  });
+
+  describe('7. Inscription publique désactivée par défaut (0B.5)', () => {
+    // Le garde lit `process.env` à CHAQUE requête (le guard est un export
+    // pur, pas de valeur figée au boot) : on peut donc inverser
+    // l'inscription à chaud, et le backend reste l'autorité finale même si
+    // le frontend est mal configuré (ici aucune valeur n'est lue côté web).
+    it('E2E : sans PUBLIC_REGISTRATION_ENABLED, POST /auth/register → 403 REGISTRATION_DISABLED, aucun compte créé', async () => {
+      const usersCol = moduleFixture
+        .get<Connection>(getConnectionToken())
+        .getClient()
+        .db(E2E_DB_NAME)
+        .collection('users');
+      const before = await usersCol.countDocuments();
+
+      delete process.env.PUBLIC_REGISTRATION_ENABLED; // désactivée
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/register')
+        .send({
+          name: 'Refusé',
+          email: 'refuse-0b5@royalvibe.test',
+          password: 'secret-123',
+        });
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('REGISTRATION_DISABLED');
+
+      // Aucun compte créé :
+      const after = await usersCol.countDocuments();
+      expect(after).toBe(before);
+
+      // Et ce « compte » n'existe pas pour le login (jamais écrit) :
+      const loginRes = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: 'refuse-0b5@royalvibe.test',
+          password: 'secret-123',
+        });
+      expect(loginRes.status).toBe(401);
+    });
+
+    it('E2E : le login d’un compte EXISTANT (fixture) reste fonctionnel quand l’inscription est désactivée', async () => {
+      delete process.env.PUBLIC_REGISTRATION_ENABLED; // désactivée
+      const res = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: SELLER_EMAIL, password: 'seller-e2e-pw-!1x' });
+      expect(res.status).toBe(201);
+      expect(typeof res.body.access_token).toBe('string');
     });
   });
 });

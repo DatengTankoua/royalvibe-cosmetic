@@ -16,6 +16,10 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  // 0B.5 : masque le lien d'inscription (affichage seulement — le backend
+  // reste l'autorité finale). Par défaut : désactivée.
+  const registrationEnabled =
+    process.env.NEXT_PUBLIC_REGISTRATION_ENABLED === "true";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,12 +85,14 @@ export default function LoginPage() {
           </Button>
         </form>
 
-        <p className="text-center text-sm text-muted-foreground">
-          Pas encore de compte ?{" "}
-          <Link href="/auth/register" className="underline">
-            S&apos;inscrire
-          </Link>
-        </p>
+        {registrationEnabled && (
+          <p className="text-center text-sm text-muted-foreground">
+            Pas encore de compte ?{" "}
+            <Link href="/auth/register" className="underline">
+              S&apos;inscrire
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   );
