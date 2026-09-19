@@ -4,8 +4,10 @@ import {
   ForbiddenException,
   Get,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { AuthThrottlerGuard } from '../common/auth-rate-limiting';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { Public } from './decorators/public.decorator';
@@ -44,6 +46,9 @@ export class AuthController {
     return this.authService.register(dto);
   }
 
+  // Garde de rate limiting (0B.6) : applicée UNIQUEMENT à /auth/login
+  // (jamais en garde globale), avant la logique de login.
+  @UseGuards(AuthThrottlerGuard)
   @Public()
   @Post('login')
   login(@Body() dto: LoginDto) {

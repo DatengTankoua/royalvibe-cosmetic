@@ -20,6 +20,8 @@ import {
   buildOriginAllowlist,
   parseCORSOrigin,
 } from './../src/events/origin.helpers';
+import { ThrottlerStorage } from '@nestjs/throttler';
+import { AUTH_RATE_LIMIT_CODE } from './../src/common/auth-rate-limiting';
 
 /**
  * E2E (phase 0B.2) — application NestJS complète sur MongoDB éphémère.
@@ -415,6 +417,127 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
         .send({ email: SELLER_EMAIL, password: 'seller-e2e-pw-!1x' });
       expect(res.status).toBe(201);
       expect(typeof res.body.access_token).toBe('string');
+    });
+  });
+
+  describe('8. Rate limiting du login (0B.6)', () => {
+    // Toutes les fenêtres s'appuient sur le stockage mémoire officiel de
+    // `@nestjs/throttler` (0B.6) — correct pour UNE instance, pas distribué.
+    // Le storage est isolé AVANT chaque test ; aucune suite antérieure ne
+    // dépend de l'ordre d'exécution, et AUCUN test n'attend réellement 60 s
+    // ou 15 min : le 429 est déclenché par dépassement de la limite (fenêtre
+    // courte), pas par temporisation réelle.
+    const clearThrottle = (): void => {
+      // Méthode publique du stockage mémoire OFFICIEL de `@nestjs/throttler`
+      // (vide les compteurs et les timers) — isolation entre les tests.
+      const s = moduleFixture.get(ThrottlerStorage);
+      s.onApplicationShutdown();
+    };
+
+    const wrongLogin = () =>
+      request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: SELLER_EMAIL, password: 'wrong-password-x' });
+
+    beforeEach(clearThrottle);
+
+    it('un login valide fonctionne avant dépassement (compte dans la fenêtre)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: SELLER_EMAIL, password: 'seller-e2e-pw-!1x' });
+      expect(res.status).toBe(201);
+      expect(typeof res.body.access_token).toBe('string');
+    });
+
+    it('les premières tentatives incorrectes conservent la réponse générique actuelle (401)', async () => {
+      for (let i = 0; i < 3; i++) {
+        const res = await wrongLogin();
+        expect(res.status).toBe(401);
+        expect(res.body.message).toContain('Email ou mot de passe incorrect');
+        expect(res.body.code).toBeUndefined();
+      }
+    });
+
+    it('la requête dépassant login-short (10/60 s) retourne 429', async () => {
+      // 10 requêtes tolérées (401), la 11e déclenche le blocage de
+      // login-short. La fenêtre login-long (30/15 min) n'est PAS atteinte.
+      for (let i = 0; i < 10; i++) {
+        const res = await wrongLogin();
+        expect(res.status).toBe(401);
+      }
+      const last = await wrongLogin();
+      expect(last.status).toBe(429);
+    });
+
+    it('le corps du 429 contient exactement AUTH_RATE_LIMITED (sans données d’auth)', async () => {
+      let caught: undefined | { status: number; body: Record<string, unknown> };
+      for (let i = 0; i < 11; i++) {
+        const res = await wrongLogin();
+        if (res.status === 429) {
+          caught = res;
+          break;
+        }
+      }
+      expect(caught).toBeDefined();
+      const body = (caught as { body: Record<string, unknown> }).body;
+      expect(body.statusCode).toBe(429);
+      expect(body.code).toBe(AUTH_RATE_LIMIT_CODE);
+      expect(body.message).toBe(
+        'Trop de tentatives de connexion. Réessayez plus tard.',
+      );
+      // Jamais de mot de passe, token, e-mail ni compteur exact.
+      expect(
+        Object.keys(body).some((k) => /remaining|hits|attempts|count/i.test(k)),
+      ).toBe(false);
+    });
+
+    it('Retry-After est présent, entier strictement positif, en secondes', async () => {
+      let captured = false;
+      let retryAfter: string | undefined;
+      for (let i = 0; i < 11; i++) {
+        const res = await wrongLogin();
+        if (res.status === 429) {
+          retryAfter = res.headers['retry-after'];
+          captured = true;
+          break;
+        }
+      }
+      expect(captured).toBe(true);
+      expect(retryAfter).toBeDefined();
+      const seconds = Number(retryAfter);
+      expect(Number.isInteger(seconds)).toBe(true);
+      expect(seconds).toBeGreaterThan(0);
+    });
+
+    it('X-Forwarded-For falsifié ne réinitialise PAS la limite (proxy non approuvé)', async () => {
+      // TRUST_PROXY_HOPS absent (0) : Express IGNORE X-Forwarded-For ; le
+      // tracker = l'IP réelle (boucle). 10 requêtes remplissent login-short.
+      for (let i = 0; i < 10; i++) {
+        const res = await wrongLogin();
+        expect(res.status).toBe(401);
+      }
+      // 11e avec XFF falsifié : si le tracker se fiait à XFF, ce serait un
+      // NOUVEAU tracker -> 401. Proxy non approuvé => même tracker -> 429.
+      const forged = await request(app.getHttpServer())
+        .post('/auth/login')
+        .set('X-Forwarded-For', '9.9.9.9')
+        .send({ email: SELLER_EMAIL, password: 'wrong-password-x' });
+      expect(forged.status).toBe(429);
+    });
+
+    it('l’inscription désactivée reste 403 / REGISTRATION_DISABLED (même après plusieurs appels)', async () => {
+      delete process.env.PUBLIC_REGISTRATION_ENABLED;
+      for (let i = 0; i < 3; i++) {
+        const res = await request(app.getHttpServer())
+          .post('/auth/register')
+          .send({
+            name: 'RL',
+            email: `rl-${i}-${Date.now()}@royalvibe.test`,
+            password: 'secret-123',
+          });
+        expect(res.status).toBe(403);
+        expect(res.body.code).toBe('REGISTRATION_DISABLED');
+      }
     });
   });
 });

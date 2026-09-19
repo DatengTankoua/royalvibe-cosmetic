@@ -1,9 +1,14 @@
 import { ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthController, isPublicRegistrationEnabled } from './auth.controller';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import {
+  AuthThrottlerGuard,
+  createAuthThrottlerOptions,
+} from '../common/auth-rate-limiting';
 
 /**
  * AuthController — garde de l'inscription publique (0B.5).
@@ -47,12 +52,18 @@ describe('AuthController — registre public (0B.5)', () => {
     loginMock = jest.fn();
 
     const module: TestingModule = await Test.createTestingModule({
+      // Le garde 0B.6 est attaché à `login` ; on l'enregistre ici (options +
+      // stockage mémoire officiel) pour que la DI du contrôleur se résolve.
+      // `controller.login()` est appelé DIRECTEMENT (pas via HTTP), donc la
+      // limitation ne se déclenche jamais dans cette suite (déterministe).
+      imports: [ThrottlerModule.forRoot(createAuthThrottlerOptions())],
       controllers: [AuthController],
       providers: [
         {
           provide: AuthService,
           useValue: { register: registerMock, login: loginMock },
         },
+        AuthThrottlerGuard,
       ],
     }).compile();
 

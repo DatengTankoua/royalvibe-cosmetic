@@ -3,7 +3,12 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
+import {
+  AuthThrottlerGuard,
+  createAuthThrottlerOptions,
+} from '../common/auth-rate-limiting';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -25,10 +30,17 @@ import { UsersModule } from '../users/users.module';
         signOptions: { expiresIn: '7d' },
       }),
     }),
+    // Rate limiting du login (0B.6) : stockage mémoire officiel de
+    // `@nestjs/throttler` (module global => ses tokens résident en tous
+    // modules). La garde est FOURNIE par CE module (module d'accueil du
+    // contrôleur) afin que `GuardsContextCreator` la résolve via le
+    // conteneur — attachée à /auth/login, jamais garde globale.
+    ThrottlerModule.forRoot(createAuthThrottlerOptions()),
   ],
   providers: [
     AuthService,
     JwtStrategy,
+    AuthThrottlerGuard,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
