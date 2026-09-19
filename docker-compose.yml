@@ -1,12 +1,37 @@
 services:
   mongo:
     image: mongo:7
-    container_name: heyama-mongo
+    # Variables à défaut stable : le smoke test isolé de 0B.7C injecte de
+    # nouvelles valeurs via un projet Compose explicite (-p heyama_phase0b7c_smoke)
+    # pour rester 100 % hermétique (nom de conteneur unique, port hôte distinct).
+    # La configuration de DEV réelle est inchangée (défauts ci-dessous).
+    container_name: ${MONGO_SERVICE_CONTAINER_NAME:-heyama-mongo}
     restart: unless-stopped
+    # Replica set mono-nœud « rs0 » (phase 0B.7C) : prérequis local des
+    # transactions multi-documents (écriture atomique vente–stock–audit, 0B.7B).
+    # Les données du volume mongo_data sont CONSERVÉES ; l'initialisation est
+    # idempotente et gérée par le service compagnon mongo-rs-init (jamais de
+    # réinitialisation, jamais de perte de données).
+    command: mongod --replSet rs0 --bind_ip_all
     ports:
-      - "27017:27017"
+      - "${MONGO_SERVICE_HOST_PORT:-27017}:27017"
     volumes:
       - mongo_data:/data/db
+
+  mongo-rs-init:
+    image: mongo:7
+    restart: "no"
+    depends_on:
+      - mongo
+    # Ponctuel et idempotent : détecte le replica set existant et n'initiate()
+    # que s'il est absent ; exit 0 si déjà opérationnel, exit 1 en cas de
+    # échec (le conteneur reste Exited (1) et ne redémarre pas).
+    command: >-
+      mongosh --quiet
+      mongodb://mongo:27017/admin?directConnection=true
+      /scripts/mongo/init-replica-set.js
+    volumes:
+      - ./scripts/mongo/init-replica-set.js:/scripts/mongo/init-replica-set.js:ro
 
   minio:
     image: minio/minio:latest
@@ -23,15 +48,24 @@ services:
       - minio_data:/data
   mongo-express:
     image: mongo-express:latest
-    container_name: heyama-mongo-express
+    # Variables à défaut stable : le smoke test isolé de 0B.7C injecte de
+    # nouvelles valeurs (nom de conteneur unique, port hôte distinct) via un
+    # projet Compose explicite. La DEV réelle est inchangée (défauts ci-dessous).
+    container_name: ${MONGO_EXPRESS_CONTAINER_NAME:-heyama-mongo-express}
     restart: unless-stopped
     ports:
-      - "8081:8081"
+      - "${MONGO_EXPRESS_HOST_PORT:-8081}:8081"
     environment:
-      ME_CONFIG_MONGODB_URL: mongodb://mongo:27017/
+      # Mongo Express partage le réseau Docker du projet et résout « mongo » ;
+      # replicaSet=rs0 le fait rejoindre la replica set (pas de
+      # directConnection : il utilise la topologie du replica set).
+      ME_CONFIG_MONGODB_URL: mongodb://mongo:27017/?replicaSet=rs0
       ME_CONFIG_BASICAUTH: "false"
+    # Démarrage uniquement APRÈS la réussite de l'initialisation du replica set
+    # (service_completed_successfully) : ne dépend plus directement de mongo.
     depends_on:
-      - mongo
+      mongo-rs-init:
+        condition: service_completed_successfully
 
 volumes:
   mongo_data:
