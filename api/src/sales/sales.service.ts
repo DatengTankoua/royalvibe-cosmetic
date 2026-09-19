@@ -1,10 +1,7 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectModel, InjectConnection } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import type { Connection } from 'mongoose';
 import { Sale, SaleDocument } from './schemas/sale.schema';
 import { CreateSaleDto } from './dto/create-sale.dto';
 import { UpdateSaleDto } from './dto/update-sale.dto';
@@ -17,36 +14,100 @@ import { AuditAction } from '../audit/schemas/audit-log.schema';
 export class SalesService {
   constructor(
     @InjectModel(Sale.name) private saleModel: Model<SaleDocument>,
+    @InjectConnection() private connection: Connection,
     private productsService: ProductsService,
     private eventsGateway: EventsGateway,
     private auditService: AuditService,
   ) {}
 
+  /**
+   * Création d'une vente — TRANSACTION ATOMIQUE (phase 0B.7B).
+   *
+   * Les trois écritures déterminant l'état métier (décrémentation du stock,
+   * création de la vente, journal d'audit `SOLD`) sont groupées dans UNE
+   * seule transaction MongoDB : elles sont soit toutes validées (commit),
+   * soit toutes annulées (rollback). La même instance `ClientSession` est
+   * transmise explicitement à chaque lecture/écriture.
+   *
+   * Garanties :
+   * - aucune vente sans stock décrémenté, aucun stock décrémenté sans vente ;
+   * - stock jamais négatif (garde `remainingQuantity >= quantity` atomique) ;
+   * - aucun audit `SOLD` orphelin (annulée avec la vente) ;
+   * - l'événement Socket.IO `sale:created` part UNIQUEMENT après le commit.
+   *
+   * Aucune opération parallèle (Promise.all) à l'intérieur : l'audit référence
+   * le `saleId` de la vente créée et Mongoose exige la session explicite sur
+   * chaque opération.
+   */
   async create(dto: CreateSaleDto, sellerId: string): Promise<SaleDocument> {
-    const { product } = await this.productsService.findOne(dto.productId);
-    if (product.remainingQuantity < dto.quantity) {
-      throw new BadRequestException(
-        `Not enough stock. Available: ${product.remainingQuantity}`,
-      );
+    const session = await this.connection.startSession();
+    let created: SaleDocument | undefined;
+
+    try {
+      await session.withTransaction(async () => {
+        // 1. Décrémentation ATOMIQUE et conditionnelle du stock. Lève 404
+        //    (produit absent/inaccessible) ou 400 (stock insuffisant) : la
+        //    transaction est alors annulée, rien n'est persisté.
+        const product = await this.productsService.decrementStock(
+          dto.productId,
+          dto.quantity,
+          session,
+        );
+
+        // 2. Création de la vente, MÊME session. Sur échec, le rollback
+        //    annule la décrémentation du stock (point 1).
+        const [sale] = await this.saleModel.create(
+          [
+            {
+              productId: new Types.ObjectId(dto.productId),
+              quantity: dto.quantity,
+              salePrice: dto.salePrice,
+              sellerId: new Types.ObjectId(sellerId),
+              productName: product.name,
+              ...(dto.buyerName !== undefined
+                ? { buyerName: dto.buyerName }
+                : {}),
+              ...(dto.buyerContact !== undefined
+                ? { buyerContact: dto.buyerContact }
+                : {}),
+            },
+          ],
+          { session },
+        );
+
+        // 3. Journal d'audit `SOLD` référençant la VENTE créée dans cette
+        //    même tentative — MÊME session : si la vente est annulée, l'audit
+        //    ne subsiste pas.
+        await this.auditService.log(
+          dto.productId,
+          AuditAction.SOLD,
+          sellerId,
+          {
+            saleId: sale._id,
+            quantity: dto.quantity,
+            salePrice: dto.salePrice,
+            buyerName: dto.buyerName,
+          },
+          session,
+        );
+
+        created = sale;
+      });
+    } finally {
+      // Session fermée dans TOUS les cas (succès ou erreur) — pas de fuite.
+      await session.endSession();
     }
 
-    const sale = await this.saleModel.create({
-      ...dto,
-      productId: new Types.ObjectId(dto.productId),
-      productName: product.name,
-      sellerId: new Types.ObjectId(sellerId),
-    });
-
-    await this.productsService.decrementStock(dto.productId, dto.quantity);
-
-    await this.auditService.log(dto.productId, AuditAction.SOLD, sellerId, {
-      saleId: sale._id,
-      quantity: dto.quantity,
-      salePrice: dto.salePrice,
-      buyerName: dto.buyerName,
-    });
-
-    const populated = await sale.populate('sellerId', 'name email');
+    // APRÈS le commit uniquement : peupler le vendeur puis émettre l'événement
+    // temps réel. Un rollback ne produit donc AUCUN événement Socket.IO.
+    if (!created) {
+      throw new Error('Sale transaction completed without creating a sale');
+    }
+    // Détache explicitement le document de la session (déjà fermée) avant tout
+    // usage ultérieur (populate, sérialisation) — plus aucune opération liée
+    // à la session close.
+    created.$session(null);
+    const populated = await created.populate('sellerId', 'name email');
     this.eventsGateway.emit('sale:created', populated);
     return populated;
   }

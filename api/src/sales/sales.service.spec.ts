@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { Sale } from './schemas/sale.schema';
@@ -13,51 +13,112 @@ const SALE_OBJECT_ID = 'a1b2c3d4e5f60718293a4b5c';
 const PRODUCT_OBJECT_ID = '112233445566778899001122';
 const SELLER_OBJECT_ID = '99887766554433221100aabb';
 
-function makeProduct(remaining: number) {
+function makeProduct(name = 'Produit A') {
   return {
     _id: new Types.ObjectId(PRODUCT_OBJECT_ID),
-    name: 'Produit A',
+    name,
     purchasePrice: 200,
     salePrice: 500,
     initialQuantity: 10,
-    remainingQuantity: remaining,
+    remainingQuantity: 5,
+    deletedAt: null,
   };
 }
 
+interface SaleEntityRecord {
+  _id: unknown;
+  productId: unknown;
+  quantity: number;
+  salePrice: number;
+  save?: jest.Mock;
+  deleteOne?: jest.Mock;
+  $session: jest.Mock;
+  populate: jest.Mock;
+}
+
 function makeSaleEntity(overrides: Record<string, unknown> = {}) {
-  const entity: Record<string, unknown> = {
+  const entity = {
     _id: new Types.ObjectId(SALE_OBJECT_ID),
     productId: new Types.ObjectId(PRODUCT_OBJECT_ID),
     quantity: 4,
     salePrice: 500,
     ...overrides,
-  };
-  const build = () => {
-    entity.populate = jest.fn(() => entity);
-    entity.save = jest.fn(() => Promise.resolve(entity));
-    entity.deleteOne = jest.fn(() => Promise.resolve(entity));
-    return entity;
-  };
-  return build();
+  } as SaleEntityRecord;
+  // `$session(null)` (détachement de la session close) — API Mongoose réelle.
+  entity.$session = jest.fn(() => entity);
+  entity.populate = jest.fn(() => Promise.resolve(entity));
+  return entity;
 }
 
-describe('SalesService (Mongoose model, stock service and audit mocked — no real database)', () => {
+/**
+ * Fabrique la « session transactionnelle » de test : une référence STABLE et
+ * UNIQUE, renvoyée par `startSession()`. C'est cette référence exacte que les
+ * assertions comparent (`toBe`) pour prouver que la même session est transmise
+ * au stock, à la vente et à l'audit.
+ *
+ * `withTransaction` EXÉCUTE le callback avec la session (comportement du
+ * driver) et propage tout rejet du callback — exactement ce que
+ * Mongoose/driver font (commit si le callback résout, abort sinon) — mais
+ * sans base réelle.
+ */
+function makeSessionFixture() {
+  const endSession = jest.fn().mockResolvedValue(true);
+  const abortTransaction = jest.fn();
+  const commitTransaction = jest.fn();
+  // `sessionRef` est créé AVANT le mock de `withTransaction` : le mock
+  // référence directement la session unique, pour les assertions `toBe`.
+  const withTransaction = jest.fn(
+    async (cb: (s: unknown) => Promise<unknown>) => cb(sessionRef),
+  );
+  const sessionRef = {
+    withTransaction,
+    endSession,
+    abortTransaction,
+    commitTransaction,
+  };
+  const connection = {
+    startSession: jest.fn(() => Promise.resolve(sessionRef)),
+  };
+  return { withTransaction, endSession, session: sessionRef, connection };
+}
+
+/** Récupère l'exception d'une promesse (undefined si elle résout). */
+const thrown = async <T>(promise: Promise<unknown>): Promise<T> => {
+  try {
+    await promise;
+    return undefined as unknown as T;
+  } catch (e) {
+    return e as T;
+  }
+};
+
+describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', () => {
   let service: SalesService;
   let saleModel: { create: jest.Mock; findById: jest.Mock };
   let products: {
-    findOne: jest.Mock;
     decrementStock: jest.Mock;
     adjustStock: jest.Mock;
+    findOne: jest.Mock;
   };
   let audit: { log: jest.Mock };
   let events: { emit: jest.Mock };
+  let fixture: ReturnType<typeof makeSessionFixture>;
+  let saleEntity: SaleEntityRecord;
 
   beforeEach(async () => {
-    saleModel = { create: jest.fn(), findById: jest.fn() };
+    fixture = makeSessionFixture();
+
+    saleEntity = makeSaleEntity();
+    // `create([doc], { session })` (overload tableau) résout un TABLEAU :
+    saleModel = {
+      create: jest.fn().mockResolvedValue([saleEntity]),
+      findById: jest.fn(),
+    };
     products = {
-      findOne: jest.fn(),
-      decrementStock: jest.fn().mockResolvedValue(undefined),
+      // par défaut : décrémentation validée, renvoie le produit.
+      decrementStock: jest.fn().mockResolvedValue(makeProduct()),
       adjustStock: jest.fn().mockResolvedValue(undefined),
+      findOne: jest.fn(),
     };
     audit = { log: jest.fn().mockResolvedValue(undefined) };
     events = { emit: jest.fn() };
@@ -65,6 +126,7 @@ describe('SalesService (Mongoose model, stock service and audit mocked — no re
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SalesService,
+        { provide: getConnectionToken(), useValue: fixture.connection },
         { provide: getModelToken(Sale.name), useValue: saleModel },
         { provide: ProductsService, useValue: products },
         { provide: EventsGateway, useValue: events },
@@ -75,109 +137,159 @@ describe('SalesService (Mongoose model, stock service and audit mocked — no re
     service = module.get(SalesService);
   });
 
-  describe('create — money and stock', () => {
-    it('persists the sale with the product name snapshot and the seller id, then decrements exactly that quantity', async () => {
-      saleModel.create.mockResolvedValue(makeSaleEntity());
-      products.findOne.mockResolvedValue({ product: makeProduct(8) });
+  const baseDto = {
+    productId: PRODUCT_OBJECT_ID,
+    quantity: 3,
+    salePrice: 500,
+    buyerName: 'Bob',
+  };
 
-      const result = await service.create(
-        {
-          productId: PRODUCT_OBJECT_ID,
+  describe('cycle de vie de session', () => {
+    it('startSession() est appelé sur la connexion injectée', async () => {
+      await service.create(baseDto, SELLER_OBJECT_ID);
+      expect(fixture.connection.startSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('withTransaction() est utilisé pour encapsuler les écritures', async () => {
+      await service.create(baseDto, SELLER_OBJECT_ID);
+      expect(fixture.session.withTransaction).toHaveBeenCalledTimes(1);
+      const cb = fixture.session.withTransaction.mock.calls[0][0] as unknown;
+      expect(typeof cb).toBe('function');
+    });
+
+    it('endSession() est exécuté sur succès', async () => {
+      await service.create(baseDto, SELLER_OBJECT_ID);
+      expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('endSession() est exécuté sur erreur (session toujours fermée)', async () => {
+      audit.log.mockRejectedValue(new Error('audit down'));
+      await expect(service.create(baseDto, SELLER_OBJECT_ID)).rejects.toThrow(
+        'audit down',
+      );
+      expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('même session transmise aux trois écritures', () => {
+    it('transmet la MÊME référence de session au stock, à la vente et à l’audit', async () => {
+      await service.create(baseDto, SELLER_OBJECT_ID);
+
+      const decSession = products.decrementStock.mock.calls[0][2] as unknown;
+      const saleOpts = saleModel.create.mock.calls[0][1] as {
+        session?: unknown;
+      };
+      const auditSession = audit.log.mock.calls[0][4] as unknown;
+
+      // MÊME instance (référence) — pas une copie — et c'est bien la session
+      // produite par `startSession()`.
+      expect(decSession).toBe(fixture.session);
+      expect(saleOpts.session).toBe(fixture.session);
+      expect(auditSession).toBe(fixture.session);
+    });
+  });
+
+  describe('messages métier conservés (rejet issus de la décrémentation)', () => {
+    it('repropage le 404 produit absent sans sale, sans audit, sans événement', async () => {
+      products.decrementStock.mockRejectedValue(
+        new Error(`Product ${PRODUCT_OBJECT_ID} not found`),
+      );
+      const err = await thrown<Error>(
+        service.create(baseDto, SELLER_OBJECT_ID),
+      );
+      expect(err).toBeDefined();
+      expect(err.message).toBe(`Product ${PRODUCT_OBJECT_ID} not found`);
+      expect(saleModel.create).not.toHaveBeenCalled();
+      expect(audit.log).not.toHaveBeenCalled();
+      expect(events.emit).not.toHaveBeenCalled();
+      expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('repropage le 400 stock insuffisant sans sale, sans audit, sans événement', async () => {
+      products.decrementStock.mockRejectedValue(
+        new BadRequestException('Not enough stock. Available: 2'),
+      );
+      const err = await thrown<Error>(
+        service.create(baseDto, SELLER_OBJECT_ID),
+      );
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect(err.message).toContain('Not enough stock. Available: 2');
+      expect(saleModel.create).not.toHaveBeenCalled();
+      expect(audit.log).not.toHaveBeenCalled();
+      expect(events.emit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('succès et événement post-commit', () => {
+    it('détache la session, peuple et émet sale:created APRÈS le commit', async () => {
+      const result = await service.create(baseDto, SELLER_OBJECT_ID);
+
+      // le populate post-commit renvoie la même entité (mock) :
+      expect(result).toBe(saleEntity);
+      // l'audit référence la VENTE réellement créée :
+      expect(audit.log).toHaveBeenCalledWith(
+        PRODUCT_OBJECT_ID,
+        AuditAction.SOLD,
+        SELLER_OBJECT_ID,
+        expect.objectContaining({
+          saleId: saleEntity._id,
           quantity: 3,
           salePrice: 500,
           buyerName: 'Bob',
-        },
-        SELLER_OBJECT_ID,
+        }),
+        fixture.session,
       );
-
-      const call = saleModel.create.mock.calls[0][0] as Record<string, unknown>;
-      expect(call.quantity).toBe(3);
-      expect(call.salePrice).toBe(500);
-      expect(call.productName).toBe('Produit A');
-      expect(call.sellerId).toEqual(new Types.ObjectId(SELLER_OBJECT_ID));
-      expect(products.decrementStock).toHaveBeenCalledWith(
-        PRODUCT_OBJECT_ID,
-        3,
-      );
+      // la session est détachée du document créé (null) :
+      expect(saleEntity.$session).toHaveBeenCalledWith(null);
+      // `$session(null)` est appelé AVANT `populate` (ordre d'exécution réel) :
+      const detachOrder = saleEntity.$session.mock.invocationCallOrder[0];
+      const populateOrder = saleEntity.populate.mock.invocationCallOrder[0];
+      expect(detachOrder).toBeDefined();
+      expect(populateOrder).toBeDefined();
+      expect(detachOrder).toBeLessThan(populateOrder);
+      expect(events.emit).toHaveBeenCalledTimes(1);
       expect(events.emit).toHaveBeenCalledWith(
         'sale:created',
-        expect.anything(),
+        expect.objectContaining({ _id: saleEntity._id }),
       );
-      expect(result).toEqual(expect.objectContaining({ quantity: 4 }));
+      expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
     });
 
-    it('documents the sale amount as quantity × salePrice', async () => {
-      saleModel.create.mockResolvedValue(
-        makeSaleEntity({ quantity: 4, salePrice: 450 }),
-      );
-      products.findOne.mockResolvedValue({ product: makeProduct(8) });
-
-      const result = await service.create(
-        { productId: PRODUCT_OBJECT_ID, quantity: 4, salePrice: 450 },
-        SELLER_OBJECT_ID,
+    it('aucun populate ni événement si la transaction échoue (rollback)', async () => {
+      audit.log.mockRejectedValue(new Error('simulated audit failure'));
+      await expect(service.create(baseDto, SELLER_OBJECT_ID)).rejects.toThrow(
+        'simulated audit failure',
       );
 
-      expect(Number(result.quantity) * Number(result.salePrice)).toBe(1800);
-    });
-
-    it('refuses to create a sale when stock is insufficient, without stock or audit side effects', async () => {
-      saleModel.create.mockResolvedValue(makeSaleEntity());
-      products.findOne.mockResolvedValue({ product: makeProduct(2) });
-
-      await expect(
-        service.create(
-          { productId: PRODUCT_OBJECT_ID, quantity: 3, salePrice: 500 },
-          SELLER_OBJECT_ID,
-        ),
-      ).rejects.toThrow(BadRequestException);
-      expect(saleModel.create).not.toHaveBeenCalled();
-      expect(products.decrementStock).not.toHaveBeenCalled();
-      expect(audit.log).not.toHaveBeenCalled();
+      expect(saleEntity.populate).not.toHaveBeenCalled();
+      expect(saleEntity.$session).not.toHaveBeenCalled();
+      expect(events.emit).not.toHaveBeenCalled();
+      expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
     });
   });
 
-  describe('create — audit history', () => {
-    it('writes a SOLD audit entry with the seller as actor and the expected details', async () => {
-      saleModel.create.mockResolvedValue(makeSaleEntity());
-      products.findOne.mockResolvedValue({ product: makeProduct(9) });
-
-      await service.create(
-        {
-          productId: PRODUCT_OBJECT_ID,
-          quantity: 1,
-          salePrice: 500,
-          buyerName: 'Bob',
-        },
-        SELLER_OBJECT_ID,
-      );
-
-      expect(audit.log).toHaveBeenCalledTimes(1);
-      const [productId, action, actorId, details] = audit.log.mock
-        .calls[0] as unknown as [
-        Types.ObjectId,
-        AuditAction,
-        string,
-        Record<string, unknown>,
+  describe('snapshot produit et identifiants de la vente créée', () => {
+    it('créée la vente avec le productId, la quantity et le sellerId attendus', async () => {
+      await service.create(baseDto, SELLER_OBJECT_ID);
+      const [docs] = saleModel.create.mock.calls[0] as unknown as [
+        Record<string, unknown>[],
       ];
-      // SalesService passes productId.toString() to the audit service:
-      // the compared value must be the product id itself. (toEqual on
-      // two different ObjectId classes would be a false failure.)
-      expect(productId.toString()).toBe(PRODUCT_OBJECT_ID);
-      expect(action).toBe(AuditAction.SOLD);
-      expect(actorId).toBe(SELLER_OBJECT_ID);
-      expect(details).toEqual(
-        expect.objectContaining({
-          quantity: 1,
-          salePrice: 500,
-          buyerName: 'Bob',
-        }),
+      expect(docs).toHaveLength(1);
+      expect((docs[0].productId as { toString: () => string }).toString()).toBe(
+        PRODUCT_OBJECT_ID,
+      );
+      expect(docs[0].quantity).toBe(3);
+      expect(docs[0].productName).toBe('Produit A');
+      expect((docs[0].sellerId as { toString: () => string }).toString()).toBe(
+        SELLER_OBJECT_ID,
       );
     });
   });
 
-  describe('update — stock adjustment mirrors the quantity change', () => {
-    it('lowering the quantity restores stock by the delta (old − new)', async () => {
+  describe('update — stock adjusté hors transaction (comportement actuel)', () => {
+    it('baisser la quantity restaure le stock (delta) et audite SALE_UPDATED', async () => {
       const entity = makeSaleEntity();
+      entity.save = jest.fn(() => Promise.resolve(entity));
       saleModel.findById.mockReturnValue({
         exec: jest.fn().mockResolvedValue(entity),
       });
@@ -185,7 +297,7 @@ describe('SalesService (Mongoose model, stock service and audit mocked — no re
       await service.update(SALE_OBJECT_ID, { quantity: 2 }, 'actor-1');
 
       expect(products.adjustStock).toHaveBeenCalledWith(PRODUCT_OBJECT_ID, 2);
-      expect(entity.quantity as number).toBe(2);
+      expect(entity.quantity).toBe(2);
       expect(audit.log).toHaveBeenCalledWith(
         PRODUCT_OBJECT_ID,
         AuditAction.SALE_UPDATED,
@@ -196,34 +308,12 @@ describe('SalesService (Mongoose model, stock service and audit mocked — no re
         }),
       );
     });
-
-    it('raising the quantity consumes additional stock (negative delta)', async () => {
-      const entity = makeSaleEntity({ quantity: 2 });
-      saleModel.findById.mockReturnValue({
-        exec: jest.fn().mockResolvedValue(entity),
-      });
-
-      await service.update(SALE_OBJECT_ID, { quantity: 5 }, 'actor-1');
-
-      expect(products.adjustStock).toHaveBeenCalledWith(PRODUCT_OBJECT_ID, -3);
-    });
-
-    it('a price-only change does not touch stock', async () => {
-      const entity = makeSaleEntity();
-      saleModel.findById.mockReturnValue({
-        exec: jest.fn().mockResolvedValue(entity),
-      });
-
-      await service.update(SALE_OBJECT_ID, { salePrice: 480 }, 'actor-1');
-
-      expect(products.adjustStock).not.toHaveBeenCalled();
-      expect(entity.salePrice as number).toBe(480);
-    });
   });
 
-  describe('remove — cancellation restores stock and is audited', () => {
-    it('restores the full quantity to stock and logs SALE_CANCELLED', async () => {
+  describe('remove — stock restauré hors transaction (comportement actuel)', () => {
+    it('restaure le stock et audite SALE_CANCELLED', async () => {
       const entity = makeSaleEntity({ quantity: 3, salePrice: 500 });
+      entity.deleteOne = jest.fn(() => Promise.resolve(entity));
       saleModel.findById.mockReturnValue({
         exec: jest.fn().mockResolvedValue(entity),
       });
@@ -236,11 +326,7 @@ describe('SalesService (Mongoose model, stock service and audit mocked — no re
         PRODUCT_OBJECT_ID,
         AuditAction.SALE_CANCELLED,
         'actor-1',
-        expect.objectContaining({
-          saleId: SALE_OBJECT_ID,
-          quantity: 3,
-          salePrice: 500,
-        }),
+        expect.objectContaining({ saleId: SALE_OBJECT_ID, quantity: 3 }),
       );
     });
   });

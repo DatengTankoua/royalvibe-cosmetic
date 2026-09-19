@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import type { Connection } from 'mongoose';
 import { Product, ProductDocument } from './schemas/product.schema';
 import { Sale, SaleDocument } from '../sales/schemas/sale.schema';
 import { CreateProductDto } from './dto/create-product.dto';
@@ -39,6 +40,11 @@ function computeStatus(remaining: number, initial: number): ProductStatus {
   if (remaining / initial <= 0.2) return 'low_stock';
   return 'in_stock';
 }
+
+// Session transactionnelle Mongoose (`mongodb.ClientSession`). Le type est
+// dérivé de `Connection.startSession` car le driver `mongodb` n'est pas
+// résolvable directement depuis ce workspace pnpm.
+type MongooseSession = Awaited<ReturnType<Connection['startSession']>>;
 
 @Injectable()
 export class ProductsService {
@@ -272,19 +278,59 @@ export class ProductsService {
     await product.save();
   }
 
-  /** Called by SalesService to decrement stock */
+  /**
+   * Décrémente le stock de manière ATOMIQUE et conditionnelle.
+   *
+   * Le filtre `remainingQuantity >= quantity` sur la `findOneAndUpdate` garantit
+   * qu'aucune vente ne peut amener un stock négatif, même en concurrence :
+   * deux mises à jour concurrentes sur le dernier article, seule la première
+   * trouve une ligne et la décrémentent, la seconde obtient `modifiedCount = 0`
+   * et provoque le rollback de la transaction appelante.
+   *
+   * Quand une `session` transactionnelle est fournie, la mise à jour ET la
+   * relecture d'erreur sont exécutées dans cette session : le décompte est
+   * validé ou annulé avec le reste de la transaction vente–stock–audit.
+   *
+   * Si aucune ligne n'est modifiée, on relit le produit AVEC la même session
+   * pour distinguer : produit absent/inaccessible → 404 (message actuel),
+   * produit présent mais stock insuffisant → 400 `Not enough stock. Available: N`.
+   */
   async decrementStock(
     productId: string,
     quantity: number,
+    session?: MongooseSession,
   ): Promise<ProductDocument> {
+    const objectId = new Types.ObjectId(productId);
     const product = await this.productModel
-      .findByIdAndUpdate(
-        productId,
+      .findOneAndUpdate(
+        {
+          _id: objectId,
+          deletedAt: null,
+          remainingQuantity: { $gte: quantity },
+        },
         { $inc: { remainingQuantity: -quantity } },
-        { new: true },
+        // `returnDocument: 'after'` = l'ancienne option `new: true` (dépréciée
+        // depuis Mongoose 9) : renvoie le document APRÈS la mise à jour.
+        { returnDocument: 'after', session: session ?? null },
       )
       .exec();
-    if (!product) throw new NotFoundException(`Product ${productId} not found`);
+
+    if (!product) {
+      // Aucune mise à jour n'a correspondu au filtre. Relecture d'un produit
+      // ACTIF (même session) pour distinguer : présent mais stock insuffisant
+      // → 400, absent ou déjà corbeillé → 404.
+      const fresh = await this.productModel
+        .findOne({ _id: objectId, deletedAt: null }, null, {
+          session: session ?? null,
+        })
+        .exec();
+      if (!fresh) {
+        throw new NotFoundException(`Product ${productId} not found`);
+      }
+      throw new BadRequestException(
+        `Not enough stock. Available: ${fresh.remainingQuantity}`,
+      );
+    }
     return product;
   }
 
