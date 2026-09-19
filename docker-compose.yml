@@ -17,12 +17,37 @@ services:
       - "${MONGO_SERVICE_HOST_PORT:-27017}:27017"
     volumes:
       - mongo_data:/data/db
+    # Healthy dès que le listener accepte `ping` EN LOCAL (127.0.0.1) —
+    # fonctionne avant comme après l'initiation de « rs0 » (ping ne requiert
+    # pas la topologie du replica set), sans secret, sans écriture.
+    # C'est cette condition qui protège mongo-rs-init contre l'ECONNREFUSED
+    # de la toute première connexion mongosh (le fichier JS ne court que
+    # QUAND mongosh est déjà connecté).
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --host
+        - "127.0.0.1"
+        - --port
+        - "27017"
+        - --eval
+        - "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"
+      interval: 2s
+      timeout: 5s
+      retries: 45
+      start_period: 5s
 
   mongo-rs-init:
     image: mongo:7
     restart: "no"
+    # Démarrage uniquement une fois Mongo HEALTHY (listener opérationnel) :
+    # corrige l'ECONNREFUSED observé lors de la première activation, où
+    # mongosh devait se connecter avant d'exécuter le script.
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
     # Ponctuel et idempotent : détecte le replica set existant et n'initiate()
     # que s'il est absent ; exit 0 si déjà opérationnel, exit 1 en cas de
     # échec (le conteneur reste Exited (1) et ne redémarre pas).

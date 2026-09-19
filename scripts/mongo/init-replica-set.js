@@ -2,8 +2,15 @@
 //
 // Exécuté par le service Compose « mono-shot » mongo-rs-init (image mongo:7,
 // mongosh) contre l'instance de DEV locale. Comportement garanti :
-//   1. le nœud MongoDB n'accepte pas encore les connexions → on attend (erreur
-//      réseau transitoire tolérée) jusqu'à une limite de temps bornée ;
+//   0. la CONNEXION INITIALE (mongosh connecte l'hôte AVANT d'exécuter ce
+//      script : un refus ne serait jamais intercepté par ce code) est
+//      protégée par le healthcheck du service mongo dans docker-compose.yml
+//      — mongo-rs-init a depends_on mongo avec condition: service_healthy.
+//      Sans cette garde, la première exécution sortait en ECONNREFUSED
+//      avant que le script ne soit chargé (incident de première activation).
+//   1. APRÈS le démarrage de mongosh, une erreur transitoire de db.hello()
+//      (oscillation de réplication, micro-indisponibilité) → on attend
+//      jusqu'à une limite de temps bornée ;
 //   2. la replica set est déjà configurée → on attend son état PRIMARY puis
 //      on exit 0, SANS jamais ré-initier (aucun risque de réinitialisation) ;
 //   3. la replica set n'est PAS encore configurée (volume vierge au premier
@@ -31,8 +38,11 @@ function fail(message) {
 
 const deadline = Date.now() + TIMEOUT_MS;
 
-// 1. Attente de connexion : mongod (surtout en --replSet) met quelques
-//    secondes à ouvrir son listener après le démarrage du conteneur.
+// 1. Re-lecture transitoire : mongosh est JÀ connecté lors de l'exécution de
+//    ce script (la toute première connexion de mongosh est protégée par le
+//    healthcheck de docker-compose.yml, depends_on: service_healthy).
+//    db.hello() peut néanmoins échouer de manière transitoire après coup
+//    (oscillation de réplication) : on re-sonde jusqu'au délai.
 let hello;
 for (;;) {
   try {

@@ -25,7 +25,17 @@ périmètre et n'ont subi aucune modification.
   (`-p heyama_phase0b7c_smoke`) sans collision ;
 - nouveau service **`mongo-rs-init`** : exécution ponctuelle et idempotente du
   script `scripts/mongo/init-replica-set.js` (bind mount lecture seule,
-  `restart: "no"`), `depends_on: mongo`.
+  `restart: "no"`).
+- **healthcheck du service `mongo`** : `mongosh --quiet --host 127.0.0.1 --port
+  27017 --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"`
+  (interval 2 s, timeout 5 s, retries 45, start_period 5 s). Healthy dès que le
+  listener accepte `ping` — **avant comme après** l'initiation de `rs0`, sans
+  écriture, sans secret.
+- **`mongo-rs-init` conditionné par** `depends_on: mongo` avec
+  `condition: service_healthy` : l'ECONNREFUSED de la première connexion
+  mongosh est impossible (le script n'est exécuté qu'après connexion
+  réussie). Ordre garanti : `mongo` démarre → healthy → `mongo-rs-init`
+  `Exited (0)` → `mongo-express`.
 - **`mongo-express`** : `ME_CONFIG_MONGODB_URL: mongodb://mongo:27017/?replicaSet=rs0`
   (même réseau Docker, résout `mongo` ; plus de `directConnection`) ;
   `depends_on: mongo-rs-init` avec
@@ -46,6 +56,25 @@ périmètre et n'ont subi aucune modification.
 Le membre est déclaré sous l'alias Docker `mongo:27017` (réseau du projet,
 stable au redémarrage). Redémarrer la stack ne réinitialise ni ne supprime les
 données : la configuration persiste dans le volume `mongo_data`.
+
+**Connexion initiale.** `mongosh <uri> script.js` se connecte à l'hôte AVANT
+d'exécuter le JavaScript : une indisponibilité survenant à ce stade échappe au
+script. La boucle JavaScript ne gère donc QUE les erreurs transitoires de
+`db.hello()` après le démarrage de mongosh — la **connexion initiale est
+protégée par le healthcheck Compose** (`depends_on: mongo` avec
+`condition: service_healthy`).
+
+## Incident de première activation (non masqué)
+Lors de la conversion du volume réel, la **1re exécution** de `mongo-rs-init`
+a échoué en `Exited (1)` avec `ECONNREFUSED` : mongod — recréé en `--replSet`
+sur le volume existant — n'avait pas encore rouvert son listener quand mongosh
+a cherché à se connecter **avant** de charger le script (le healthcheck
+n'existait pas encore). Les données du volume restaient intactes (mongod
+`Up`, données relues en 75 documents). Une **relance manuelle** de
+`mongo-rs-init` a permis de valider la conversion. La cause racine (pas de
+garde côté Compose) a été corrigée par l'ajout du healthcheck + la condition
+`service_healthy` : **un démarrage ne doit plus jamais exiger de relance
+manuelle**.
 
 ## URI locales
 - **API sur l'hôte Windows** (`api/.env.example`, à recopier dans `api/.env`) :
@@ -68,6 +97,16 @@ Aucune URI Atlas dans Git ; `.env.prod` et `docker-compose.prod.yml` intacts.
   document **absent** après rollback (`countAfterAbort=0`) ;
 - **2e exécution de l'initialiseur** : « déjà configurée — rien à faire »,
   `exit 0` ;
+- **test de race condition après le correctif 0B.7C (volume réel converti,
+  unique recréation `up -d --force-recreate mongo mongo-rs-init
+  mongo-express`)** :
+  `mongo` → **healthy** (healthcheck `ping` local) → `mongo-rs-init`
+  **`Exited (0)` à sa 1re et seule exécution** (logs : « `rs0` déjà
+  configurée — rien à faire » → « `isWritablePrimary=true` — exit 0 »,
+  **aucun `ECONNREFUSED`**, ~0,7 s d'exécution) → `mongo-express` démarré,
+  HTTP **200**, sans erreur MongoDB ; `db.hello()` : `setName=rs0`,
+  `isWritablePrimary=true` ; volume inchangé ; comptes exacts 75 documents /
+  6 collections. **Aucune relance manuelle n'a été nécessaire.**
 - **validation Mongo Express** (projet temporaire `heyama_phase0b7c_me_smoke`,
   port hôte `8082`/`mongod` sur `27018`) : ordre observé
   `mongo` → `mongo-rs-init` **`Exited (0)`** → `mongo-express` démarré
