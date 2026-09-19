@@ -38,6 +38,29 @@ export const LOCAL_DEV_ORIGINS: readonly string[] = Object.freeze([
 export class OriginConfigError extends Error {}
 
 /**
+ * Méthodes autorisées du CORS HTTP (phase 0B.4) — minimum exigé :
+ * GET, POST, PUT, PATCH, DELETE + OPTIONS (préflight).
+ */
+export const HTTP_CORS_METHODS: readonly string[] = Object.freeze([
+  'GET',
+  'POST',
+  'PUT',
+  'PATCH',
+  'DELETE',
+  'OPTIONS',
+]);
+
+/**
+ * En-têtes autorisés du CORS HTTP (phase 0B.4) — minimum exigé :
+ * `Content-Type` + `Authorization` (auth Bearer ; les en-têtes non
+ * simples sont signalés via le préflight).
+ */
+export const HTTP_CORS_ALLOWED_HEADERS: readonly string[] = Object.freeze([
+  'Content-Type',
+  'Authorization',
+]);
+
+/**
  * Résultat d'un contrôle d'origine : `allowed === true` ⇒ l'origine est
  * STRICTEMENT dans l'allowlist.
  */
@@ -167,5 +190,34 @@ export function buildOriginAllowlist(
         cb(null, undefined);
       }
     },
+  };
+}
+
+/**
+ * Factory des options CORS HTTP striktes (phase 0B.4) — factory UNIQUE
+ * partagée par `main.ts` et les E2E : les deux ne peuvent donc plus
+ * diverger. `requestOrigin` = valeur de l'en-tête `Origin`
+ * (null/undefined si absent) :
+ * - origine autorisée → `cb(null, true)` : le package `cors` réfléchit
+ *   l'ORIGINE EXACTE en `Access-Control-Allow-Origin` (égalité stricte) ;
+ * - origine absente / inconnue → `cb(null, false)` : la requête CONTINUE
+ *   SANS en-tête CORS et SANS 500 (`undefined` serait falsy et déclencherait
+ *   une 500 dans cors@2.8.6 — `if (err2 || !origin) next(err2)`).
+ * Jamais `credentials` (auth Bearer, pas cookie) ; méthodes/headers
+ * explicites (jamais réfléchis).
+ */
+export function buildHttpCorsOptions(allowlist: OriginAllowlist): {
+  origin: (
+    requestOrigin: string | undefined,
+    callback: (err: Error | null, origin?: boolean) => void,
+  ) => void;
+  methods: readonly string[];
+  allowedHeaders: readonly string[];
+} {
+  return {
+    origin: (requestOrigin, callback) =>
+      callback(null, allowlist.isAllowed(requestOrigin ?? null)),
+    methods: HTTP_CORS_METHODS,
+    allowedHeaders: HTTP_CORS_ALLOWED_HEADERS,
   };
 }

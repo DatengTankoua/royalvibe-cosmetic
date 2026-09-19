@@ -14,6 +14,12 @@ import {
   stopEphemeralMongoSafe,
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
+import {
+  OriginConfigError,
+  buildHttpCorsOptions,
+  buildOriginAllowlist,
+  parseCORSOrigin,
+} from './../src/events/origin.helpers';
 
 /**
  * E2E (phase 0B.2) — application NestJS complète sur MongoDB éphémère.
@@ -45,6 +51,9 @@ const ADMIN_EMAIL = 'admin-e2e@royalvibe.test';
 const SELLER_EMAIL = 'seller-e2e@royalvibe.test';
 const ISO_EMAIL = 'isolation-e2e@royalvibe.test';
 const EXISTING_SALE_ID_MISSING = '112233445566778899001122';
+// Origine E2E autorisée (pas le fallback dev : le test doit prouver que la
+// valeur parsée est bien celle servie en Access-Control-Allow-Origin).
+const E2E_CORS_ORIGIN = 'https://e2e.example.com';
 
 // Normalise le corps d'erreur (string ou string[]) pour des asserts lisibles.
 // Le body de supertest est lâchement typé (any) : accepter `unknown` évite
@@ -76,13 +85,22 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       process.env.S3_SECRET_KEY = 'e2e-local';
       process.env.S3_BUCKET = 'e2e-local';
       process.env.S3_FORCE_PATH_STYLE = 'true';
+      // CORS strict (0B.4) : valeur parsée UNE FOIS par le parser strict de
+      // 0B.3 — jamais de repli ouvert (`?? true`), comme dans main.ts.
+      process.env.CORS_ORIGIN = E2E_CORS_ORIGIN;
 
       moduleFixture = await Test.createTestingModule({
         imports: [AppModule],
       }).compile();
       app = moduleFixture.createNestApplication();
-      // Reproduction volontaire des middlewares globaux de main.ts
-      // (CORS exclu : non pertinent E2E et hors périmètre 0B.2).
+      // MÊME factory que main.ts (0B.4) : buildHttpCorsOptions — les E2E
+      // prouvent donc le comportement EXACT de la production (origine
+      // autorisée => écho exact ; absente/inconnue => SANS en-tête CORS et
+      // SANS 500 ; méthodes/headers explicites ; pas de credentials).
+      const corsAllowlist = buildOriginAllowlist(
+        parseCORSOrigin(process.env.CORS_ORIGIN, 'development'),
+      );
+      app.enableCors(buildHttpCorsOptions(corsAllowlist));
       app.useGlobalPipes(
         new ValidationPipe({
           whitelist: true,
@@ -273,6 +291,76 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       const productCount = await db.collection('products').countDocuments();
       expect(userCount).toBeGreaterThanOrEqual(3);
       expect(productCount).toBe(0);
+    });
+  });
+
+  describe('6. CORS HTTP strict (0B.4)', () => {
+    // Le middleware CORS est reproduit AVANT app.init() comme dans main.ts :
+    // cors@2.8.6, cb(null, true) => écho exacte de l'Origin demandée ;
+    // cb(null, false/undefined) => la requête CONTINUE, SANS en-tête CORS —
+    // jamais une 500 (exigence « origine refusée ≠ 500 »).
+
+    it('une origine autorisée reçoit exactement SON Access-Control-Allow-Origin (pas *)', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/health')
+        .set('Origin', E2E_CORS_ORIGIN);
+      expect(res.status).toBe(200);
+      const acao = res.headers['access-control-allow-origin'];
+      expect(acao).toBe(E2E_CORS_ORIGIN);
+    });
+
+    it('une origine inconnue n’obtient AUCUN en-tête CORS et la requête passe (pas de 500)', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/health')
+        .set('Origin', 'https://attacker.example.com');
+      expect(res.status).toBe(200);
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
+      expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+    });
+
+    it('une requête SANS en-tête Origin reste autorisée (outils serveur, apps natives)', async () => {
+      const res = await request(app.getHttpServer()).get('/health');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ status: 'ok' });
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
+    });
+
+    it('le preflight OPTIONS renvoie 204 avec les méthodes/headers autorisés et SANS credentials', async () => {
+      const res = await request(app.getHttpServer())
+        .options('/analytics/overview')
+        .set('Origin', E2E_CORS_ORIGIN)
+        .set('Access-Control-Request-Method', 'POST')
+        .set('Access-Control-Request-Headers', 'authorization, content-type');
+      expect(res.status).toBe(204);
+      const acao = res.headers['access-control-allow-origin'];
+      expect(acao).toBe(E2E_CORS_ORIGIN);
+      const allowMethods = res.headers['access-control-allow-methods'];
+      expect(allowMethods.split(',').map((m) => m.trim())).toEqual([
+        'GET',
+        'POST',
+        'PUT',
+        'PATCH',
+        'DELETE',
+        'OPTIONS',
+      ]);
+      const allowHeaders = res.headers['access-control-allow-headers'];
+      expect(allowHeaders.toLowerCase()).toContain('content-type');
+      expect(allowHeaders.toLowerCase()).toContain('authorization');
+      expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+    });
+
+    it('en production sans CORS_ORIGIN, la garantie de lancement bloque le démarrage (OriginConfigError)', () => {
+      // main.ts appelle parseCORSOrigin(process.env.CORS_ORIGIN,
+      // 'production') avant NestFactory.create : l'exception interrompt
+      // bootstrap, l'API ne démarre PAS (exigence n°1). La matrice
+      // complète du parser est couverte par origin.helpers.spec.ts —
+      // ici seule la garantie d'amorçage est prouvée.
+      expect(() => parseCORSOrigin(undefined, 'production')).toThrow(
+        OriginConfigError,
+      );
+      expect(() => parseCORSOrigin('   ', 'production')).toThrow(
+        OriginConfigError,
+      );
     });
   });
 });
