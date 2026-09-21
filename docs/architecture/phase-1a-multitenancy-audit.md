@@ -82,7 +82,7 @@ Rôles existants : `UserRole = { ADMIN:'admin', SELLER:'seller' }` (`api/src/use
 | `slug` | string unique | Identifiant stable ; 1ʳᵉ org : `royalvibe` (VALIDÉ D6). |
 | `logoKey` | string\|null | Clé de stockage du logo (contrainte 9) ; `null` = logo par défaut. |
 | `brandColor` | string (hex) | **Une seule couleur au départ** (VALIDÉ D7) ; palette = évolution future reportée. |
-| `currency` | enum (`XOF`,`EUR`,…) | **Par organisation, `XOF` par défaut** (VALIDÉ D6) — multi-pays/devises (contrainte 11). |
+| `currency` | enum (`XAF`,`EUR`,…) | **Par organisation, `XAF` par défaut** (VALIDÉ D6) — multi-pays/devises (contrainte 11). |
 | `status` | enum (`active`,`suspended`) | Suspendue sans suppression. |
 | `createdAt`/`updatedAt` | Date | timestamps. |
 
@@ -204,7 +204,7 @@ Le champ `active` de la membership (et tout `activeOrganizationId`) est **rejet�
 
 ## 5. Migration de RoyalVibe
 
-**Principe** : RoyalVibe **devient la première organisation** (VALIDÉ D6 : `RoyalVibe`, slug `royalvibe`, devise `XOF`) ; son **propriétaire est le compte existant `franck@royalvibe.com`** (VALIDÉ). L'identité du propriétaire n'était bloquante que pour cette migration (1-2), **pas** pour les schémas 1-1A. Migration **idempotente** ; aucun script n'est créé/exécuté dans cette phase (plan seul).
+**Principe** : RoyalVibe **devient la première organisation** (VALIDÉ D6 : `RoyalVibe`, slug `royalvibe`, devise `XAF`) ; son **propriétaire est le compte existant `franck@royalvibe.com`** (VALIDÉ). L'identité du propriétaire n'était bloquante que pour cette migration (1-2), **pas** pour les schémas 1-1A. Migration **idempotente** ; aucun script n'est créé/exécuté dans cette phase (plan seul).
 
 **Gel des écritures (VALIDÉ — NON optionnel)** : les écritures sont **bloquées** pendant le backfill et le basculement. Deux stratégies :
 - **(a) Fenêtre de maintenance** — écritures bloquées pendant toute l'opération. **RECO pour la première migration** : plus simple et plus sûre pour le volume actuel ;
@@ -217,7 +217,7 @@ Le champ `active` de la membership (et tout `activeOrganizationId`) est **rejet�
 | 1 | **Snapshot Atlas** de la base de production | préalable obligatoire |
 | 2 | **Inventaire des objets Supabase Storage** (clés existantes) | préalable obligatoire |
 | 3 | **Activation de la maintenance** (écritures bloquées) | stratégie (a) VALIDÉ RECO |
-| 4 | **Création de l'organisation `RoyalVibe`** (`slug:'royalvibe'`, `currency:'XOF'`, `brandColor:'#b8960c'`) | upsert sur `slug` (pas de doublon) |
+| 4 | **Création de l'organisation `RoyalVibe`** (`slug:'royalvibe'`, `currency:'XAF'`, `brandColor:'#b8960c'`) | upsert sur `slug` (pas de doublon) |
 | 5 | **Création de la membership `owner`** pour `franck@royalvibe.com` (`status:'active'`) | upsert unique `{organizationId,userId}` |
 | 6 | **Création des autres memberships** (users existants → `seller`/`admin`, `active`) | upsert idempotent |
 | 7 | **Backfill des `organizationId`** sur `sections`, `products`, `sales`, `auditlogs` (`{organizationId:{$exists:false}}` → org) | rejouable ; dry-run préalable **sur le snapshot** (étape 3′ : compteurs par collection avant maintenance) |
@@ -382,7 +382,7 @@ Le système de permissions doit **également protéger les routes d'organisation
 | **D3** | Un vendeur voit **ses propres ventes par défaut** ; **`sales.view_own` / `sales.view_all` séparés** ; **`sales.view_all` délégable** | §3, phase 1-7 |
 | **D4** | **Pas de retrait de `objects`** pendant la création des modèles : code actuel conservé ; phase de nettoyage **séparée, non prioritaire (1-10)** **après** vérification de la collection de production ; **aucune suppression de collection automatique** | §1.1, 1-1A (inchangée), 7.12 |
 | **D5** | **Bucket Supabase Storage partagé** avec préfixe `organizations/{organizationId}/` (séparation logique uniquement si bucket public ; privé + URLs signées pour les fichiers confidentiels) | §1.4, §4 (vecteur 5), 1-5 |
-| **D6** | **Devise par organisation, `XOF` par défaut** ; 1ʳᵉ organisation **`RoyalVibe`**, slug **`royalvibe`** | §2.2, §5 |
+| **D6** | **Devise par organisation, `XAF` par défaut** ; 1ʳᵉ organisation **`RoyalVibe`**, slug **`royalvibe`** | §2.2, §5 |
 | **D7** | **Une seule `brandColor`** au départ (palette = évolution future) | §2.2 (reporté) |
 | **D8** | **`branding.manage` : permission délégable**, non réservée au propriétaire | §3, 1-8 |
 | **D9** | **Production actuelle** : API NestJS sur **Railway**, frontend sur **Vercel**, **MongoDB Atlas**, fichiers sur **Supabase Storage** ; `docker-compose.prod.yml` = **ancien/secondaire**, **pas de cible de migration Atlas** | §5 (snapshot/inventaire sur Atlas & Supabase), 1-2 (staging = snapshot Atlas) |
