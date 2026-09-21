@@ -13,6 +13,7 @@ import { SalesModule } from './sales/sales.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { AuditModule } from './audit/audit.module';
 import { TrashModule } from './trash/trash.module';
+import { OrganizationsModule } from './organizations/organizations.module';
 
 @Module({
   imports: [
@@ -34,6 +35,8 @@ import { TrashModule } from './trash/trash.module';
     AuditModule,
     AnalyticsModule,
     TrashModule,
+    // 1-1A : modèles multi-tenant (Organization + Membership), données seules.
+    OrganizationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
