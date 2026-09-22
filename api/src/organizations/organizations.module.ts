@@ -8,16 +8,8 @@ import {
   OrganizationMembership,
   OrganizationMembershipSchema,
 } from './schemas/membership.schema';
+import { OrganizationsService } from './organizations.service';
 
-/**
- * Phase 1-1A — socle de données multi-tenant.
- *
- * Le module enregistre UNIQUEMENT les modèles `Organization` et
- * `OrganizationMembership` (aucun controller, aucun service, aucune API
- * métier : endpoints et services arrivent en 1-3A+). Aucun champ
- * `organizationId` n'est ajouté aux ressources métier ici (phase 1-1B)
- * et aucun schéma `OrganizationInvitation` n'existe (phase 1-6).
- */
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -28,5 +20,7 @@ import {
       },
     ]),
   ],
+  providers: [OrganizationsService],
+  exports: [OrganizationsService],
 })
 export class OrganizationsModule {}
