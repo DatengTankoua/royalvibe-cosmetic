@@ -181,3 +181,380 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     expect(options.session).toBeNull();
   });
 });
+
+/**
+ * Chemin catalogue HTTP (1-4B) — `organizationId` obligatoire, tenant dans
+ * CHAQUE filtre, section validée dans la même org, $set strict, S3 jamais
+ * touché pour un produit étranger. Les chemins transactionnels
+ * `decrementStock`/`adjustStock` (1-4C) ne sont PAS testés ici.
+ */
+describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
+  let service: ProductsService;
+  let productModel: {
+    create: jest.Mock;
+    find: jest.Mock;
+    findOne: jest.Mock;
+    findOneAndUpdate: jest.Mock;
+    findOneAndDelete: jest.Mock;
+  };
+  let sectionModel: { findOne: jest.Mock; countDocuments: jest.Mock };
+  let saleModel: { find: jest.Mock };
+  let s3Service: { deleteFile: jest.Mock; uploadFile: jest.Mock };
+  let auditService: { log: jest.Mock; findByProduct: jest.Mock };
+  let eventsGateway: { emit: jest.Mock };
+  let findChain: { sort: jest.Mock; exec: jest.Mock };
+  let updateChain: { exec: jest.Mock };
+  let deleteChain: { exec: jest.Mock };
+  let saleChain: { populate: jest.Mock; sort: jest.Mock; exec: jest.Mock };
+  // Chaînes `findOne(...).exec()` / `countDocuments(...).exec()` (même
+  // pattern que le bloc 0B.7B) : `await Model.findOne()` est une Query
+  // thenable, mais l'idiome du service est explicite sur `.exec()`.
+  let productOneChain: { exec: jest.Mock };
+  let sectionOneChain: { exec: jest.Mock };
+  let countChain: { exec: jest.Mock };
+
+  const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const ORG_B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+  const SECTION_ID = '112233445566778899001122';
+  const FOREIGN_SECTION_ID = 'cccccccccccccccccccccccc';
+  const PRODUCT_ID = '223344556677889900112233';
+
+  const DTO = {
+    sectionId: SECTION_ID,
+    name: 'Prod',
+    purchasePrice: 5,
+    salePrice: 10,
+    initialQuantity: 7,
+  };
+
+  function sectionDoc(org: string = ORG_A) {
+    return {
+      _id: new Types.ObjectId(SECTION_ID),
+      name: 'Sec',
+      deletedAt: null,
+      organizationId: new Types.ObjectId(org),
+    };
+  }
+
+  function productDoc(overrides: Record<string, unknown> = {}) {
+    const doc: Record<string, unknown> = {
+      _id: new Types.ObjectId(PRODUCT_ID),
+      sectionId: new Types.ObjectId(SECTION_ID),
+      name: 'Prod',
+      imageUrl: 'http://s3-e2e/p.png',
+      purchasePrice: 5,
+      salePrice: 10,
+      initialQuantity: 10,
+      remainingQuantity: 10,
+      deletedAt: null,
+      organizationId: new Types.ObjectId(ORG_A),
+      save: jest.fn(),
+      ...overrides,
+    };
+    // Mongoose `save()` renvoie le document hydraté : le mock le mime.
+    (doc.save as jest.Mock).mockResolvedValue(doc);
+    return doc;
+  }
+
+  async function build() {
+    findChain = { sort: jest.fn(), exec: jest.fn() };
+    findChain.sort.mockReturnValue(findChain);
+    updateChain = { exec: jest.fn() };
+    deleteChain = { exec: jest.fn() };
+    productOneChain = { exec: jest.fn() };
+    sectionOneChain = { exec: jest.fn() };
+    countChain = { exec: jest.fn() };
+    saleChain = { populate: jest.fn(), sort: jest.fn(), exec: jest.fn() };
+    saleChain.populate.mockReturnValue(saleChain);
+    saleChain.sort.mockReturnValue(saleChain);
+    saleChain.exec.mockResolvedValue([]);
+    productModel = {
+      create: jest.fn(),
+      find: jest.fn(() => findChain),
+      findOne: jest.fn(() => productOneChain),
+      findOneAndUpdate: jest.fn(() => updateChain),
+      findOneAndDelete: jest.fn(() => deleteChain),
+    };
+    sectionModel = {
+      findOne: jest.fn(() => sectionOneChain),
+      countDocuments: jest.fn(() => countChain),
+    };
+    saleModel = { find: jest.fn(() => saleChain) };
+    s3Service = { deleteFile: jest.fn(), uploadFile: jest.fn() };
+    auditService = { log: jest.fn(), findByProduct: jest.fn() };
+    auditService.findByProduct.mockResolvedValue([]);
+    eventsGateway = { emit: jest.fn() };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: getModelToken(Product.name), useValue: productModel },
+        { provide: getModelToken(Sale.name), useValue: saleModel },
+        { provide: getModelToken(Section.name), useValue: sectionModel },
+        { provide: S3Service, useValue: s3Service },
+        { provide: EventsGateway, useValue: eventsGateway },
+        { provide: AuditService, useValue: auditService },
+      ],
+    }).compile();
+    service = module.get(ProductsService);
+  }
+
+  // ---- create ----
+
+  it('create : écrit l’organisation SERVEUR (falsification runtime ignorée), section validée tenant, sous-sections filtrées, unicité tenant', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null); // unicité : absent
+    sectionOneChain.exec.mockResolvedValue(sectionDoc()); // section A active
+    countChain.exec.mockResolvedValue(0); // pas de sous-section
+    productModel.create.mockResolvedValue(productDoc());
+
+    // org d'origine runtime fournie (le DTO whitelisté ne peut pas la porter,
+    // mais le service ne doit PAS non plus copier un tel champ) :
+    const dto = { ...DTO, organizationId: ORG_B };
+    await service.create(ORG_A, dto, 'http://s3/x.png', 'actor');
+
+    const written = productModel.create.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect(String(written.organizationId)).toBe(ORG_A); // jamais B
+    expect(String(written.imageUrl)).toBe('http://s3/x.png');
+
+    // section validée par filtre composite tenant :
+    expect(sectionModel.findOne).toHaveBeenCalledWith({
+      _id: new Types.ObjectId(SECTION_ID),
+      organizationId: new Types.ObjectId(ORG_A),
+      deletedAt: null,
+    });
+    // recherches de sous-sections filtrées par tenant :
+    expect(sectionModel.countDocuments).toHaveBeenCalledWith({
+      organizationId: new Types.ObjectId(ORG_A),
+      parentId: new Types.ObjectId(SECTION_ID),
+      deletedAt: null,
+    });
+    // unicité de nom filtrée par tenant :
+    expect(productModel.findOne).toHaveBeenCalledWith({
+      name: expect.any(RegExp),
+      organizationId: new Types.ObjectId(ORG_A),
+    });
+  });
+
+  it('create : section étrangère/absente → 404 `Section`, aucune création, pas de sous-section check', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+    sectionOneChain.exec.mockResolvedValue(null); // pas dans A (étrangère)
+    countChain.exec.mockResolvedValue(99);
+
+    const err = await service
+      .create(ORG_A, DTO, 'http://s3/x.png', 'actor')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect((err as Error).message).toBe(`Section ${SECTION_ID} not found`);
+    expect(sectionModel.countDocuments).not.toHaveBeenCalled();
+    expect(productModel.create).not.toHaveBeenCalled();
+    expect(auditService.log).not.toHaveBeenCalled();
+  });
+
+  it('create : sous-sections actives dans l’org → 400 SECTION_HAS_SUBSECTIONS (filtre tenant prouvé)', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+    sectionOneChain.exec.mockResolvedValue(sectionDoc());
+    countChain.exec.mockResolvedValue(3);
+
+    const err = await service
+      .create(ORG_A, DTO, 'http://s3/x.png', 'actor')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect((err as Error).message).toBe('SECTION_HAS_SUBSECTIONS');
+    expect(sectionModel.countDocuments).toHaveBeenCalledWith({
+      organizationId: new Types.ObjectId(ORG_A),
+      parentId: new Types.ObjectId(SECTION_ID),
+      deletedAt: null,
+    });
+    expect(productModel.create).not.toHaveBeenCalled();
+  });
+
+  // ---- findAll / findTrashed ----
+
+  it('findAll : filtre EXACT {organizationId, deletedAt, [sectionId]} (+ tri inchangé)', async () => {
+    await build();
+    findChain.exec.mockResolvedValue([]);
+
+    await service.findAll(ORG_A);
+    expect(productModel.find).toHaveBeenNthCalledWith(1, {
+      organizationId: new Types.ObjectId(ORG_A),
+      deletedAt: null,
+    });
+
+    await service.findAll(ORG_A, SECTION_ID);
+    expect(productModel.find).toHaveBeenNthCalledWith(2, {
+      organizationId: new Types.ObjectId(ORG_A),
+      deletedAt: null,
+      sectionId: new Types.ObjectId(SECTION_ID),
+    });
+    expect(findChain.sort).toHaveBeenCalledWith({ createdAt: -1 });
+  });
+
+  it('findTrashed : filtre EXACT {organizationId, deletedAt:{$ne:null}}', async () => {
+    await build();
+    findChain.exec.mockResolvedValue([]);
+
+    await service.findTrashed(ORG_A);
+
+    expect(productModel.find).toHaveBeenCalledWith({
+      organizationId: new Types.ObjectId(ORG_A),
+      deletedAt: { $ne: null },
+    });
+    expect(findChain.sort).toHaveBeenCalledWith({ deletedAt: -1 });
+  });
+
+  // ---- findOne ----
+
+  it('findOne : filtre composite {_id, organizationId} puis sales/audit', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+
+    const res = await service.findOne(ORG_A, PRODUCT_ID);
+
+    expect(productModel.findOne).toHaveBeenCalledWith({
+      _id: PRODUCT_ID,
+      organizationId: new Types.ObjectId(ORG_A),
+    });
+    expect(res.product.name).toBe('Prod');
+    expect(saleModel.find).toHaveBeenCalledTimes(1);
+    expect(auditService.findByProduct).toHaveBeenCalledWith(PRODUCT_ID);
+  });
+
+  it('findOne : produit invisible dans l’org → 404 comme l’absent (sales/audit non lus)', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+
+    const err = await service
+      .findOne(ORG_A, PRODUCT_ID)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect((err as Error).message).toBe(`Product ${PRODUCT_ID} not found`);
+    expect(saleModel.find).not.toHaveBeenCalled();
+    expect(auditService.findByProduct).not.toHaveBeenCalled();
+  });
+
+  // ---- update ----
+
+  it('update : relecture composite tenant, nom modifié, organisation jamais altérée, save unique', async () => {
+    await build();
+    const doc = productDoc();
+    productOneChain.exec.mockResolvedValue(doc);
+
+    const res = await service.update(
+      ORG_A,
+      PRODUCT_ID,
+      { name: 'Nouveau' },
+      'actor',
+    );
+
+    expect(productModel.findOne).toHaveBeenCalledWith({
+      _id: PRODUCT_ID,
+      organizationId: new Types.ObjectId(ORG_A),
+    });
+    expect(doc.save).toHaveBeenCalledTimes(1);
+    expect(doc.name).toBe('Nouveau');
+    expect(doc.organizationId).toEqual(new Types.ObjectId(ORG_A)); // inchangée
+    expect(auditService.log).toHaveBeenCalled();
+    expect(res.product.name).toBe('Nouveau');
+  });
+
+  it('update : mouvement vers une section étrangère → 404 `Section`, rien sauvegardé', async () => {
+    await build();
+    const doc = productDoc();
+    productOneChain.exec.mockResolvedValue(doc);
+    sectionOneChain.exec.mockResolvedValue(null); // section cible non dans A
+
+    const err = await service
+      .update(ORG_A, PRODUCT_ID, { sectionId: FOREIGN_SECTION_ID }, 'actor')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect((err as Error).message).toBe(
+      `Section ${FOREIGN_SECTION_ID} not found`,
+    );
+    expect(sectionModel.findOne).toHaveBeenCalledWith({
+      _id: new Types.ObjectId(FOREIGN_SECTION_ID),
+      organizationId: new Types.ObjectId(ORG_A),
+      deletedAt: null,
+    });
+    expect(doc.save).not.toHaveBeenCalled();
+  });
+
+  it('update : produit invisible → 404, aucune écriture', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+
+    const err = await service
+      .update(ORG_A, PRODUCT_ID, { name: 'X' }, 'actor')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+  });
+
+  // ---- remove / restore / permanentDelete ----
+
+  it('remove : filtre {_id, organizationId} + $set deletedAt ; invisible → 404', async () => {
+    await build();
+    updateChain.exec.mockResolvedValue(productDoc());
+    await service.remove(ORG_A, PRODUCT_ID, 'actor');
+    expect(productModel.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: PRODUCT_ID, organizationId: new Types.ObjectId(ORG_A) },
+      { $set: { deletedAt: expect.any(Date) } },
+      { returnDocument: 'after' },
+    );
+
+    updateChain.exec.mockResolvedValue(null);
+    const err = await service
+      .remove(ORG_A, PRODUCT_ID, 'actor')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+  });
+
+  it('restore : MÊME filtre + $set deletedAt:null ; invisible → 404', async () => {
+    await build();
+    updateChain.exec.mockResolvedValue(productDoc());
+    await service.restore(ORG_A, PRODUCT_ID);
+    expect(productModel.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: PRODUCT_ID, organizationId: new Types.ObjectId(ORG_A) },
+      { $set: { deletedAt: null } },
+      { returnDocument: 'after' },
+    );
+
+    updateChain.exec.mockResolvedValue(null);
+    const err = await service
+      .restore(ORG_A, PRODUCT_ID)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+  });
+
+  it('permanentDelete : S3 deleteFile puis purge {_id, organizationId} UNIQUEMENT', async () => {
+    await build();
+    const doc = productDoc();
+    productOneChain.exec.mockResolvedValue(doc); // porte imageUrl
+    deleteChain.exec.mockResolvedValue(doc);
+
+    const res = await service.permanentDelete(ORG_A, PRODUCT_ID);
+    expect(res).toBe(doc);
+    expect(s3Service.deleteFile).toHaveBeenCalledTimes(1);
+    expect(s3Service.deleteFile).toHaveBeenCalledWith(doc.imageUrl);
+    expect(productModel.findOneAndDelete).toHaveBeenCalledWith({
+      _id: PRODUCT_ID,
+      organizationId: new Types.ObjectId(ORG_A),
+    });
+  });
+
+  it('permanentDelete : produit étranger → 404, S3 deleteFile JAMAIS appelé, pas de purge', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+
+    const err = await service
+      .permanentDelete(ORG_A, PRODUCT_ID)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect(s3Service.deleteFile).not.toHaveBeenCalled();
+    expect(productModel.findOneAndDelete).not.toHaveBeenCalled();
+  });
+});

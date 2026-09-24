@@ -15,6 +15,8 @@ import { OrganizationMembership } from './../src/organizations/schemas/membershi
 import type { OrganizationMembershipDocument } from './../src/organizations/schemas/membership.schema';
 import { Section } from './../src/sections/schemas/section.schema';
 import type { SectionDocument } from './../src/sections/schemas/section.schema';
+import { Product } from './../src/products/schemas/product.schema';
+import type { ProductDocument } from './../src/products/schemas/product.schema';
 import {
   MembershipStatus,
   OrganizationStatus,
@@ -1377,6 +1379,531 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
           expect(gone).toBeNull();
         } finally {
           await cleanupSections(created);
+        }
+      });
+    });
+
+    // ---- 1-4B : isolation multi-tenant du catalogue Produits. Le tenant est
+    // EXCLUSIVEMENT `@CurrentOrganization()` ; une ressource étrangère doit
+    // être strictement indistinguable d'une ressource absente (même 404).
+    //
+    // LIMITATION S3 (documentée au rapport 1-4B) : l'endpoint S3 E2E est mort
+    // (`http://127.0.0.1:65535`) donc `POST /products` (multipart +
+    // `uploadFile` avant l'appel service) ne peut pas réussir — la création
+    // HTTP est prouvée par les tests unitaires (falsification de l'org,
+    // validation tenant de la section). Les fixtures produit passent par
+    // `productModel().create` (pas de réseau). Le 400 `organizationId` dans
+    // le body reste E2E : le ValidationPipe (`forbidNonWhitelisted`) s'exécute
+    // avant la vérification de l'image. Sans `sleep`.
+    describe('13. Isolation multi-tenant du catalogue Produits (1-4B)', () => {
+      const clearThrottle = (): void => {
+        moduleFixture.get(ThrottlerStorage).onApplicationShutdown();
+      };
+      beforeEach(clearThrottle);
+
+      const MISSING_PRODUCT_ID = 'eeee11111111111111111111';
+      const productModel = (): Model<ProductDocument> =>
+        moduleFixture.get(getModelToken(Product.name));
+      const sectionModel = (): Model<SectionDocument> =>
+        moduleFixture.get(getModelToken(Section.name));
+
+      const getTokenFor = async (orgId: string): Promise<string> => {
+        const res = await request(app.getHttpServer())
+          .post('/auth/switch-organization')
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({ organizationId: orgId });
+        expect(res.status).toBe(200);
+        return res.body.access_token as string;
+      };
+
+      // Sections créées via l'API (pistes 1-4A) pour un nettoyage précis.
+      const createSection = async (
+        token: string,
+        name: string,
+        created: string[],
+      ): Promise<string> => {
+        const res = await request(app.getHttpServer())
+          .post('/sections')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ name });
+        expect(res.status).toBe(201);
+        const id: string = (res.body as { _id: string })._id;
+        created.push(id);
+        return id;
+      };
+
+      const cleanupSections = async (created: string[]): Promise<void> => {
+        if (created.length === 0) return;
+        await sectionModel().deleteMany({
+          _id: { $in: created.map((id) => new Types.ObjectId(id)) },
+        });
+      };
+
+      // Fixture produit écrit DIRECTEMENT au niveau modèle (pas de S3) :
+      // ObjectIds réels pour `_id`/`sectionId`/`organizationId`.
+      const fixtureProduct = async (opts: {
+        orgId: string;
+        sectionId: string;
+        name: string;
+        deletedAt?: Date | null;
+      }): Promise<{ _id: string; name: string }> => {
+        const doc = await productModel().create({
+          organizationId: new Types.ObjectId(opts.orgId),
+          sectionId: new Types.ObjectId(opts.sectionId),
+          name: opts.name,
+          imageUrl: 'http://e2e-s3.invalid/fake.png',
+          purchasePrice: 5,
+          salePrice: 10,
+          initialQuantity: 10,
+          remainingQuantity: 7,
+          deletedAt: opts.deletedAt ?? null,
+        });
+        return { _id: doc._id.toString(), name: doc.name };
+      };
+
+      const cleanupProducts = async (created: string[]): Promise<void> => {
+        if (created.length === 0) return;
+        await productModel().deleteMany({
+          _id: { $in: created.map((id) => new Types.ObjectId(id)) },
+        });
+      };
+
+      it('1. A ne liste que ses produits ; B ne liste que les siens (± ?sectionId)', async () => {
+        const tB = await getTokenFor(ORG_B_ID);
+        const sections: string[] = [];
+        const products: string[] = [];
+        try {
+          const secA = await createSection(adminToken, 'A-prod-sect', sections);
+          const secB = await createSection(tB, 'B-prod-sect', sections);
+          const pa = await fixtureProduct({
+            orgId: ORG_A_ID,
+            sectionId: secA,
+            name: 'PA',
+          });
+          products.push(pa._id);
+          const pb = await fixtureProduct({
+            orgId: ORG_B_ID,
+            sectionId: secB,
+            name: 'PB',
+          });
+          products.push(pb._id);
+
+          const listA = await request(app.getHttpServer())
+            .get('/products')
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(listA.status).toBe(200);
+          const namesA = (
+            listA.body as Array<{ product: { name: string } }>
+          ).map((m) => m.product.name);
+          expect(namesA).toContain('PA');
+          expect(namesA).not.toContain('PB');
+
+          const listB = await request(app.getHttpServer())
+            .get('/products')
+            .set('Authorization', `Bearer ${tB}`);
+          expect(listB.status).toBe(200);
+          const namesB = (
+            listB.body as Array<{ product: { name: string } }>
+          ).map((m) => m.product.name);
+          expect(namesB).toContain('PB');
+          expect(namesB).not.toContain('PA');
+
+          // Filtrage `?sectionId=` : A sur sa section voit PA ; A sur la
+          // section B voit RIEN (section étrangère = aucun produit A dedans,
+          // filtre tenant appliqué avant section).
+          const bySectionA = await request(app.getHttpServer())
+            .get(`/products?sectionId=${secA}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(bySectionA.status).toBe(200);
+          expect(
+            (bySectionA.body as Array<{ product: { name: string } }>).map(
+              (m) => m.product.name,
+            ),
+          ).toContain('PA');
+
+          const bySectionB = await request(app.getHttpServer())
+            .get(`/products?sectionId=${secB}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(bySectionB.status).toBe(200);
+          expect(bySectionB.body).toEqual([]);
+        } finally {
+          await cleanupProducts(products);
+          await cleanupSections(sections);
+        }
+      });
+
+      it('2. A ne lit pas un produit B par ID : 404 strictement identique à l’absent', async () => {
+        const tB = await getTokenFor(ORG_B_ID);
+        const sections: string[] = [];
+        const products: string[] = [];
+        try {
+          const secB = await createSection(tB, 'B-read-sect', sections);
+          const pb = await fixtureProduct({
+            orgId: ORG_B_ID,
+            sectionId: secB,
+            name: 'PB-lecture',
+          });
+          products.push(pb._id);
+
+          const foreign = await request(app.getHttpServer())
+            .get(`/products/${pb._id}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          const missing = await request(app.getHttpServer())
+            .get(`/products/${MISSING_PRODUCT_ID}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+
+          expect(missing.status).toBe(404);
+          expect(foreign.status).toBe(404);
+          expect(foreign.body.statusCode).toBe(missing.body.statusCode);
+          expect(foreign.body.error).toBe(missing.body.error);
+          expect(foreign.body.message).toBe(`Product ${pb._id} not found`);
+          expect(missing.body.message).toBe(
+            `Product ${MISSING_PRODUCT_ID} not found`,
+          );
+          // Aucune donnée du produit B n'est exposée :
+          expect(JSON.stringify(foreign.body)).not.toContain('PB-lecture');
+        } finally {
+          await cleanupProducts(products);
+          await cleanupSections(sections);
+        }
+      });
+
+      it('3. A ne modifie pas un produit B : 404 et document strictement inchangé', async () => {
+        const tB = await getTokenFor(ORG_B_ID);
+        const sections: string[] = [];
+        const products: string[] = [];
+        try {
+          const secB = await createSection(tB, 'B-mod-sect', sections);
+          const pb = await fixtureProduct({
+            orgId: ORG_B_ID,
+            sectionId: secB,
+            name: 'PB-mod',
+          });
+          products.push(pb._id);
+
+          const patched = await request(app.getHttpServer())
+            .patch(`/products/${pb._id}`)
+            .set('Authorization', `Bearer ${adminToken}`)
+            .send({ name: 'Volé', salePrice: 999 });
+          expect(patched.status).toBe(404);
+
+          const docB = await productModel().findOne({ _id: pb._id });
+          expect(docB).toBeTruthy();
+          expect(docB!.name).toBe('PB-mod');
+          expect(docB!.salePrice).toBe(10);
+          expect(String(docB!.organizationId)).toBe(ORG_B_ID);
+          expect(docB!.deletedAt).toBeNull();
+        } finally {
+          await cleanupProducts(products);
+          await cleanupSections(sections);
+        }
+      });
+
+      it('4. A ne supprime, ne restaure ni ne purgue un produit B : 3 × 404, document B toujours présent et inchangé', async () => {
+        const tB = await getTokenFor(ORG_B_ID);
+        const sections: string[] = [];
+        const products: string[] = [];
+        try {
+          const secB = await createSection(tB, 'B-del-sect', sections);
+          const pb = await fixtureProduct({
+            orgId: ORG_B_ID,
+            sectionId: secB,
+            name: 'PB-del',
+          });
+          products.push(pb._id);
+
+          // L'état du document B après CHACUNE des 3 opérations A.
+          const expectDocBIntact = async (): Promise<void> => {
+            const docB = await productModel().findOne({ _id: pb._id });
+            expect(docB).toBeTruthy();
+            expect(docB!.name).toBe('PB-del');
+            expect(docB!.deletedAt).toBeNull();
+          };
+
+          // 1) Soft delete inter-organisation → 404, document intact :
+          const delRes = await request(app.getHttpServer())
+            .delete(`/products/${pb._id}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(delRes.status).toBe(404);
+          await expectDocBIntact();
+
+          // 2) Restauration inter-organisation → 404, document intact :
+          const restoreRes = await request(app.getHttpServer())
+            .patch(`/products/${pb._id}/restore`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(restoreRes.status).toBe(404);
+          await expectDocBIntact();
+
+          // 3) Purge inter-organisation → 404, document TOUT ENCORE PRÉSENT
+          //    et intact (aucun appel S3 ni suppression) :
+          const permRes = await request(app.getHttpServer())
+            .delete(`/products/${pb._id}/permanent`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(permRes.status).toBe(404);
+          await expectDocBIntact();
+
+          // Contrôle négatif : un ID manquant produit le MÊME 404.
+          const missingDel = await request(app.getHttpServer())
+            .delete(`/products/${MISSING_PRODUCT_ID}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(missingDel.status).toBe(404);
+          expect(missingDel.body.message).toBe(
+            `Product ${MISSING_PRODUCT_ID} not found`,
+          );
+        } finally {
+          await cleanupProducts(products);
+          await cleanupSections(sections);
+        }
+      });
+
+      it('5. organizationId: B dans le body → 400, jamais persistée (création HTTP prouvée unitairement : S3 mort)', async () => {
+        // Le ValidationPipe global (`forbidNonWhitelisted`) rejette le champ
+        // avant la vérification de l'image : aucun produit n'est créé.
+        // (La création HTTP complète — multipart + upload — n'est pas
+        // réalisable E2E avec l'endpoint S3 mort : voir rapport 1-4B,
+        // limitation documentée, preuve unitaire du service.)
+        const res = await request(app.getHttpServer())
+          .post('/products')
+          .set('Authorization', `Bearer ${adminToken}`)
+          .field('name', 'Falsifié')
+          .field('sectionId', 'aaaaaaaaaaaaaaaaaaaaaaaa')
+          .field('purchasePrice', '5')
+          .field('salePrice', '10')
+          .field('initialQuantity', '1')
+          .field('organizationId', ORG_B_ID);
+        expect(res.status).toBe(400);
+        expect(messageOf(res.body)).toContain('organizationId');
+
+        // Jamais persistée dans B (ni dans A) :
+        const orgBProducts = await productModel()
+          .find({
+            organizationId: new Types.ObjectId(ORG_B_ID),
+            name: 'Falsifié',
+          })
+          .exec();
+        expect(orgBProducts.length).toBe(0);
+      });
+
+      it('6. un produit A ne part pas vers une section B : 404 `Section`, sectionId inchangé', async () => {
+        const tB = await getTokenFor(ORG_B_ID);
+        const sections: string[] = [];
+        const products: string[] = [];
+        try {
+          const secA = await createSection(adminToken, 'A-own-sect', sections);
+          const secB = await createSection(tB, 'B-target-sect', sections);
+          const pa = await fixtureProduct({
+            orgId: ORG_A_ID,
+            sectionId: secA,
+            name: 'PA-deplace',
+          });
+          products.push(pa._id);
+
+          const moved = await request(app.getHttpServer())
+            .patch(`/products/${pa._id}`)
+            .set('Authorization', `Bearer ${adminToken}`)
+            .send({ sectionId: secB });
+          expect(moved.status).toBe(404);
+          expect(moved.body.message).toBe(`Section ${secB} not found`);
+
+          const docA = await productModel().findOne({ _id: pa._id });
+          expect(String(docA!.sectionId)).toBe(secA);
+          expect(String(docA!.organizationId)).toBe(ORG_A_ID);
+        } finally {
+          await cleanupProducts(products);
+          await cleanupSections(sections);
+        }
+      });
+
+      it('7. la corbeille produits de A ne contient aucun produit B corbeillé', async () => {
+        const tB = await getTokenFor(ORG_B_ID);
+        const sections: string[] = [];
+        const products: string[] = [];
+        try {
+          const secA = await createSection(
+            adminToken,
+            'A-trash-sect',
+            sections,
+          );
+          const secB = await createSection(tB, 'B-trash-sect', sections);
+          const pa = await fixtureProduct({
+            orgId: ORG_A_ID,
+            sectionId: secA,
+            name: 'PA-corbeille',
+          });
+          products.push(pa._id);
+          const pb = await fixtureProduct({
+            orgId: ORG_B_ID,
+            sectionId: secB,
+            name: 'PB-corbeille',
+          });
+          products.push(pb._id);
+
+          // B soft-delete SON produit (API) → passe dans la corbeille B.
+          const bDel = await request(app.getHttpServer())
+            .delete(`/products/${pb._id}`)
+            .set('Authorization', `Bearer ${tB}`);
+          expect(bDel.status).toBe(200);
+
+          // Corbeille de A : strictement vide des produits B.
+          const trashA = await request(app.getHttpServer())
+            .get('/trash')
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(trashA.status).toBe(200);
+          const namesA = (
+            trashA.body as { products: Array<{ name: string }> }
+          ).products.map((p) => p.name);
+          expect(namesA).not.toContain('PB-corbeille');
+          expect(namesA).not.toContain('PA-corbeille');
+
+          // Corbeille de B : contient bien SON produit corbeillé.
+          const trashB = await request(app.getHttpServer())
+            .get('/trash')
+            .set('Authorization', `Bearer ${tB}`);
+          expect(trashB.status).toBe(200);
+          const namesB = (
+            trashB.body as { products: Array<{ name: string }> }
+          ).products.map((p) => p.name);
+          expect(namesB).toContain('PB-corbeille');
+        } finally {
+          await cleanupProducts(products);
+          await cleanupSections(sections);
+        }
+      });
+
+      it('8. un même nom de produit existe indépendamment dans A et B (unicité tenant)', async () => {
+        const tB = await getTokenFor(ORG_B_ID);
+        const sections: string[] = [];
+        const products: string[] = [];
+        try {
+          const secA = await createSection(adminToken, 'A-nom-sect', sections);
+          const secB = await createSection(tB, 'B-nom-sect', sections);
+          // Le nom est UNIQUE par org : la fixture B au même nom est légale
+          // car l'unicité de nom est désormais tenant (prouvée aussi en
+          // unitaire : `assertUniqueProductName` filtre par organizationId).
+          const pa = await fixtureProduct({
+            orgId: ORG_A_ID,
+            sectionId: secA,
+            name: 'Nom commun',
+          });
+          products.push(pa._id);
+          const pb = await fixtureProduct({
+            orgId: ORG_B_ID,
+            sectionId: secB,
+            name: 'Nom commun',
+          });
+          products.push(pb._id);
+          expect(pa._id).not.toBe(pb._id);
+
+          // A renomme son produit : 200 ; le produit B garde son nom.
+          const renamedA = await request(app.getHttpServer())
+            .patch(`/products/${pa._id}`)
+            .set('Authorization', `Bearer ${adminToken}`)
+            .send({ name: 'A-renommé' });
+          expect(renamedA.status).toBe(200);
+          expect(
+            (renamedA.body as { product: { name: string } }).product.name,
+          ).toBe('A-renommé');
+
+          const docB = await productModel().findOne({ _id: pb._id });
+          expect(docB!.name).toBe('Nom commun');
+        } finally {
+          await cleanupProducts(products);
+          await cleanupSections(sections);
+        }
+      });
+
+      it('9. la requête organisationId (query/header) ne remplace jamais l’org signée', async () => {
+        const sections: string[] = [];
+        const products: string[] = [];
+        try {
+          const secA = await createSection(
+            adminToken,
+            'A-forged-sect',
+            sections,
+          );
+          const pa = await fixtureProduct({
+            orgId: ORG_A_ID,
+            sectionId: secA,
+            name: 'PA-forged',
+          });
+          products.push(pa._id);
+
+          const forged = await request(app.getHttpServer())
+            .get(`/products?organizationId=${ORG_B_ID}`)
+            .set('x-organization-id', ORG_B_ID)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(forged.status).toBe(200);
+          const names = (
+            forged.body as Array<{ product: { name: string } }>
+          ).map((m) => m.product.name);
+          expect(names).toContain('PA-forged');
+        } finally {
+          await cleanupProducts(products);
+          await cleanupSections(sections);
+        }
+      });
+
+      it('10. rôles et statuts HTTP historiques inchangés (seller 200 lecture / 403 écriture ; cycle admin complet)', async () => {
+        const sections: string[] = [];
+        const products: string[] = [];
+        try {
+          const secA = await createSection(
+            adminToken,
+            'A-cycle-sect',
+            sections,
+          );
+          const pa = await fixtureProduct({
+            orgId: ORG_A_ID,
+            sectionId: secA,
+            name: 'PA-cycle',
+          });
+          products.push(pa._id);
+
+          // Lecture seller : autorisée (contrat actuel).
+          const sellerList = await request(app.getHttpServer())
+            .get('/products')
+            .set('Authorization', `Bearer ${sellerToken}`);
+          expect(sellerList.status).toBe(200);
+
+          // Écriture seller : 403 (rôles actuels conservés).
+          const sellerPatch = await request(app.getHttpServer())
+            .patch(`/products/${pa._id}`)
+            .set('Authorization', `Bearer ${sellerToken}`)
+            .send({ name: 'Interdit' });
+          expect(sellerPatch.status).toBe(403);
+
+          // Cycle admin : 404 id inconnu → modif 200 → soft delete 200 →
+          // restore 200 → purge 200 (purement supprimé).
+          const missingGet = await request(app.getHttpServer())
+            .get(`/products/${MISSING_PRODUCT_ID}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(missingGet.status).toBe(404);
+
+          const patched = await request(app.getHttpServer())
+            .patch(`/products/${pa._id}`)
+            .set('Authorization', `Bearer ${adminToken}`)
+            .send({ name: 'PA-modifié' });
+          expect(patched.status).toBe(200);
+
+          const delRes = await request(app.getHttpServer())
+            .delete(`/products/${pa._id}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(delRes.status).toBe(200);
+          const restoreRes = await request(app.getHttpServer())
+            .patch(`/products/${pa._id}/restore`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(restoreRes.status).toBe(200);
+          const permRes = await request(app.getHttpServer())
+            .delete(`/products/${pa._id}/permanent`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(permRes.status).toBe(200);
+
+          // Le document est effectivement purgé.
+          const gone = await productModel().findOne({ _id: pa._id });
+          expect(gone).toBeNull();
+        } finally {
+          await cleanupProducts(products);
+          await cleanupSections(sections);
         }
       });
     });

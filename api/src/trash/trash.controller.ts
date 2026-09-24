@@ -20,10 +20,11 @@ export class TrashController {
   async findAll(
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    // Filtre tenant sur les sections (ProductsService : phase 1-4D).
+    // Filtre tenant sur la corbeille sections (1-4A) ET produits (1-4B) :
+    // l'org est celle du contexte branché par la garde, jamais du client.
     const [sections, products] = await Promise.all([
       this.sectionsService.findTrashed(organizationContext.organizationId),
-      this.productsService.findTrashed(),
+      this.productsService.findTrashed(organizationContext.organizationId),
     ]);
     return { sections, products };
   }

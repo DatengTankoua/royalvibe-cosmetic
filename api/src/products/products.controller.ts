@@ -20,11 +20,18 @@ import { S3Service } from '../s3/s3.service';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
+import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
 import { User, UserRole } from '../users/schemas/user.schema';
 import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
+/**
+ * Tenant = `organizationContext.organizationId` (branché par la garde,
+ * jamais fourni par la requête) : c'est la source unique passée au service
+ * en PREMIER argument de chaque méthode du catalogue (§§3-4 de 1-4B).
+ */
 @Controller('products')
 export class ProductsController {
   constructor(
@@ -51,20 +58,37 @@ export class ProductsController {
     @Body() dto: CreateProductDto,
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser() user: User,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
     if (!file) throw new BadRequestException('Image file is required');
     const imageUrl = await this.s3Service.uploadFile(file);
-    return this.productsService.create(dto, imageUrl, user._id.toString());
+    return this.productsService.create(
+      organizationContext.organizationId,
+      dto,
+      imageUrl,
+      user._id.toString(),
+    );
   }
 
   @Get()
-  findAll(@Query('sectionId') sectionId?: string) {
-    return this.productsService.findAll(sectionId);
+  findAll(
+    // `= undefined` (et non `?`) : un paramètre optionnel ne peut précéder un
+    // paramètre requis (TS1016) tandis que le contexte suit.
+    @Query('sectionId') sectionId = undefined,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+  ) {
+    return this.productsService.findAll(
+      organizationContext.organizationId,
+      sectionId,
+    );
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseObjectIdPipe) id: string) {
-    return this.productsService.findOne(id);
+  findOne(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+  ) {
+    return this.productsService.findOne(organizationContext.organizationId, id);
   }
 
   @Patch(':id')
@@ -74,15 +98,24 @@ export class ProductsController {
     @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: UpdateProductDto,
     @CurrentUser() user: User,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.productsService.update(id, dto, user._id.toString());
+    return this.productsService.update(
+      organizationContext.organizationId,
+      id,
+      dto,
+      user._id.toString(),
+    );
   }
 
   @Patch(':id/restore')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
-  restore(@Param('id', ParseObjectIdPipe) id: string) {
-    return this.productsService.restore(id);
+  restore(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+  ) {
+    return this.productsService.restore(organizationContext.organizationId, id);
   }
 
   @Delete(':id')
@@ -91,14 +124,25 @@ export class ProductsController {
   remove(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentUser() user: User,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.productsService.remove(id, user._id.toString());
+    return this.productsService.remove(
+      organizationContext.organizationId,
+      id,
+      user._id.toString(),
+    );
   }
 
   @Delete(':id/permanent')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
-  permanentDelete(@Param('id', ParseObjectIdPipe) id: string) {
-    return this.productsService.permanentDelete(id);
+  permanentDelete(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+  ) {
+    return this.productsService.permanentDelete(
+      organizationContext.organizationId,
+      id,
+    );
   }
 }

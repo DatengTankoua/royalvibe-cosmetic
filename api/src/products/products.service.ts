@@ -57,14 +57,16 @@ export class ProductsService {
     private auditService: AuditService,
   ) {}
 
-  /** Throws 409 if another product shares the same name (active or trashed) */
+  /** Throws 409 if another product (OF THE SAME TENANT) shares the name */
   private async assertUniqueProductName(
+    organizationId: string,
     name: string,
     excludeId?: string,
   ): Promise<void> {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const query: Record<string, unknown> = {
       name: new RegExp(`^${escaped}$`, 'i'),
+      organizationId: new Types.ObjectId(organizationId),
     };
     if (excludeId) query._id = { $ne: new Types.ObjectId(excludeId) };
     const existing = await this.productModel.findOne(query).exec();
@@ -82,25 +84,50 @@ export class ProductsService {
   }
 
   async create(
+    organizationId: string,
     dto: CreateProductDto,
     imageUrl: string,
     actorId: string,
   ): Promise<ProductDocument> {
-    await this.assertUniqueProductName(dto.name);
+    // §5 — la section cible doit être une section ACTIVE de la MÊME
+    // organisation. Filtre composite tenant : une section étrangère/absente
+    // est indistinguable d'une section absente (même 404, pas de fuite).
+    const section = await this.sectionModel
+      .findOne({
+        _id: new Types.ObjectId(dto.sectionId),
+        organizationId: new Types.ObjectId(organizationId),
+        deletedAt: null,
+      })
+      .exec();
+    if (!section) {
+      throw new NotFoundException(`Section ${dto.sectionId} not found`);
+    }
 
-    // Ensure the target section has no active sub-sections
-    const subSectionCount = await this.sectionModel.countDocuments({
-      parentId: new Types.ObjectId(dto.sectionId),
-      deletedAt: null,
-    });
+    // Aucune sous-section active n'autorise un produit (§1-4A inchangé,
+    // désormais filtré par tenant).
+    const subSectionCount = await this.sectionModel
+      .countDocuments({
+        organizationId: new Types.ObjectId(organizationId),
+        parentId: new Types.ObjectId(dto.sectionId),
+        deletedAt: null,
+      })
+      .exec();
     if (subSectionCount > 0) {
       throw new BadRequestException('SECTION_HAS_SUBSECTIONS');
     }
 
+    await this.assertUniqueProductName(organizationId, dto.name);
+
+    // §5 — liste de champs EXPLICITE : jamais un spread du DTO, qui pourrait
+    // porter un `organizationId` falsifié. L'org est imposée par le SERVEUR.
     const product = await this.productModel.create({
-      ...dto,
+      organizationId: new Types.ObjectId(organizationId),
       sectionId: new Types.ObjectId(dto.sectionId),
+      name: dto.name,
       imageUrl,
+      purchasePrice: dto.purchasePrice,
+      salePrice: dto.salePrice,
+      initialQuantity: dto.initialQuantity,
       remainingQuantity: dto.initialQuantity,
     });
     await this.auditService.log(product._id, AuditAction.CREATED, actorId, {
@@ -113,8 +140,14 @@ export class ProductsService {
     return product;
   }
 
-  async findAll(sectionId?: string): Promise<ProductWithMetrics[]> {
-    const filter: Record<string, unknown> = { deletedAt: null };
+  async findAll(
+    organizationId: string,
+    sectionId?: string,
+  ): Promise<ProductWithMetrics[]> {
+    const filter: Record<string, unknown> = {
+      organizationId: new Types.ObjectId(organizationId),
+      deletedAt: null,
+    };
     if (sectionId) filter.sectionId = new Types.ObjectId(sectionId);
     const products = await this.productModel
       .find(filter)
@@ -123,8 +156,15 @@ export class ProductsService {
     return products.map((p) => this.withMetrics(p));
   }
 
-  async findOne(id: string): Promise<ProductDetail> {
-    const product = await this.productModel.findById(id).exec();
+  async findOne(organizationId: string, id: string): Promise<ProductDetail> {
+    // §4 — filtre composite tenant : un produit d'une autre org est
+    // indistinguable d'un produit absent (même 404).
+    const product = await this.productModel
+      .findOne({
+        _id: id,
+        organizationId: new Types.ObjectId(organizationId),
+      })
+      .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
 
     const sales = await this.saleModel
@@ -152,11 +192,18 @@ export class ProductsService {
   }
 
   async update(
+    organizationId: string,
     id: string,
     dto: UpdateProductDto,
     actorId: string,
   ): Promise<ProductWithMetrics> {
-    const product = await this.productModel.findById(id).exec();
+    // §4 — relecture composite tenant : produit étranger = 404, pas de fuite.
+    const product = await this.productModel
+      .findOne({
+        _id: id,
+        organizationId: new Types.ObjectId(organizationId),
+      })
+      .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
 
     const changes: Record<string, unknown> = {};
@@ -212,6 +259,19 @@ export class ProductsService {
     if (dto.sectionId) {
       const newId = new Types.ObjectId(dto.sectionId);
       if (!product.sectionId.equals(newId)) {
+        // §5 — la section cible doit être ACTIVE de la MÊME organisation.
+        // Un mouvement vers une section étrangère est refusé (même 404 que
+        // l'absente) : aucun état partiel n'est jamais sauvegardé.
+        const target = await this.sectionModel
+          .findOne({
+            _id: newId,
+            organizationId: new Types.ObjectId(organizationId),
+            deletedAt: null,
+          })
+          .exec();
+        if (!target) {
+          throw new NotFoundException(`Section ${dto.sectionId} not found`);
+        }
         changes.sectionId = { from: product.sectionId, to: newId };
         product.sectionId = newId;
         await this.auditService.log(
@@ -223,46 +283,83 @@ export class ProductsService {
       }
     }
 
+    // §5 — `organizationId` n'est JAMAIS attribuée ici : le $set implicite de
+    // `save()` ne porte que les champs mutés ci-dessus.
     const saved = await product.save();
     const enriched = this.withMetrics(saved);
     this.eventsGateway.emit('product:updated', enriched);
     return enriched;
   }
 
-  async remove(id: string, actorId: string): Promise<ProductDocument> {
-    const product = await this.productModel.findById(id).exec();
+  async remove(
+    organizationId: string,
+    id: string,
+    actorId: string,
+  ): Promise<ProductDocument> {
+    // §4 — suppression douce composite tenant : le filtre inclut l'org ; un
+    // produit étranger est indistinguable d'un produit absent (même 404).
+    const product = await this.productModel
+      .findOneAndUpdate(
+        { _id: id, organizationId: new Types.ObjectId(organizationId) },
+        { $set: { deletedAt: new Date() } },
+        // `returnDocument: 'after'` = l'ancienne option `new: true` (dépréciée).
+        { returnDocument: 'after' },
+      )
+      .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
     await this.auditService.log(id, AuditAction.DELETED, actorId, {
       name: product.name,
     });
-    product.deletedAt = new Date();
-    const saved = await product.save();
     this.eventsGateway.emit('product:deleted', id);
-    return saved;
+    return product;
   }
 
-  async findTrashed(): Promise<ProductDocument[]> {
+  async findTrashed(organizationId: string): Promise<ProductDocument[]> {
     return this.productModel
-      .find({ deletedAt: { $ne: null } })
+      .find({
+        organizationId: new Types.ObjectId(organizationId),
+        deletedAt: { $ne: null },
+      })
       .sort({ deletedAt: -1 })
       .exec();
   }
 
-  async restore(id: string): Promise<ProductDocument> {
+  async restore(organizationId: string, id: string): Promise<ProductDocument> {
+    // §4 — MÊME filtre composite que `remove` : seul un produit de l'org
+    // demandée est restaurable ; l'étranger est indistinguable de l'absent.
     const product = await this.productModel
-      .findByIdAndUpdate(id, { deletedAt: null }, { new: true })
+      .findOneAndUpdate(
+        { _id: id, organizationId: new Types.ObjectId(organizationId) },
+        { $set: { deletedAt: null } },
+        // `returnDocument: 'after'` = option `new: true` dépréciée en Mongoose 9.
+        { returnDocument: 'after' },
+      )
       .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
     this.eventsGateway.emit('product:created', product);
     return product;
   }
 
-  async permanentDelete(id: string): Promise<ProductDocument> {
-    const product = await this.productModel.findById(id).exec();
+  async permanentDelete(
+    organizationId: string,
+    id: string,
+  ): Promise<ProductDocument> {
+    // §6 — le produit est d'abord localisé par filtre composite tenant :
+    // un produit étranger/absent provoque un 404 AVANT tout traitement,
+    // donc `s3Service.deleteFile` n'est JAMAIS appelé sur une ressource
+    // non rattachée à l'organisation demandée.
+    const product = await this.productModel
+      .findOne({ _id: id, organizationId: new Types.ObjectId(organizationId) })
+      .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
     await this.s3Service.deleteFile(product.imageUrl);
-    await product.deleteOne();
-    return product;
+    const deleted = await this.productModel
+      .findOneAndDelete({
+        _id: id,
+        organizationId: new Types.ObjectId(organizationId),
+      })
+      .exec();
+    return deleted ?? product;
   }
 
   /** Adjusts remainingQuantity by delta (positive = restore, negative = consume) */
