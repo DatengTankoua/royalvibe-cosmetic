@@ -44,9 +44,13 @@ import {
 
 const TEST_JWT_SECRET = 'e2e-only-static-secret-not-production-use';
 const ADMIN_EMAIL = 'admin-0b7@royalvibe.test';
+// 1-4C.1 : seconde org pour prouver l'isolation de la vente.
+const ADMIN_B_EMAIL = 'admin-b-14c1@royalvibe.test';
 const E2E_CORS_ORIGIN = 'https://e2e.example.com';
-// 1-3B.1 : sans une org active, le login n'émet plus de JWT.
+// 1-3B.1 : sans une org active, le login ne fournit plus de JWT.
 const TRADE_ORG_ID = 'dddddddddddddddddddddddd';
+// Org B (1-4C.1) : un tenant distinct des fixtures et des assertions.
+const ORG_B_ID = 'bbbbbbbbbbbbbbbbbbbbbbbb';
 
 function messageOf(body: unknown): string {
   const m = (body as { message?: string | string[] } | undefined)?.message;
@@ -57,6 +61,7 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
   let moduleFixture: TestingModule;
   let app: INestApplication<App>;
   let adminToken = '';
+  let adminBToken = '';
 
   // modèles de la même connexion Mongoose que l'app (jamais la connexion
   // globale de mongoose) — pour les fixtures et les assertions.
@@ -67,18 +72,30 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
   let organizationModel: Model<OrganizationDocument>;
   let membershipModel: Model<OrganizationMembershipDocument>;
 
-  let sectionId = '';
+  // Sections par org (fix via HTTP /sections, token propre à chaque org) :
+  let sectionId = ''; // org A
+  let sectionIdB = ''; // org B (1-4C.1)
 
-  /** Crée un produit SANS passer par S3 (imageUrl factice, écriture directe). */
-  async function seedProduct(name: string, initialQuantity: number) {
+  /**
+   * Crée un produit SANS passer par S3 (imageUrl factice, écriture directe).
+   * 1-4C.1 : `organizationId` est écrite dans le document — un produit de A
+   * est invisible à B (mêmes nom/champs = 404 pour un tenant étranger).
+   */
+  async function seedProduct(
+    name: string,
+    initialQuantity: number,
+    org: string = TRADE_ORG_ID,
+    section: string = '',
+  ) {
     const p = await productModel.create({
-      sectionId: new Types.ObjectId(sectionId),
+      sectionId: new Types.ObjectId(section || sectionId),
       name,
       imageUrl: 'https://e2e.local/img.png',
       purchasePrice: 100,
       salePrice: 400,
       initialQuantity,
       remainingQuantity: initialQuantity,
+      organizationId: new Types.ObjectId(org),
     });
     return { id: p._id.toString(), product: p };
   }
@@ -88,11 +105,24 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
     return p!.remainingQuantity;
   };
 
-  const createSale = (productId: string, quantity: number) =>
+  const createSale = (
+    productId: string,
+    quantity: number,
+    token: string = adminToken,
+  ) =>
     request(app.getHttpServer())
       .post('/sales')
-      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Authorization', `Bearer ${token}`)
       .send({ productId, quantity, salePrice: 400, buyerName: 'Client E2E' });
+
+  /** 1-4C.1 : compteurs tenant — ventes + audits `sold` d'une org précise. */
+  const salesOfOrg = async (org: string) =>
+    saleModel.countDocuments({ organizationId: new Types.ObjectId(org) });
+  const soldAuditsOfOrg = async (org: string) =>
+    auditModel.countDocuments({
+      organizationId: new Types.ObjectId(org),
+      action: 'sold',
+    });
 
   beforeAll(async () => {
     const replSet = await startEphemeralMongo();
@@ -167,21 +197,64 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
         status: 'active',
       });
 
-      // Une seule org active → sélection automatique (cas B, pas de
-      // choix demandé par le client).
-      const login = await request(app.getHttpServer())
-        .post('/auth/login')
-        .send({ email: ADMIN_EMAIL, password: 'adm-0b7-pw-!1x' });
-      expect(login.status).toBe(201);
-      adminToken = login.body.access_token as string;
+      // 1-4C.1 : seconde org (B) + son admin + login dédié.
+      const regB = await request(app.getHttpServer())
+        .post('/auth/register')
+        .send({
+          name: 'Admin B 1-4C.1',
+          email: ADMIN_B_EMAIL,
+          password: 'adm-b-14c1-pw-!1x',
+        });
+      expect(regB.status).toBe(201);
+      const adminBUser = await userModel.findOne({ email: ADMIN_B_EMAIL });
+      adminBUser!.role = UserRole.ADMIN;
+      await adminBUser!.save();
 
-      // ---- section de fixtures ----
+      await organizationModel.create({
+        _id: ORG_B_ID,
+        slug: 'org-b-14c1',
+        name: 'Org B 1-4C.1',
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(ORG_B_ID),
+        userId: adminBUser!._id,
+        role: 'owner',
+        status: 'active',
+      });
+
+      // L'admin A a DEUX orgs actives (A puis B) → le login de A DOIT
+      // explicitement choisir TRADE_ORG_ID (jamais de sélection implicite).
+      const loginA = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: ADMIN_EMAIL,
+          password: 'adm-0b7-pw-!1x',
+          organizationId: TRADE_ORG_ID,
+        });
+      expect(loginA.status).toBe(201);
+      adminToken = loginA.body.access_token as string;
+
+      // L'admin B est mono-org B → sélection automatique.
+      const loginB = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: ADMIN_B_EMAIL, password: 'adm-b-14c1-pw-!1x' });
+      expect(loginB.status).toBe(201);
+      adminBToken = loginB.body.access_token as string;
+
+      // ---- sections de fixtures ----
       const sectionRes = await request(app.getHttpServer())
         .post('/sections')
         .set('Authorization', `Bearer ${adminToken}`)
-        .send({ name: `Section 0B.7-${Date.now()}` });
+        .send({ name: `Section A-${Date.now()}` });
       expect(sectionRes.status).toBe(201);
       sectionId = sectionRes.body._id as string;
+
+      const sectionBRes = await request(app.getHttpServer())
+        .post('/sections')
+        .set('Authorization', `Bearer ${adminBToken}`)
+        .send({ name: `Section B-${Date.now()}` });
+      expect(sectionBRes.status).toBe(201);
+      sectionIdB = sectionBRes.body._id as string;
     } catch (err) {
       if (moduleFixture) await moduleFixture.close().catch(() => undefined);
       await stopEphemeralMongoSafe();
@@ -213,10 +286,14 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
         .find({ productId: new Types.ObjectId(id) })
         .exec();
       expect(sale).toHaveLength(1);
+      // 1-4C.1 : la vente est attachée à l'org A — B n'a AUCUNE vente :
+      expect(sale[0].organizationId.toString()).toBe(TRADE_ORG_ID);
+      expect(await salesOfOrg(ORG_B_ID)).toBe(0);
       const latestSold = (
         await auditModel.find().sort({ createdAt: -1 }).limit(1).exec()
       )[0];
       expect(String(latestSold.details.saleId)).toBe(sale[0]._id.toString());
+      expect(latestSold.organizationId.toString()).toBe(TRADE_ORG_ID);
     });
   });
 
@@ -308,6 +385,9 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
         .find({ productId: new Types.ObjectId(id) })
         .exec();
       expect(sales).toHaveLength(1);
+      // 1-4C.1 : la seule vente est attachée à A (jamais à B) :
+      expect(sales[0].organizationId.toString()).toBe(TRADE_ORG_ID);
+      expect(await salesOfOrg(ORG_B_ID)).toBe(0);
     });
   });
 
@@ -386,6 +466,217 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       expect(saleCreated).toBe(1);
 
       // restauration de l'émition réelle :
+      gateway.emit = realEmit;
+    });
+  });
+  /**
+   * 6. Isolation multi-tenant de la vente (1-4C.1) — deux orgs A/B :
+   * le stock, la vente et l'audit de A n'existent JAMAIS dans B, et
+   * réciproquement. Un produit de B vendu avec un token A est
+   * indistinguable d'un produit absent (même 404, zéro fuite).
+   */
+  describe('6. Isolation multi-tenant de la vente (1-4C.1)', () => {
+    it('vente A sur produit A : ventes A +1, audit SOLD A +1, B intouché (zéro vente, zéro audit, stock intact)', async () => {
+      const { id } = await seedProduct(
+        'IsoA-' + Date.now(),
+        5,
+        TRADE_ORG_ID,
+        sectionId,
+      );
+      const aBefore = await salesOfOrg(TRADE_ORG_ID);
+      const bBefore = await salesOfOrg(ORG_B_ID);
+      const soldABefore = await soldAuditsOfOrg(TRADE_ORG_ID);
+      const soldBefore = await soldAuditsOfOrg(ORG_B_ID);
+      const bStock = await seedProduct(
+        'IsoB-' + Date.now(),
+        9,
+        ORG_B_ID,
+        sectionIdB,
+      );
+
+      const res = await createSale(id, 2);
+      expect(res.status).toBe(201);
+
+      expect(await remainingOf(id)).toBe(3);
+      expect(await salesOfOrg(TRADE_ORG_ID)).toBe(aBefore + 1);
+      expect(await soldAuditsOfOrg(TRADE_ORG_ID)).toBe(soldABefore + 1);
+      // B : AUCUNE vente, AUCUN audit, stock INTACT (le décompte n'a pas
+      // touché le tenant B) :
+      expect(await salesOfOrg(ORG_B_ID)).toBe(bBefore);
+      expect(await soldAuditsOfOrg(ORG_B_ID)).toBe(soldBefore);
+      expect(await remainingOf(bStock.id)).toBe(9);
+      // la vente créée porte l'org A en base :
+      const created = (
+        await saleModel.find({ productId: new Types.ObjectId(id) }).exec()
+      ).find((s) => s.organizationId.toString() === TRADE_ORG_ID);
+      expect(created).toBeDefined();
+    });
+
+    it("vente A sur produit B : 404 identique à l'absent, zéro écriture, stock A/B intacts, zéro événement", async () => {
+      const { id } = await seedProduct(
+        'IsoB-' + Date.now(),
+        4,
+        ORG_B_ID,
+        sectionIdB,
+      );
+      const aSales = await salesOfOrg(TRADE_ORG_ID);
+      const bSales = await salesOfOrg(ORG_B_ID);
+      const aSold = await soldAuditsOfOrg(TRADE_ORG_ID);
+      const aStockBefore = await seedProduct(
+        'IsoA-' + Date.now(),
+        3,
+        TRADE_ORG_ID,
+        sectionId,
+      );
+
+      const gateway = moduleFixture.get(EventsGateway);
+      const realEmit = gateway.emit.bind(gateway);
+      let saleCreated = 0;
+      gateway.emit = (event: string, _payload: unknown) => {
+        if (event === 'sale:created') saleCreated += 1;
+        return realEmit(event, _payload);
+      };
+
+      let res: request.Response;
+      try {
+        res = await createSale(id, 1, adminToken);
+      } finally {
+        gateway.emit = realEmit;
+      }
+
+      expect(res.status).toBe(404);
+      expect(messageOf(res.body)).toBe(`Product ${id} not found`);
+      // zéro écriture dans les DEUX tenants :
+      expect(await salesOfOrg(TRADE_ORG_ID)).toBe(aSales);
+      expect(await salesOfOrg(ORG_B_ID)).toBe(bSales);
+      expect(await soldAuditsOfOrg(TRADE_ORG_ID)).toBe(aSold);
+      expect(await soldAuditsOfOrg(ORG_B_ID)).toBe(0);
+      // stocks intacts des deux côtés (ni décompte, ni fuite) :
+      expect(await remainingOf(id)).toBe(4);
+      expect(await remainingOf(aStockBefore.id)).toBe(3);
+      // zéro événement post-commit :
+      expect(saleCreated).toBe(0);
+    });
+
+    it('concurrence : deux ventes A du dernier article (stock=1) — une 201, une 400, stock final 0, exactement une vente A + un audit A', async () => {
+      const { id } = await seedProduct(
+        'IsoRace-' + Date.now(),
+        1,
+        TRADE_ORG_ID,
+        sectionId,
+      );
+      const aBefore = await salesOfOrg(TRADE_ORG_ID);
+      const soldABefore = await soldAuditsOfOrg(TRADE_ORG_ID);
+
+      // Deux requêtes HTTP DISTINCTES en concurrence (jamais dans la
+      // transaction) :
+      const [a, b] = await Promise.all([createSale(id, 1), createSale(id, 1)]);
+      const statuses = [a.status, b.status].sort();
+      expect(statuses).toEqual([201, 400]);
+      const failed = a.status === 400 ? a : b;
+      expect(messageOf(failed.body)).toBe('Not enough stock. Available: 0');
+
+      const stock = await remainingOf(id);
+      expect(stock).toBe(0);
+      expect(stock).not.toBeLessThan(0);
+      expect(await salesOfOrg(TRADE_ORG_ID)).toBe(aBefore + 1);
+      expect(await soldAuditsOfOrg(TRADE_ORG_ID)).toBe(soldABefore + 1);
+      expect(await salesOfOrg(ORG_B_ID)).toBe(0);
+    });
+
+    it('mêmes nom et id de section en A et B : les deux ventes indépendantes sont validées, chaque tenant porte sa propre vente', async () => {
+      // MÊME nom de produit et même sectionId nominal (sections distinctes
+      // mais de même nom) : l'unicité de nom 1-4B est tenant-scopée.
+      const now = Date.now();
+      const aProd = await seedProduct(
+        'DupName-' + now,
+        2,
+        TRADE_ORG_ID,
+        sectionId,
+      );
+      const bProd = await seedProduct(
+        'DupName-' + now,
+        2,
+        ORG_B_ID,
+        sectionIdB,
+      );
+      expect(aProd.id).not.toBe(bProd.id);
+
+      const aSales = await salesOfOrg(TRADE_ORG_ID);
+      const bSales = await salesOfOrg(ORG_B_ID);
+
+      const [ra, rb] = await Promise.all([
+        createSale(aProd.id, 1, adminToken),
+        createSale(bProd.id, 1, adminBToken),
+      ]);
+      expect(ra.status).toBe(201);
+      expect(rb.status).toBe(201);
+
+      expect(await remainingOf(aProd.id)).toBe(1);
+      expect(await remainingOf(bProd.id)).toBe(1);
+      expect(await salesOfOrg(TRADE_ORG_ID)).toBe(aSales + 1);
+      expect(await salesOfOrg(ORG_B_ID)).toBe(bSales + 1);
+      // chaque vente porte le tenant exact :
+      const aSale = (
+        await saleModel.find({ productId: new Types.ObjectId(aProd.id) }).exec()
+      )[0];
+      const bSale = (
+        await saleModel.find({ productId: new Types.ObjectId(bProd.id) }).exec()
+      )[0];
+      expect(aSale.organizationId.toString()).toBe(TRADE_ORG_ID);
+      expect(bSale.organizationId.toString()).toBe(ORG_B_ID);
+    });
+
+    it('sale:created uniquement après commit pour B : 1 émission sur succès B, zéro supplémentaire après rollback', async () => {
+      const gateway = moduleFixture.get(EventsGateway);
+      const realEmit = gateway.emit.bind(gateway);
+      let saleCreated = 0;
+      let lastOrg: string | undefined;
+      gateway.emit = (event: string, payload: unknown) => {
+        if (event === 'sale:created') {
+          saleCreated += 1;
+          lastOrg = String(
+            (
+              payload as { organizationId?: { toString(): string } }
+            ).organizationId?.toString() ?? '',
+          );
+        }
+        return realEmit(event, payload);
+      };
+
+      const { id } = await seedProduct(
+        'IsoEmit-' + Date.now(),
+        5,
+        ORG_B_ID,
+        sectionIdB,
+      );
+
+      // succès B → 1 émission, avec le tenant B dans le payload :
+      const ok = await createSale(id, 1, adminBToken);
+      expect(ok.status).toBe(201);
+      expect(saleCreated).toBe(1);
+      expect(lastOrg).toBe(ORG_B_ID);
+
+      // rollback (audit en panne, AVEC session) → zéro émission suppl. :
+      const originalCreate = auditModel.create.bind(auditModel) as (
+        docs: unknown,
+        opts?: { session?: unknown },
+      ) => Promise<unknown>;
+      auditModel.create = ((docs: unknown, opts?: { session?: unknown }) => {
+        if (opts?.session) {
+          return Promise.reject(new Error('forced rollback, no emit'));
+        }
+        return originalCreate(docs, opts);
+      }) as unknown as typeof auditModel.create;
+      try {
+        const failed = await createSale(id, 1, adminBToken);
+        expect(failed.status).toBeGreaterThanOrEqual(500);
+      } finally {
+        auditModel.create =
+          originalCreate as unknown as typeof auditModel.create;
+      }
+      expect(saleCreated).toBe(1);
+
       gateway.emit = realEmit;
     });
   });

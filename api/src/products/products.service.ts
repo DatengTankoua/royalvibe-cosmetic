@@ -130,12 +130,18 @@ export class ProductsService {
       initialQuantity: dto.initialQuantity,
       remainingQuantity: dto.initialQuantity,
     });
-    await this.auditService.log(product._id, AuditAction.CREATED, actorId, {
-      name: dto.name,
-      purchasePrice: dto.purchasePrice,
-      salePrice: dto.salePrice,
-      initialQuantity: dto.initialQuantity,
-    });
+    await this.auditService.log(
+      organizationId,
+      product._id,
+      AuditAction.CREATED,
+      actorId,
+      {
+        name: dto.name,
+        purchasePrice: dto.purchasePrice,
+        salePrice: dto.salePrice,
+        initialQuantity: dto.initialQuantity,
+      },
+    );
     this.eventsGateway.emit('product:created', product);
     return product;
   }
@@ -212,6 +218,7 @@ export class ProductsService {
       changes.name = { from: product.name, to: dto.name };
       product.name = dto.name;
       await this.auditService.log(
+        organizationId,
         id,
         AuditAction.NAME_CHANGED,
         actorId,
@@ -236,6 +243,7 @@ export class ProductsService {
       }
       if (Object.keys(changes).length) {
         await this.auditService.log(
+          organizationId,
           id,
           AuditAction.PRICE_CHANGED,
           actorId,
@@ -249,6 +257,7 @@ export class ProductsService {
       product.initialQuantity += dto.additionalStock;
       product.remainingQuantity += dto.additionalStock;
       await this.auditService.log(
+        organizationId,
         id,
         AuditAction.STOCK_CHANGED,
         actorId,
@@ -275,6 +284,7 @@ export class ProductsService {
         changes.sectionId = { from: product.sectionId, to: newId };
         product.sectionId = newId;
         await this.auditService.log(
+          organizationId,
           id,
           AuditAction.SECTION_CHANGED,
           actorId,
@@ -307,9 +317,15 @@ export class ProductsService {
       )
       .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
-    await this.auditService.log(id, AuditAction.DELETED, actorId, {
-      name: product.name,
-    });
+    await this.auditService.log(
+      organizationId,
+      id,
+      AuditAction.DELETED,
+      actorId,
+      {
+        name: product.name,
+      },
+    );
     this.eventsGateway.emit('product:deleted', id);
     return product;
   }
@@ -391,17 +407,27 @@ export class ProductsService {
    * Si aucune ligne n'est modifiée, on relit le produit AVEC la même session
    * pour distinguer : produit absent/inaccessible → 404 (message actuel),
    * produit présent mais stock insuffisant → 400 `Not enough stock. Available: N`.
+   *
+   * 1-4C.1 — TENANT : le filtre atomique ET la relecture d'échec sont
+   * composites (`_id` + `organizationId`) : un produit d'une autre org est
+   * indistinguable d'un produit absent, le décompte ne se fait jamais sur un
+   * stock étranger. `organizationId` est le 1er argument OBLIGATOIRE — la
+   * décrémentation n'est plus invocable sans org (résiduel `adjustStock`,
+   * non tenant, reporté à 1-4C.2).
    */
   async decrementStock(
+    organizationId: string,
     productId: string,
     quantity: number,
     session?: MongooseSession,
   ): Promise<ProductDocument> {
     const objectId = new Types.ObjectId(productId);
+    const orgOid = new Types.ObjectId(organizationId);
     const product = await this.productModel
       .findOneAndUpdate(
         {
           _id: objectId,
+          organizationId: orgOid,
           deletedAt: null,
           remainingQuantity: { $gte: quantity },
         },
@@ -414,12 +440,14 @@ export class ProductsService {
 
     if (!product) {
       // Aucune mise à jour n'a correspondu au filtre. Relecture d'un produit
-      // ACTIF (même session) pour distinguer : présent mais stock insuffisant
-      // → 400, absent ou déjà corbeillé → 404.
+      // ACTIF du MÊME tenant (même session) pour distinguer : présent mais
+      // stock insuffisant → 400, absent, étranger ou déjà corbeillé → 404.
       const fresh = await this.productModel
-        .findOne({ _id: objectId, deletedAt: null }, null, {
-          session: session ?? null,
-        })
+        .findOne(
+          { _id: objectId, organizationId: orgOid, deletedAt: null },
+          null,
+          { session: session ?? null },
+        )
         .exec();
       if (!fresh) {
         throw new NotFoundException(`Product ${productId} not found`);

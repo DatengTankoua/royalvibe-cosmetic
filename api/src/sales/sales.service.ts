@@ -38,27 +38,42 @@ export class SalesService {
    * Aucune opération parallèle (Promise.all) à l'intérieur : l'audit référence
    * le `saleId` de la vente créée et Mongoose exige la session explicite sur
    * chaque opération.
+   *
+   * 1-4C.1 — TENANT : `organizationId` (celle du vendeur, branchée par
+   * `OrganizationGuard` sur `request`) est le 1er argument OBLIGATOIRE. Ce
+   * tenant est écrit dans la vente, passé à la décrémentation ATOMIQUE du
+   * stock ET à l'audit `SOLD` — les trois écritures de la transaction. Le
+   * DTO ne le porte jamais et ne le détermine pas.
    */
-  async create(dto: CreateSaleDto, sellerId: string): Promise<SaleDocument> {
+  async create(
+    organizationId: string,
+    dto: CreateSaleDto,
+    sellerId: string,
+  ): Promise<SaleDocument> {
+    const orgOid = new Types.ObjectId(organizationId);
     const session = await this.connection.startSession();
     let created: SaleDocument | undefined;
 
     try {
       await session.withTransaction(async () => {
-        // 1. Décrémentation ATOMIQUE et conditionnelle du stock. Lève 404
-        //    (produit absent/inaccessible) ou 400 (stock insuffisant) : la
-        //    transaction est alors annulée, rien n'est persisté.
+        // 1. Décrémentation ATOMIQUE et conditionnelle du stock tenant. Lève
+        //    404 (produit absent/étranger/corbeillé) ou 400 (stock
+        //    insuffisant) : la transaction est alors annulée, rien n'est
+        //    persisté.
         const product = await this.productsService.decrementStock(
+          organizationId,
           dto.productId,
           dto.quantity,
           session,
         );
 
-        // 2. Création de la vente, MÊME session. Sur échec, le rollback
+        // 2. Création de la vente, MÊME session. L'org SERVEUR est écrite
+        //    dans le document (jamais issue du DTO). Sur échec, le rollback
         //    annule la décrémentation du stock (point 1).
         const [sale] = await this.saleModel.create(
           [
             {
+              organizationId: orgOid,
               productId: new Types.ObjectId(dto.productId),
               quantity: dto.quantity,
               salePrice: dto.salePrice,
@@ -76,9 +91,10 @@ export class SalesService {
         );
 
         // 3. Journal d'audit `SOLD` référençant la VENTE créée dans cette
-        //    même tentative — MÊME session : si la vente est annulée, l'audit
-        //    ne subsiste pas.
+        //    même tentative — MÊME session, MÊME org : si la vente est
+        //    annulée, l'audit ne subsiste pas.
         await this.auditService.log(
+          organizationId,
           dto.productId,
           AuditAction.SOLD,
           sellerId,
@@ -149,7 +165,12 @@ export class SalesService {
 
     const saved = await sale.save();
     try {
+      // 1-4C.1 : l'org provient du document de la VENTE (1-1B) et non de
+      // n'importe quelle valeur de requête — hors périmètre de la phase 1-4C.1
+      // mais le chemin doit compiler : la signature d'`AuditService.log`
+      // exige désormais un 1er argument `organizationId`.
       await this.auditService.log(
+        sale.organizationId?.toString() ?? '',
         sale.productId.toString(),
         AuditAction.SALE_UPDATED,
         actorId,
@@ -172,7 +193,11 @@ export class SalesService {
     await sale.deleteOne();
 
     try {
+      // 1-4C.1 : l'org provient du document de la VENTE (1-1B). Même
+      // justification que le `SALE_UPDATED` ci-dessus — hors périmètre direct
+      // mais compilable sans fallback : le 1er argument est obligatoire.
       await this.auditService.log(
+        sale.organizationId?.toString() ?? '',
         productId,
         AuditAction.SALE_CANCELLED,
         actorId,

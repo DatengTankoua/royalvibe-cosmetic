@@ -22,12 +22,15 @@ export class AuditService {
   ) {}
 
   /**
-   * Journalise une entrée d'audit. Quand une `session` transactionnelle est
-   * fournie, l'écriture est associée à cette session : elle est donc validée
-   * ou annulée (rollback) avec le reste de la transaction de la vente.
-   * Sans session, le comportement est inchangé (écriture autonome).
+   * Journalise une entrée d'audit — l'organisation est OBLIGATOIRE
+   * (1-4C.1) : elle est écrite dans le document et jamais déduite.
+   * Quand une `session` transactionnelle est fournie, l'écriture est associée
+   * à cette session : elle est donc validée ou annulée (rollback) avec le
+   * reste de la transaction de la vente. Sans session, le comportement est
+   * inchangé (écriture autonome).
    */
   async log(
+    organizationId: string,
     productId: string | Types.ObjectId,
     action: AuditAction,
     actorId: string | Types.ObjectId,
@@ -40,6 +43,7 @@ export class AuditService {
     await this.auditModel.create(
       [
         {
+          organizationId: new Types.ObjectId(organizationId),
           productId: new Types.ObjectId(productId.toString()),
           action,
           actorId: new Types.ObjectId(actorId.toString()),

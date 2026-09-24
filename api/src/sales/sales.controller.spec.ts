@@ -1,9 +1,37 @@
 import 'reflect-metadata';
 import { BadRequestException } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import { Types } from 'mongoose';
 import { SalesController } from './sales.controller';
+import { SalesService } from './sales.service';
 import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
+import { ResolvedOrganizationContext } from '../organizations/organizations.service';
+import { OrganizationRole } from '../organizations/permissions';
+import type { User } from '../users/schemas/user.schema';
 
 const VALID_OBJECT_ID = '112233445566778899001122';
+
+const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+const ORG_B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+const SELLER_ID = 'eeeeeeeeeeeeeeeeeeeeeeee';
+
+function makeContext(org: string): ResolvedOrganizationContext {
+  return {
+    userId: SELLER_ID,
+    organizationId: org,
+    membershipId: '222222222222222222222222',
+    role: OrganizationRole.OWNER,
+    permissions: ['catalog.manage'],
+  };
+}
+
+const seller = { _id: new Types.ObjectId(SELLER_ID) } as User;
+const saleDto = {
+  productId: VALID_OBJECT_ID,
+  quantity: 3,
+  salePrice: 500,
+  buyerName: 'Bob',
+};
 
 /**
  * Reads the parameter pipes the SalesController declares on :id, exactly the
@@ -51,5 +79,64 @@ describe('SalesController :id validation (sec: M-1, phase 0B.1)', () => {
     ])('refuses %s with a BadRequestException', (_label, value) => {
       expect(() => pipe.transform(value)).toThrow(BadRequestException);
     });
+  });
+});
+
+/**
+ * SalesController (1-4C.1) — la création de vente transmet EXACTEMENT
+ * `organizationContext.organizationId` comme PREMIER argument au service :
+ * jamais une valeur issue du body (le DTO ne porte jamais l'org), de la
+ * query ou des headers. Seule la route `POST /sales` porte ce décorateur.
+ */
+describe('SalesController — transmission du tenant à la création (1-4C.1)', () => {
+  let controller: SalesController;
+
+  const serviceStub = {
+    create: jest.fn(),
+    findAll: jest.fn(),
+    update: jest.fn(),
+    remove: jest.fn(),
+  };
+
+  beforeEach(async () => {
+    for (const key of Object.keys(serviceStub)) {
+      serviceStub[key].mockReset();
+      serviceStub[key].mockResolvedValue(undefined);
+    }
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [SalesController],
+      providers: [{ provide: SalesService, useValue: serviceStub }],
+    }).compile();
+    controller = module.get(SalesController);
+  });
+
+  const ctxA = makeContext(ORG_A);
+
+  it('create : transmet l’org du contexte AVANT le DTO et le sellerId', async () => {
+    await controller.create(saleDto, seller, ctxA);
+    expect(serviceStub.create).toHaveBeenCalledTimes(1);
+    expect(serviceStub.create).toHaveBeenCalledWith(ORG_A, saleDto, SELLER_ID);
+  });
+
+  it('create : un `organizationId` falsifié dans le DTO n’influence jamais l’org transmise', async () => {
+    const forgedDto = { ...saleDto, organizationId: ORG_B };
+    await controller.create(forgedDto, seller, ctxA);
+    expect(serviceStub.create).toHaveBeenCalledTimes(1);
+    // le service reçoit QUE A (celle du contexte) :
+    expect(serviceStub.create.mock.calls[0][0]).toBe(ORG_A);
+  });
+
+  it('routes non-modifiées : update/remove n’ont PAS gagné d’argument org (1-4C.1 n’y touche pas)', async () => {
+    const patchDto = { quantity: 1 };
+    await controller.update(VALID_OBJECT_ID, patchDto, seller);
+    // le `update` existant n'a PAS l'org (deferred à 1-4C.2) :
+    expect(serviceStub.update).toHaveBeenCalledWith(
+      VALID_OBJECT_ID,
+      patchDto,
+      SELLER_ID,
+    );
+
+    await controller.remove(VALID_OBJECT_ID, seller);
+    expect(serviceStub.remove).toHaveBeenCalledWith(VALID_OBJECT_ID, SELLER_ID);
   });
 });

@@ -12,6 +12,9 @@ import { AuditService } from '../audit/audit.service';
 
 const PRODUCT_OBJECT_ID = '112233445566778899001122';
 const UNKNOWN_PRODUCT_ID = '6300000000000000000000f1';
+// Org tenant du bloc 0B.7B (1-4C.1) — `decrementStock` en est désormais
+// le 1er argument obligatoire.
+const TRADE_ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 
 /** Session transactionnelle de test (référence unique, comparée par `toBe`). */
 function makeSession() {
@@ -84,7 +87,12 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     const { updateChain } = await build();
     updateChain.exec.mockResolvedValue(product);
 
-    const res = await service.decrementStock(PRODUCT_OBJECT_ID, 3, session);
+    const res = await service.decrementStock(
+      TRADE_ORG_A,
+      PRODUCT_OBJECT_ID,
+      3,
+      session,
+    );
 
     expect(res).toBe(product);
     const [filter, update, options] = productModel.findOneAndUpdate.mock
@@ -93,8 +101,10 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
       Record<string, unknown>,
       Record<string, unknown>,
     ];
+    // 1-4C.1 : le filtre atomique porte le tenant (`_id` + `organizationId`).
     expect(filter).toEqual({
       _id: new Types.ObjectId(PRODUCT_OBJECT_ID),
+      organizationId: new Types.ObjectId(TRADE_ORG_A),
       deletedAt: null,
       remainingQuantity: { $gte: 3 },
     });
@@ -109,14 +119,15 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     findChain.exec.mockResolvedValue(null);
 
     const err = await service
-      .decrementStock(PRODUCT_OBJECT_ID, 3, session)
+      .decrementStock(TRADE_ORG_A, PRODUCT_OBJECT_ID, 3, session)
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NotFoundException);
     expect((err as Error).message).toBe(
       `Product ${PRODUCT_OBJECT_ID} not found`,
     );
 
-    // la relecture d'erreur cible UNIQUEMENT un produit actif :
+    // 1-4C.1 : la relecture d'erreur cible UNIQUEMENT un produit actif du
+    // MÊME tenant : `{_id, organizationId, deletedAt:null}`.
     const [filter, projection, opts] = productModel.findOne.mock.calls[0] as [
       Record<string, unknown>,
       unknown,
@@ -124,6 +135,7 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     ];
     expect(filter).toEqual({
       _id: new Types.ObjectId(PRODUCT_OBJECT_ID),
+      organizationId: new Types.ObjectId(TRADE_ORG_A),
       deletedAt: null,
     });
     // la MÊME session est transmise à la mise à jour ET à la relecture :
@@ -147,7 +159,7 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     });
 
     const err = await service
-      .decrementStock(PRODUCT_OBJECT_ID, 3, session)
+      .decrementStock(TRADE_ORG_A, PRODUCT_OBJECT_ID, 3, session)
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BadRequestException);
     expect((err as Error).message).toBe('Not enough stock. Available: 2');
@@ -164,7 +176,7 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     findChain.exec.mockImplementation(() => Promise.resolve(null));
 
     const err = await service
-      .decrementStock(UNKNOWN_PRODUCT_ID, 3, session)
+      .decrementStock(TRADE_ORG_A, UNKNOWN_PRODUCT_ID, 3, session)
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NotFoundException);
     expect((err as Error).message).not.toContain('Not enough stock');
@@ -174,7 +186,7 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     const { updateChain } = await build();
     updateChain.exec.mockResolvedValue({ remainingQuantity: 1 });
 
-    await service.decrementStock(PRODUCT_OBJECT_ID, 1);
+    await service.decrementStock(TRADE_ORG_A, PRODUCT_OBJECT_ID, 1);
 
     const [, , options] = productModel.findOneAndUpdate.mock
       .calls[0] as unknown as [unknown, unknown, { session?: unknown }];
@@ -556,5 +568,155 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     expect(err).toBeInstanceOf(NotFoundException);
     expect(s3Service.deleteFile).not.toHaveBeenCalled();
     expect(productModel.findOneAndDelete).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 1-4C.1 — cas 15 : les 6 `AuditService.log` des chemins Produit existants
+ * (`create`, 5 `update`, `remove`) transmettent TOUS leur `organizationId`
+ * comme PREMIER argument. Sans ce changement, le service ne compile plus :
+ * la nouvelle signature d'`AuditService.log` l'exige.
+ */
+describe('ProductsService — appelants AuditService.log portent la tenant (1-4C.1)', () => {
+  let service: ProductsService;
+  let productModel: {
+    create: jest.Mock;
+    find: jest.Mock;
+    findOne: jest.Mock;
+    findOneAndUpdate: jest.Mock;
+  };
+  let sectionModel: { findOne: jest.Mock; countDocuments: jest.Mock };
+  let auditService: { log: jest.Mock; findByProduct: jest.Mock };
+  let productOneChain: { exec: jest.Mock };
+  let sectionOneChain: { exec: jest.Mock };
+  let countChain: { exec: jest.Mock };
+  let updateChain: { exec: jest.Mock };
+  let findChain: { sort: jest.Mock; exec: jest.Mock };
+
+  const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const SECTION_ID = '112233445566778899001122';
+  const PRODUCT_ID = '223344556677889900112233';
+
+  function sectionDoc() {
+    return {
+      _id: new Types.ObjectId(SECTION_ID),
+      name: 'Sec',
+      deletedAt: null,
+      organizationId: new Types.ObjectId(ORG_A),
+    };
+  }
+
+  function productDoc(overrides: Record<string, unknown> = {}) {
+    const doc: Record<string, unknown> = {
+      _id: new Types.ObjectId(PRODUCT_ID),
+      sectionId: new Types.ObjectId(SECTION_ID),
+      name: 'Prod',
+      imageUrl: 'http://s3-e2e/p.png',
+      purchasePrice: 5,
+      salePrice: 10,
+      initialQuantity: 10,
+      remainingQuantity: 10,
+      deletedAt: null,
+      organizationId: new Types.ObjectId(ORG_A),
+      save: jest.fn(),
+      ...overrides,
+    };
+    (doc.save as jest.Mock).mockResolvedValue(doc);
+    return doc;
+  }
+
+  async function build() {
+    findChain = { sort: jest.fn(), exec: jest.fn() };
+    findChain.sort.mockReturnValue(findChain);
+    updateChain = { exec: jest.fn() };
+    productOneChain = { exec: jest.fn() };
+    sectionOneChain = { exec: jest.fn() };
+    countChain = { exec: jest.fn() };
+    productModel = {
+      create: jest.fn(),
+      find: jest.fn(() => findChain),
+      findOne: jest.fn(() => productOneChain),
+      findOneAndUpdate: jest.fn(() => updateChain),
+    };
+    sectionModel = {
+      findOne: jest.fn(() => sectionOneChain),
+      countDocuments: jest.fn(() => countChain),
+    };
+    auditService = { log: jest.fn(), findByProduct: jest.fn() };
+    auditService.findByProduct.mockResolvedValue([]);
+    const saleChain = {
+      populate: jest.fn().mockReturnThis(),
+      sort: jest.fn().mockReturnThis(),
+      exec: jest.fn().mockResolvedValue([]),
+    };
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: getModelToken(Product.name), useValue: productModel },
+        {
+          provide: getModelToken(Sale.name),
+          useValue: { find: jest.fn(() => saleChain) },
+        },
+        {
+          provide: getModelToken(Section.name),
+          useValue: sectionModel,
+        },
+        {
+          provide: S3Service,
+          useValue: { deleteFile: jest.fn(), uploadFile: jest.fn() },
+        },
+        { provide: EventsGateway, useValue: { emit: jest.fn() } },
+        { provide: AuditService, useValue: auditService },
+      ],
+    }).compile();
+    service = module.get(ProductsService);
+  }
+
+  it('create : AuditService.log reçoit l’org SERVEUR en 1er argument', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+    sectionOneChain.exec.mockResolvedValue(sectionDoc());
+    countChain.exec.mockResolvedValue(0);
+    productModel.create.mockResolvedValue(productDoc());
+
+    const DTO = {
+      sectionId: SECTION_ID,
+      name: 'Prod',
+      purchasePrice: 5,
+      salePrice: 10,
+      initialQuantity: 7,
+    };
+    await service.create(ORG_A, DTO, 'http://s3/x.png', 'actor');
+    expect(auditService.log).toHaveBeenCalledTimes(1);
+    const [orgArg] = auditService.log.mock.calls[0] as unknown[];
+    expect(orgArg).toBe(ORG_A);
+  });
+
+  it('update : les 3 audits (NAME/PRICE/SECTION) reçoivent l’org en 1er argument', async () => {
+    await build();
+    const doc = productDoc();
+    productOneChain.exec.mockResolvedValue(doc);
+    sectionOneChain.exec.mockResolvedValue(sectionDoc());
+    // 3 changes distinctes : name, price, section.
+    await service.update(
+      ORG_A,
+      PRODUCT_ID,
+      { name: 'N', purchasePrice: 20, salePrice: 30, sectionId: SECTION_ID },
+      'actor',
+    );
+    // NAME_CHANGED + PRICE_CHANGED (+ SECTION_CHANGED si org diff) → au moins 2 audits :
+    expect(auditService.log.mock.calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of auditService.log.mock.calls as unknown[][]) {
+      expect(call[0]).toBe(ORG_A);
+    }
+  });
+
+  it('remove : AuditService.log reçoit l’org en 1er argument', async () => {
+    await build();
+    updateChain.exec.mockResolvedValue(productDoc());
+    await service.remove(ORG_A, PRODUCT_ID, 'actor');
+    expect(auditService.log).toHaveBeenCalledTimes(1);
+    const [orgArg] = auditService.log.mock.calls[0] as unknown[];
+    expect(orgArg).toBe(ORG_A);
   });
 });
