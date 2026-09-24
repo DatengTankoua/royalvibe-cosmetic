@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { Model, Types } from 'mongoose';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+// 1-3B.1 : sans une org active, le login ne fournit plus de JWT.
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import request from 'supertest';
@@ -11,6 +12,10 @@ import { UserDocument, UserRole } from './../src/users/schemas/user.schema';
 import { ProductDocument } from './../src/products/schemas/product.schema';
 import { SaleDocument } from './../src/sales/schemas/sale.schema';
 import { AuditLogDocument } from './../src/audit/schemas/audit-log.schema';
+import { Organization } from './../src/organizations/schemas/organization.schema';
+import type { OrganizationDocument } from './../src/organizations/schemas/organization.schema';
+import { OrganizationMembership } from './../src/organizations/schemas/membership.schema';
+import type { OrganizationMembershipDocument } from './../src/organizations/schemas/membership.schema';
 import { EventsGateway } from './../src/events/events.gateway';
 import {
   startEphemeralMongo,
@@ -40,6 +45,8 @@ import {
 const TEST_JWT_SECRET = 'e2e-only-static-secret-not-production-use';
 const ADMIN_EMAIL = 'admin-0b7@royalvibe.test';
 const E2E_CORS_ORIGIN = 'https://e2e.example.com';
+// 1-3B.1 : sans une org active, le login n'émet plus de JWT.
+const TRADE_ORG_ID = 'dddddddddddddddddddddddd';
 
 function messageOf(body: unknown): string {
   const m = (body as { message?: string | string[] } | undefined)?.message;
@@ -57,6 +64,8 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
   let productModel: Model<ProductDocument>;
   let saleModel: Model<SaleDocument>;
   let auditModel: Model<AuditLogDocument>;
+  let organizationModel: Model<OrganizationDocument>;
+  let membershipModel: Model<OrganizationMembershipDocument>;
 
   let sectionId = '';
 
@@ -125,6 +134,12 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       auditModel = moduleFixture.get<Model<AuditLogDocument>>(
         getModelToken('AuditLog'),
       );
+      organizationModel = moduleFixture.get<Model<OrganizationDocument>>(
+        getModelToken(Organization.name),
+      );
+      membershipModel = moduleFixture.get<
+        Model<OrganizationMembershipDocument>
+      >(getModelToken(OrganizationMembership.name));
 
       // ---- utilisateur admin de test ----
       const reg = await request(app.getHttpServer())
@@ -138,9 +153,26 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       const adminDoc = await userModel.findOne({ email: ADMIN_EMAIL });
       adminDoc!.role = UserRole.ADMIN;
       await adminDoc!.save();
+
+      // ---- organisation + membership de l'admin (1-3B.1) ----
+      await organizationModel.create({
+        _id: TRADE_ORG_ID,
+        slug: 'trade-e2e',
+        name: 'Org Vente E2E',
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(TRADE_ORG_ID),
+        userId: adminDoc!._id,
+        role: 'owner',
+        status: 'active',
+      });
+
+      // Une seule org active → sélection automatique (cas B, pas de
+      // choix demandé par le client).
       const login = await request(app.getHttpServer())
         .post('/auth/login')
         .send({ email: ADMIN_EMAIL, password: 'adm-0b7-pw-!1x' });
+      expect(login.status).toBe(201);
       adminToken = login.body.access_token as string;
 
       // ---- section de fixtures ----

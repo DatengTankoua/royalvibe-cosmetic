@@ -11,19 +11,14 @@ import {
 } from '../common/auth-rate-limiting';
 
 /**
- * AuthController — garde de l'inscription publique (0B.5).
- *
- * L'inscription est désactivée PAR DÉFAUT : seule la valeur EXACTE `true`
- * de `PUBLIC_REGISTRATION_ENABLED` l'active. En cas de refus, le contrôleur
- * lève `ForbiddenException` (403) avec le code stable `REGISTRATION_DISABLED`
- * SANS jamais appeler `AuthService.register`. `AuthService` est mocké pour
- * prouver l'absence d'appel et isoler la décision (pas de base, pas de
- * logique métier). Le garde lit `process.env` à CHAQUE requête.
+ * AuthController — garde de l'inscription publique (0B.5) +
+ * choix d'organisation au login + switch d'organisation.
  */
-describe('AuthController — registre public (0B.5)', () => {
+describe('AuthController', () => {
   let controller: AuthController;
   let registerMock: jest.Mock;
   let loginMock: jest.Mock;
+  let switchMock: jest.Mock;
 
   const VALID_REG: RegisterDto = {
     name: 'E2E User',
@@ -34,6 +29,7 @@ describe('AuthController — registre public (0B.5)', () => {
     email: 'seller@royalvibe.test',
     password: 'secret-123',
   };
+  const AUTH_USER = { _id: '112233445566778899001122' } as unknown;
 
   function callRegister(): unknown {
     try {
@@ -50,18 +46,22 @@ describe('AuthController — registre public (0B.5)', () => {
   beforeEach(async () => {
     registerMock = jest.fn();
     loginMock = jest.fn();
+    switchMock = jest.fn();
 
     const module: TestingModule = await Test.createTestingModule({
-      // Le garde 0B.6 est attaché à `login` ; on l'enregistre ici (options +
-      // stockage mémoire officiel) pour que la DI du contrôleur se résolve.
-      // `controller.login()` est appelé DIRECTEMENT (pas via HTTP), donc la
-      // limitation ne se déclenche jamais dans cette suite (déterministe).
+      // Garde 0B.6 : enregistrée pour que la DI du contrôleur se résolve
+      // (controller.login() est appelé DIRECTEMENT — la limite ne se
+      // déclenche jamais ici, détermine).
       imports: [ThrottlerModule.forRoot(createAuthThrottlerOptions())],
       controllers: [AuthController],
       providers: [
         {
           provide: AuthService,
-          useValue: { register: registerMock, login: loginMock },
+          useValue: {
+            register: registerMock,
+            login: loginMock,
+            switchOrganization: switchMock,
+          },
         },
         AuthThrottlerGuard,
       ],
@@ -70,15 +70,16 @@ describe('AuthController — registre public (0B.5)', () => {
     controller = module.get<AuthController>(AuthController);
   });
 
+  // ---- garde d'inscription publique (inchangée) ----
+
   it('isPublicRegistrationEnabled : vraie seulement pour la valeur exacte "true"', () => {
-    expect(isPublicRegistrationEnabled()).toBe(false); // absente
+    expect(isPublicRegistrationEnabled()).toBe(false);
     process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
     expect(isPublicRegistrationEnabled()).toBe(true);
     process.env.PUBLIC_REGISTRATION_ENABLED = 'TRUE';
-    expect(isPublicRegistrationEnabled()).toBe(false); // casse sensible
+    expect(isPublicRegistrationEnabled()).toBe(false);
   });
 
-  // Valeurs DÉSACTIVÉES : absente, false et valeurs invalides.
   it.each([
     ['absente', undefined],
     ['"false"', 'false'],
@@ -88,7 +89,7 @@ describe('AuthController — registre public (0B.5)', () => {
     ['"true " (espace)', 'true '],
     ['"" (chaîne vide)', ''],
   ])(
-    'désactivée (%s) → 403 REGISTRATION_DISABLED, service jamais appelé',
+    'inscription désactivée (%s) → 403 REGISTRATION_DISABLED, service jamais appelé',
     (_label, value) => {
       if (value === undefined) {
         delete process.env.PUBLIC_REGISTRATION_ENABLED;
@@ -97,7 +98,6 @@ describe('AuthController — registre public (0B.5)', () => {
       }
 
       const error = callRegister();
-
       expect(error).toBeInstanceOf(ForbiddenException);
       const exc = error as ForbiddenException;
       expect(exc.getStatus()).toBe(403);
@@ -108,31 +108,62 @@ describe('AuthController — registre public (0B.5)', () => {
     },
   );
 
-  it('activée ("true") → comportement d’inscription existant (service appelé)', async () => {
+  it('inscription activée → AuthService.register appelé avec le DTO', async () => {
     process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
-    const result = { access_token: 'tok', user: { email: 'a@b.c' } };
+    const result = { user: { email: 'a@b.c' } };
     registerMock.mockResolvedValue(result);
-
     const out = await controller.register(VALID_REG);
-
     expect(registerMock).toHaveBeenCalledTimes(1);
     expect(registerMock).toHaveBeenCalledWith(VALID_REG);
     expect(out).toEqual(result);
   });
 
-  it('le login reste fonctionnel alors que l’inscription est désactivée', async () => {
-    // Absente (désactivée) :
-    delete process.env.PUBLIC_REGISTRATION_ENABLED;
-    const token = { access_token: 'ok', user: { email: 's@b.c' } };
-    loginMock.mockResolvedValue(token);
+  // ---- login : forwarding de l'organisation ----
 
-    const out = await controller.login(VALID_LOGIN);
-
+  it('login sans organisation → le service reçoit le DTO sans organizationId', async () => {
+    loginMock.mockResolvedValue({ access_token: 'ok' });
+    await controller.login(VALID_LOGIN);
     expect(loginMock).toHaveBeenCalledTimes(1);
-    expect(out).toEqual(token);
+    expect(loginMock).toHaveBeenCalledWith(VALID_LOGIN);
+    expect(VALID_LOGIN).not.toHaveProperty('organizationId');
+  });
 
-    // L’inscription reste fermée dans la même configuration :
-    expect(callRegister()).toBeInstanceOf(ForbiddenException);
-    expect(registerMock).not.toHaveBeenCalled();
+  it('login avec organizationId → le champ est transmis au service inchangé', async () => {
+    const ORG_ID = '223344556677889900112233';
+    loginMock.mockResolvedValue({ access_token: 'ok' });
+    const dto: LoginDto = { ...VALID_LOGIN, organizationId: ORG_ID };
+    await controller.login(dto);
+    expect(loginMock).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: ORG_ID }),
+    );
+  });
+
+  // ---- switch d'organisation ----
+
+  it('switch : le service reçoit le sub de l’utilisateur authentifié (jamais du body)', async () => {
+    switchMock.mockResolvedValue({ access_token: 'ok' });
+    const dto = { organizationId: '334455667788990011223344' };
+    const out = await controller.switchOrganization(AUTH_USER, dto);
+    expect(switchMock).toHaveBeenCalledTimes(1);
+    expect(switchMock).toHaveBeenCalledWith(AUTH_USER._id, {
+      organizationId: dto.organizationId,
+    });
+    // aucun champ utilisateur du body n'est transmis :
+    expect(switchMock.mock.calls[0][1]).toEqual({
+      organizationId: dto.organizationId,
+    });
+    expect(out).toEqual({ access_token: 'ok' });
+  });
+
+  it('switch : aucune dérive du body (userId écarté) — le service ne reçoit que l’organizationId ciblée', async () => {
+    switchMock.mockResolvedValue({ access_token: 'ok' });
+    // Le DTO (forbidNonWhitelisted + whitelist) rejette un userId avant que
+    // le contrôleur ne voie le body : le sub ne peut provenir QUE du JWT.
+    // Ici on vérifie que le contrôleur ne transmet QUE `organizationId` :
+    const dto = { organizationId: '112233445566778899001122' };
+    await controller.switchOrganization(AUTH_USER, dto);
+    expect(switchMock).toHaveBeenCalledWith(AUTH_USER._id, {
+      organizationId: dto.organizationId,
+    });
   });
 });

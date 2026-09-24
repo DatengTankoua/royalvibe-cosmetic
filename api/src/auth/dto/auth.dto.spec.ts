@@ -6,6 +6,7 @@ import { CreateProductDto } from '../../products/dto/create-product.dto';
 import { CreateSectionDto } from '../../sections/dto/create-section.dto';
 import { LoginDto } from './login.dto';
 import { RegisterDto } from './register.dto';
+import { SwitchOrganizationDto } from './switch-organization.dto';
 
 async function collectErrors(
   plain: Record<string, unknown>,
@@ -90,6 +91,75 @@ describe('DTO validation (same ValidationPipe options as production)', () => {
         (await collectErrors({ email: 'a@b.co', password: '123' }, LoginDto))
           .length,
       ).toBeGreaterThan(0);
+    });
+
+    it('organizationId is OPTIONAL : un login sans le champ est valide', async () => {
+      const errors = await collectErrors(
+        { email: 'a@b.co', password: 'secret1' },
+        LoginDto,
+      );
+      expect(errors.length).toBe(0);
+    });
+
+    it('organizationId présent et valide (ObjectId) → pas d’erreur', async () => {
+      const errors = await collectErrors(
+        {
+          email: 'a@b.co',
+          password: 'secret1',
+          organizationId: '112233445566778899001122',
+        },
+        LoginDto,
+      );
+      expect(errors).toHaveLength(0);
+    });
+
+    it('organizationId présent mais invalide → erreur sur organizationId', async () => {
+      const errors = await collectErrors(
+        {
+          email: 'a@b.co',
+          password: 'secret1',
+          organizationId: 'not-an-object-id',
+        },
+        LoginDto,
+      );
+      expect(errors.some((e) => e.property === 'organizationId')).toBe(true);
+    });
+
+    it('organizationId absent (champs inconnus interdits) sans organizationId → ok ; un champ inconnu → refusé', async () => {
+      const errors = await collectErrors(
+        { email: 'a@b.co', password: 'secret1', userId: 'x' },
+        LoginDto,
+      );
+      expect(errors.some((e) => e.property === 'userId')).toBe(true);
+    });
+  });
+
+  describe('SwitchOrganizationDto', () => {
+    it('exige un organizationId (absent → erreur)', async () => {
+      const errors = await collectErrors({}, SwitchOrganizationDto);
+      expect(errors.some((e) => e.property === 'organizationId')).toBe(true);
+    });
+
+    it('rejecte un organizationId invalide', async () => {
+      const errors = await collectErrors(
+        { organizationId: 'zzz' },
+        SwitchOrganizationDto,
+      );
+      expect(errors.some((e) => e.property === 'organizationId')).toBe(true);
+    });
+
+    it('accepte un ObjectId valide et REFUSE tout champ supplémentaire (jamais un userId)', async () => {
+      const ok = await collectErrors(
+        { organizationId: '112233445566778899001122' },
+        SwitchOrganizationDto,
+      );
+      expect(ok).toHaveLength(0);
+
+      const withUser = await collectErrors(
+        { organizationId: '112233445566778899001122', userId: '444' },
+        SwitchOrganizationDto,
+      );
+      expect(withUser.some((e) => e.property === 'userId')).toBe(true);
     });
   });
 

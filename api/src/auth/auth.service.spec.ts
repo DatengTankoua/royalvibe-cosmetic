@@ -1,25 +1,28 @@
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as bcrypt from 'bcryptjs';
 import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
+import {
+  ORGANIZATION_ACCESS_DENIED,
+  OrganizationsService,
+} from '../organizations/organizations.service';
 
 const USER_OBJECT_ID = '112233445566778899001122';
+const ORG_A_ID = '223344556677889900112233';
+const ORG_B_ID = '334455667788990011223344';
 
-/**
- * Nest 11 `HttpException.getResponse()` returns an object
- * ({ statusCode, error, message }) for string-bodied exceptions, while
- * older versions returned the raw string. This helper normalizes both
- * shapes so the assertions stay stable across Nest versions.
- */
+/** Normalise le corps d'erreur (string ou objet Nest 11). */
 function extractMessage(error: unknown): string {
-  const body = (error as { getResponse?: () => unknown }).getResponse
-    ? (error as { getResponse: () => unknown }).getResponse()
-    : error;
+  const body = (error as { getResponse?: () => unknown })?.getResponse();
   if (typeof body === 'string') return body;
   if (body !== null && typeof body === 'object' && 'message' in body) {
-    return String(body['message']);
+    return String((body as Record<string, unknown>)['message']);
   }
   return String(body);
 }
@@ -33,39 +36,47 @@ function makeUserDoc(overrides: Record<string, unknown> = {}): unknown {
     role: 'seller',
     ...overrides,
   };
-  return {
-    ...doc,
-    toObject: () => ({ ...doc }),
-  };
+  return { ...doc, toObject: () => ({ ...doc }) };
 }
 
 describe('AuthService', () => {
   let service: AuthService;
   let usersService: { findByEmail: jest.Mock; create: jest.Mock };
   let jwt: { sign: jest.Mock };
+  let organizations: {
+    resolveActiveContext: jest.Mock;
+    listActiveOrganizations: jest.Mock;
+  };
 
-  beforeEach(async () => {
+  async function build() {
     usersService = { findByEmail: jest.fn(), create: jest.fn() };
     jwt = { sign: jest.fn().mockReturnValue('signed-token') };
-
+    organizations = {
+      resolveActiveContext: jest.fn(),
+      listActiveOrganizations: jest.fn(),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         { provide: UsersService, useValue: usersService },
         { provide: JwtService, useValue: jwt },
+        { provide: OrganizationsService, useValue: organizations },
       ],
     }).compile();
+    return module.get(AuthService);
+  }
 
-    service = module.get(AuthService);
-  });
+  const hashRight = async () => bcrypt.hash('right-password-1', 10);
+
+  // ---- register ----
 
   describe('register', () => {
-    it('rejects registration when the email is already taken', async () => {
+    it('rejette si l’email est déjà pris (service create jamais appelé)', async () => {
+      service = await build();
       usersService.findByEmail.mockResolvedValue(makeUserDoc());
       usersService.create.mockRejectedValue(
         new Error('create must not be called when the email exists'),
       );
-
       await expect(
         service.register({
           name: 'Ada',
@@ -76,53 +87,33 @@ describe('AuthService', () => {
       expect(usersService.create).not.toHaveBeenCalled();
     });
 
-    it('returns a JWT and a user object that never contains the password', async () => {
+    it('renvoie l’utilisateur SANS mot de passe et SANS token JWT', async () => {
+      service = await build();
       usersService.findByEmail.mockResolvedValue(null);
       usersService.create.mockResolvedValue(makeUserDoc());
 
-      const { access_token, user } = await service.register({
+      const result = await service.register({
         name: 'Ada',
         email: 'ada@example.com',
         password: 'secret1',
       });
 
-      expect(access_token).toBe('signed-token');
-      // The stored bcrypt hash must never leak into the response.
-      expect(user.password).toBeUndefined();
-      expect('password' in user).toBe(false);
-      expect(user.email).toBe('ada@example.com');
+      expect(result.user.email).toBe('ada@example.com');
+      expect(result.user.password).toBeUndefined();
+      expect('password' in result.user).toBe(false);
+      expect('access_token' in result).toBe(false);
+      expect(jwt.sign).not.toHaveBeenCalled();
     });
 
-    it('documents the current role behaviour: registration never assigns a role in code — the schema default "seller" applies', async () => {
+    it('stocke un hash bcrypt (jamais le texte en clair)', async () => {
+      service = await build();
       usersService.findByEmail.mockResolvedValue(null);
       usersService.create.mockResolvedValue(makeUserDoc());
-
       await service.register({
         name: 'Ada',
         email: 'ada@example.com',
         password: 'secret1',
       });
-
-      // AuthService.register does not set a role: it relies on the
-      // Mongoose schema default (UserRole.SELLER) — the user returned by
-      // the (mocked) UsersService.create is what jwt.sign sees. This pins
-      // the current behaviour. The README claim "first user is admin" is
-      // NOT implemented in code (audit §1 / C-3).
-      expect(jwt.sign).toHaveBeenCalledWith(
-        expect.objectContaining({ sub: USER_OBJECT_ID, role: 'seller' }),
-      );
-    });
-
-    it('stores a bcrypt hash, not the plain-text password', async () => {
-      usersService.findByEmail.mockResolvedValue(null);
-      usersService.create.mockResolvedValue(makeUserDoc());
-
-      await service.register({
-        name: 'Ada',
-        email: 'ada@example.com',
-        password: 'secret1',
-      });
-
       const created = usersService.create.mock.calls[0][0] as {
         password: string;
       };
@@ -133,48 +124,263 @@ describe('AuthService', () => {
     });
   });
 
-  describe('login', () => {
-    it('rejects login for an unknown email with a generic message', async () => {
-      usersService.findByEmail.mockResolvedValue(null);
+  // ---- login : refus identifiants (inchangés) ----
 
+  describe('login (refus identifiants, inchangé)', () => {
+    it('email inconnu → 401 message générique ; aucune requête organisationnelle', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(null);
       const error: unknown = await service
         .login({ email: 'missing@example.com', password: 'secret1' })
         .catch((e: unknown) => e);
-
       expect(error).toBeInstanceOf(UnauthorizedException);
       expect(extractMessage(error)).toBe('Email ou mot de passe incorrect!');
+      expect(organizations.listActiveOrganizations).not.toHaveBeenCalled();
+      expect(jwt.sign).not.toHaveBeenCalled();
     });
 
-    it('rejects login for a wrong password with the same generic message', async () => {
-      const hash = await bcrypt.hash('right-password-1', 10);
+    it('mot de passe incorrect → 401 même message ; aucune requête organisationnelle', async () => {
+      service = await build();
       usersService.findByEmail.mockResolvedValue(
-        makeUserDoc({ password: hash }),
+        makeUserDoc({ password: await hashRight() }),
       );
-
       const error: unknown = await service
         .login({ email: 'ada@example.com', password: 'wrong-password-1' })
         .catch((e: unknown) => e);
-
       expect(error).toBeInstanceOf(UnauthorizedException);
-      // No difference between "unknown email" and "wrong password":
-      // the message does not reveal which one failed.
       expect(extractMessage(error)).toBe('Email ou mot de passe incorrect!');
+      expect(organizations.listActiveOrganizations).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---- login : cas organisationnels ----
+
+  describe('login (règles d’organisation A–D)', () => {
+    const validLogin = {
+      email: 'ada@example.com',
+      password: 'right-password-1',
+    };
+
+    it('A. zéro organisation active → 403 ORGANIZATION_ACCESS_DENIED, aucun JWT', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(
+        makeUserDoc({ password: await hashRight() }),
+      );
+      organizations.listActiveOrganizations.mockResolvedValue([]);
+
+      const error: unknown = await service
+        .login(validLogin)
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ForbiddenException);
+      const exc = error as ForbiddenException;
+      expect(exc.getStatus()).toBe(403);
+      const response = exc.getResponse() as { code: string; message: string };
+      expect(response.code).toBe(ORGANIZATION_ACCESS_DENIED);
+      expect(jwt.sign).not.toHaveBeenCalled();
     });
 
-    it('returns a JWT and a sanitized user on successful login', async () => {
-      const hash = await bcrypt.hash('right-password-1', 10);
+    it('B. une seule organisation → JWT automatique pour cette organisation', async () => {
+      service = await build();
       usersService.findByEmail.mockResolvedValue(
-        makeUserDoc({ password: hash }),
+        makeUserDoc({ password: await hashRight() }),
       );
+      organizations.listActiveOrganizations.mockResolvedValue([
+        { organizationId: ORG_A_ID, name: 'Org A' },
+      ]);
 
-      const { access_token, user } = await service.login({
-        email: 'ada@example.com',
-        password: 'right-password-1',
+      const { access_token, user } = await service.login(validLogin);
+
+      expect(access_token).toBe('signed-token');
+      expect(jwt.sign).toHaveBeenCalledTimes(1);
+      expect(jwt.sign).toHaveBeenCalledWith({
+        sub: USER_OBJECT_ID,
+        orgId: ORG_A_ID,
+      });
+      expect(user.email).toBe('ada@example.com');
+      expect(user.password).toBeUndefined();
+    });
+
+    it('C. plusieurs organisations, aucun choix → organisationSelectionRequired sans JWT', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(
+        makeUserDoc({ password: await hashRight() }),
+      );
+      organizations.listActiveOrganizations.mockResolvedValue([
+        { organizationId: ORG_A_ID, name: 'Org A' },
+        { organizationId: ORG_B_ID, name: 'Org B' },
+      ]);
+
+      const result = (await service.login(validLogin)) as {
+        organizationSelectionRequired: boolean;
+        organizations: unknown[];
+      };
+
+      expect(result.organizationSelectionRequired).toBe(true);
+      expect(jwt.sign).not.toHaveBeenCalled();
+      expect('access_token' in result).toBe(false);
+      // liste minimale : uniquement { organizationId, name } — ni permissions,
+      // ni membershipId, aucune clé supplémentaire.
+      expect(result.organizations).toEqual([
+        { organizationId: ORG_A_ID, name: 'Org A' },
+        { organizationId: ORG_B_ID, name: 'Org B' },
+      ]);
+      for (const entry of result.organizations) {
+        expect(Object.keys(entry as object).sort()).toEqual([
+          'name',
+          'organizationId',
+        ]);
+      }
+    });
+
+    it('C. le corps de sélection ne contient ni permissions ni membershipId', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(
+        makeUserDoc({ password: await hashRight() }),
+      );
+      organizations.listActiveOrganizations.mockResolvedValue([
+        { organizationId: ORG_A_ID, name: 'Org A' },
+        { organizationId: ORG_B_ID, name: 'Org B' },
+      ]);
+      const result = (await service.login(validLogin)) as Record<
+        string,
+        unknown
+      >;
+      expect(JSON.stringify(result)).not.toContain('membershipId');
+      expect(JSON.stringify(result)).not.toContain('permissions');
+    });
+
+    it('D. choix valide → JWT signé avec le contexte résolu (pas l’id brut du body)', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(
+        makeUserDoc({ password: await hashRight() }),
+      );
+      // resolveActiveContext retourne le contexte minimal de 1-3A :
+      organizations.resolveActiveContext.mockResolvedValue({
+        userId: USER_OBJECT_ID,
+        organizationId: ORG_A_ID,
+        membershipId: '99',
+        role: 'seller',
+        permissions: [],
+      });
+
+      const { access_token } = await service.login({
+        ...validLogin,
+        organizationId: ORG_A_ID,
       });
 
       expect(access_token).toBe('signed-token');
-      expect(user.password).toBeUndefined();
-      expect('password' in user).toBe(false);
+      expect(organizations.resolveActiveContext).toHaveBeenCalledTimes(1);
+      expect(organizations.resolveActiveContext).toHaveBeenCalledWith(
+        USER_OBJECT_ID,
+        ORG_A_ID,
+      );
+      expect(jwt.sign).toHaveBeenCalledWith({
+        sub: USER_OBJECT_ID,
+        orgId: ORG_A_ID,
+      });
+      // la liste n’est PAS consommée quand un choix est fourni :
+      expect(organizations.listActiveOrganizations).not.toHaveBeenCalled();
+    });
+
+    it('D. choix inaccessible → refus uniforme 403, aucun JWT', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(
+        makeUserDoc({ password: await hashRight() }),
+      );
+      organizations.resolveActiveContext.mockRejectedValue(
+        new ForbiddenException({
+          code: ORGANIZATION_ACCESS_DENIED,
+          message: "Accès à l'organisation refusé.",
+        }),
+      );
+      const error: unknown = await service
+        .login({ ...validLogin, organizationId: ORG_B_ID })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ForbiddenException);
+      const response = (error as ForbiddenException).getResponse() as {
+        code: string;
+      };
+      expect(response.code).toBe(ORGANIZATION_ACCESS_DENIED);
+      expect(jwt.sign).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---- signature JWT ----
+
+  describe('sign (payload JWT)', () => {
+    it('payload exact : { sub, orgId } — sans email, sans rôle (les claims std iat/exp viennent de JwtModule)', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(
+        makeUserDoc({ password: await hashRight() }),
+      );
+      organizations.listActiveOrganizations.mockResolvedValue([
+        { organizationId: ORG_A_ID, name: 'Org A' },
+      ]);
+      await service.login({
+        email: 'ada@example.com',
+        password: 'right-password-1',
+      });
+      expect(jwt.sign).toHaveBeenCalledTimes(1);
+      const payload = jwt.sign.mock.calls[0][0] as Record<string, unknown>;
+      expect(Object.keys(payload).sort()).toEqual(['orgId', 'sub']);
+      expect(payload.sub).toBe(USER_OBJECT_ID);
+      expect(payload.orgId).toBe(ORG_A_ID);
+      expect('email' in payload).toBe(false);
+      expect('role' in payload).toBe(false);
+    });
+  });
+
+  // ---- switch ----
+
+  describe('switchOrganization', () => {
+    it('switch valide : le sub provient de l’utilisateur authentifié (jamais du body)', async () => {
+      service = await build();
+      organizations.resolveActiveContext.mockResolvedValue({
+        userId: USER_OBJECT_ID,
+        organizationId: ORG_B_ID,
+        membershipId: '99',
+        role: 'seller',
+        permissions: [],
+      });
+
+      const { access_token } = await service.switchOrganization(
+        USER_OBJECT_ID,
+        {
+          organizationId: ORG_B_ID,
+        },
+      );
+
+      expect(access_token).toBe('signed-token');
+      expect(organizations.resolveActiveContext).toHaveBeenCalledWith(
+        USER_OBJECT_ID,
+        ORG_B_ID,
+      );
+      expect(jwt.sign).toHaveBeenCalledWith({
+        sub: USER_OBJECT_ID,
+        orgId: ORG_B_ID,
+      });
+    });
+
+    it('switch inaccessible → refus uniforme 403, aucun JWT', async () => {
+      service = await build();
+      organizations.resolveActiveContext.mockRejectedValue(
+        new ForbiddenException({
+          code: ORGANIZATION_ACCESS_DENIED,
+          message: "Accès à l'organisation refusé.",
+        }),
+      );
+      const error: unknown = await service
+        .switchOrganization(USER_OBJECT_ID, { organizationId: ORG_B_ID })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ForbiddenException);
+      expect(
+        ((error as ForbiddenException).getResponse() as { code: string }).code,
+      ).toBe(ORGANIZATION_ACCESS_DENIED);
+      expect(jwt.sign).not.toHaveBeenCalled();
     });
   });
 });
+
+// Note : la durée de 7 jours n’est pas assertée ici (claim `exp` injecté par
+// le JwtModule — `signOptions: { expiresIn: '7d' }` d'AuthModule, inchangé) ;
+// elle est prouvée en E2E (écart iat→exp ≈ 7 jours).

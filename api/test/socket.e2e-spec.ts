@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import * as http from 'http';
 import type { AddressInfo } from 'net';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
@@ -14,6 +14,10 @@ import request from 'supertest';
 import { AppModule } from './../src/app.module';
 import { EventsGateway } from './../src/events/events.gateway';
 import { UserDocument, UserRole } from './../src/users/schemas/user.schema';
+import { Organization } from './../src/organizations/schemas/organization.schema';
+import type { OrganizationDocument } from './../src/organizations/schemas/organization.schema';
+import { OrganizationMembership } from './../src/organizations/schemas/membership.schema';
+import type { OrganizationMembershipDocument } from './../src/organizations/schemas/membership.schema';
 import {
   startEphemeralMongo,
   stopEphemeralMongoSafe,
@@ -44,8 +48,8 @@ import {
  *
  * **Tokens** (MÊME `JwtService` que l'auth HTTP — secret statique de test
  * `TEST_JWT_SECRET`, jamais un secret réel) :
- *   - valide : tokens portés par `/auth/login` (payload `{ sub, email,
- *     role }` signés par l'`AuthService` réel) ;
+ *   - valide : tokens portés par `/auth/login` (payload `{ sub, orgId }`
+ *     signés par l'`AuthService` réel) ;
  *   - court : `jwtService.sign(payload, { expiresIn: 6 })` signé JUSTE
  *     avant le test (margin d'expiration vs handshake) — §7 ;
  *   - expiré : `jwtService.sign(payload, { expiresIn: -10 })`
@@ -85,6 +89,10 @@ const DELETED_EMAIL = 'deleted-socket-e2e@royalvibe.test';
 const ADMIN_PW = 'admin-e2e-pw-!1x';
 const SELLER_PW = 'seller-e2e-pw-!1x';
 const DELETED_PW = 'deleted-e2e-pw-!1x';
+// 1-3B.1 : une organisation active partage (fixtures) — sans elle, le
+// login renvoie 403 ORGANIZATION_ACCESS_DENIED. Fixtures générales, sans
+// données RoyalVibe.
+const SOCKET_ORG_ID = 'cccccccccccccccccccccccc';
 
 /** Port éphémère réel de l'HTTP serveur (et du Socket.IO attaché). */
 let port: number;
@@ -265,10 +273,18 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
         request(app.getHttpServer())
           .post('/auth/register')
           .send({ name, email, password });
-      const login = (email: string, password: string) =>
+      const login = (
+        email: string,
+        password: string,
+        organizationId?: string,
+      ) =>
         request(app.getHttpServer())
           .post('/auth/login')
-          .send({ email, password });
+          .send(
+            organizationId === undefined
+              ? { email, password }
+              : { email, password, organizationId },
+          );
 
       const adminReg = await register(
         'Admin Socket E2E',
@@ -293,11 +309,42 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
       adminDoc!.role = UserRole.ADMIN;
       await adminDoc!.save();
 
-      const adminLogin = await login(ADMIN_EMAIL, ADMIN_PW);
+      // ---- Fixtures organisation (1-3B.1) ----
+      // Organisation unique : memberships actives pour chaque test user.
+      // Un login sans `organizationId` auto-sélectionne cette org
+      // (cas B du login).
+      const organizationModel = moduleFixture.get<Model<OrganizationDocument>>(
+        getModelToken(Organization.name),
+      );
+      const membershipModel = moduleFixture.get<
+        Model<OrganizationMembershipDocument>
+      >(getModelToken(OrganizationMembership.name));
+      await organizationModel.create({
+        _id: new Types.ObjectId(SOCKET_ORG_ID),
+        slug: 'socket-e2e-org',
+        name: 'Socket E2E Org',
+      });
+      // ADMIN + SELLER existent déjà (registrés plus haut). Le user DELETED
+      // est enregistré PLUS BAS (scénario « supprimé ») : sa membership est
+      // créée juste après son register (ci-dessous), jamais ici.
+      for (const email of [ADMIN_EMAIL, SELLER_EMAIL]) {
+        const u = await userModel.findOne({ email });
+        if (!u) continue;
+        await membershipModel.create({
+          // `new Types.ObjectId` obligatoire : une chaîne hex brute n'est
+          // PAS castée en ObjectId à l'écriture (fixtures E2E 1-3B.1).
+          organizationId: new Types.ObjectId(SOCKET_ORG_ID),
+          userId: u._id,
+          role: 'seller',
+          status: 'active',
+        });
+      }
+
+      const adminLogin = await login(ADMIN_EMAIL, ADMIN_PW, SOCKET_ORG_ID);
       expect(adminLogin.status).toBe(201);
       validAdminToken = adminLogin.body.access_token as string;
 
-      const sellerLogin = await login(SELLER_EMAIL, SELLER_PW);
+      const sellerLogin = await login(SELLER_EMAIL, SELLER_PW, SOCKET_ORG_ID);
       expect(sellerLogin.status).toBe(201);
       validSellerToken = sellerLogin.body.access_token as string;
       sellerSub = sellerLogin.body.user._id as string;
@@ -309,20 +356,27 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
         DELETED_PW,
       );
       expect(deletedReg.status).toBe(201);
-      const deletedLogin = await login(DELETED_EMAIL, DELETED_PW);
-      expect(deletedLogin.status).toBe(201);
-      deletedUserToken = deletedLogin.body.access_token as string;
+      // Membership active AVANT login (sinon 403 ORGANIZATION_ACCESS_DENIED).
       const deletedDoc = await userModel.findOne({ email: DELETED_EMAIL });
       expect(deletedDoc).toBeTruthy();
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(SOCKET_ORG_ID),
+        userId: deletedDoc!._id,
+        role: 'seller',
+        status: 'active',
+      });
+      const deletedLogin = await login(
+        DELETED_EMAIL,
+        DELETED_PW,
+        SOCKET_ORG_ID,
+      );
+      expect(deletedLogin.status).toBe(201);
+      deletedUserToken = deletedLogin.body.access_token as string;
       await userModel.deleteOne({ _id: deletedDoc!._id });
 
       // Tokens forgés : payload identique à l'`AuthService.sign` (seule
       // différence : l'expiration / le secret) — pour isoler la variable.
-      const payload = {
-        sub: sellerSub,
-        email: SELLER_EMAIL,
-        role: UserRole.SELLER,
-      };
+      const payload = { sub: sellerSub, orgId: SOCKET_ORG_ID };
       expiredToken = jwtService.sign(payload, { expiresIn: -10 });
       forgedToken = jwtService.sign(payload, {
         expiresIn: '1h',
@@ -366,22 +420,18 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
       expect(validSellerToken).toBeTruthy();
       expect(validAdminToken).toBeTruthy();
       const sellerPayload = jwtService.verify(validSellerToken);
-      expect(sellerPayload.email).toBe(SELLER_EMAIL);
-      expect(sellerPayload.role).toBe(UserRole.SELLER);
+      expect(String(sellerPayload.orgId)).toBe(SOCKET_ORG_ID);
       const adminPayload = jwtService.verify(validAdminToken);
-      expect(adminPayload.email).toBe(ADMIN_EMAIL);
-      expect(adminPayload.role).toBe(UserRole.ADMIN);
+      expect(String(adminPayload.orgId)).toBe(SOCKET_ORG_ID);
     });
 
-    it('0.4 les tokens forgés (expiré / falsifié) portent { sub, email, role }', () => {
+    it('0.4 les tokens forgés (expiré / falsifié) portent { sub, orgId }', () => {
       const expiredPayload = jwtService.decode(expiredToken);
       expect(expiredPayload.sub).toBeTruthy();
-      expect(expiredPayload.email).toBe(SELLER_EMAIL);
-      expect(expiredPayload.role).toBe(UserRole.SELLER);
+      expect(String(expiredPayload.orgId)).toBe(SOCKET_ORG_ID);
       const forgedPayload = jwtService.decode(forgedToken);
       expect(forgedPayload.sub).toBeTruthy();
-      expect(forgedPayload.email).toBe(SELLER_EMAIL);
-      expect(forgedPayload.role).toBe(UserRole.SELLER);
+      expect(String(forgedPayload.orgId)).toBe(SOCKET_ORG_ID);
     });
   });
 
@@ -578,11 +628,7 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
       // le timer du middleware (exp du payload vérifié) doit forcer la
       // déconnexion bien avant le fallback 9 s du helper.
       const shortLivedToken = jwtService.sign(
-        {
-          sub: sellerSub,
-          email: SELLER_EMAIL,
-          role: UserRole.SELLER,
-        },
+        { sub: sellerSub, orgId: SOCKET_ORG_ID },
         { expiresIn: 6 },
       );
 

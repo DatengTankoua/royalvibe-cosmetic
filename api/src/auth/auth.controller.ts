@@ -3,6 +3,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  HttpCode,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -10,6 +11,7 @@ import { AuthService } from './auth.service';
 import { AuthThrottlerGuard } from '../common/auth-rate-limiting';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { SwitchOrganizationDto } from './dto/switch-organization.dto';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { User } from '../users/schemas/user.schema';
@@ -53,6 +55,18 @@ export class AuthController {
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
+  }
+
+  // 200 explicite : le switch répond un nouveau JWT (le POST par défaut
+  // NestJS répond 201 — le conserver ici serait trompeur).
+  @HttpCode(200)
+  @Post('switch-organization')
+  switchOrganization(
+    @CurrentUser() user: User,
+    @Body() dto: SwitchOrganizationDto,
+  ) {
+    // Le sub provient de l'utilisateur authentifié (JWT) — jamais du body.
+    return this.authService.switchOrganization(user._id.toString(), dto);
   }
 
   @Get('me')

@@ -1,5 +1,6 @@
 import 'reflect-metadata';
-import { Connection, Model } from 'mongoose';
+import { Connection, Model, Types } from 'mongoose';
+import { JwtService } from '@nestjs/jwt';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
@@ -8,6 +9,10 @@ import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { UserDocument, UserRole } from './../src/users/schemas/user.schema';
+import { Organization } from './../src/organizations/schemas/organization.schema';
+import type { OrganizationDocument } from './../src/organizations/schemas/organization.schema';
+import { OrganizationMembership } from './../src/organizations/schemas/membership.schema';
+import type { OrganizationMembershipDocument } from './../src/organizations/schemas/membership.schema';
 import {
   E2E_DB_NAME,
   startEphemeralMongo,
@@ -57,6 +62,13 @@ const EXISTING_SALE_ID_MISSING = '112233445566778899001122';
 // valeur parsée est bien celle servie en Access-Control-Allow-Origin).
 const E2E_CORS_ORIGIN = 'https://e2e.example.com';
 
+// 1-3B.1 : fixtures organisations + memberships (base de test générique,
+// sans référence RoyalVibe).
+const ORG_A_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+const ORG_B_ID = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+const MULTI_EMAIL = 'multi-e2e@royalvibe.test';
+const MULTI_PW = 'multi-e2e-pw-!1x';
+
 // Normalise le corps d'erreur (string ou string[]) pour des asserts lisibles.
 // Le body de supertest est lâchement typé (any) : accepter `unknown` évite
 // de propager cet `any` dans la signature (pas de no-unsafe-argument).
@@ -70,6 +82,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
   let app: INestApplication<App>;
   let adminToken = '';
   let sellerToken = '';
+  let jwtService: JwtService;
 
   beforeAll(async () => {
     const replSet = await startEphemeralMongo();
@@ -100,6 +113,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
         imports: [AppModule],
       }).compile();
       app = moduleFixture.createNestApplication();
+      jwtService = moduleFixture.get(JwtService);
       // MÊME factory que main.ts (0B.4) : buildHttpCorsOptions — les E2E
       // prouvent donc le comportement EXACT de la production (origine
       // autorisée => écho exact ; absente/inconnue => SANS en-tête CORS et
@@ -123,10 +137,18 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
         request(app.getHttpServer())
           .post('/auth/register')
           .send({ name, email, password });
-      const login = (email: string, password: string) =>
+      const login = (
+        email: string,
+        password: string,
+        organizationId?: string,
+      ) =>
         request(app.getHttpServer())
           .post('/auth/login')
-          .send({ email, password });
+          .send(
+            organizationId === undefined
+              ? { email, password }
+              : { email, password, organizationId },
+          );
 
       const adminReg = await register(
         'Admin E2E',
@@ -155,7 +177,77 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       adminDoc!.role = UserRole.ADMIN;
       await adminDoc!.save();
 
-      const adminLogin = await login(ADMIN_EMAIL, 'admin-e2e-pw-!1x');
+      // ---- Fixtures organisations (1-3B.1) ----
+      // Admin : membership actives sur les 2 orgs A et B (peut switch).
+      // Seller : membership active sur A seulement (pas B → refus 403).
+      // Multi : membership actives sur A et B (sélection requise multi-org).
+      const organizationModel = moduleFixture.get<Model<OrganizationDocument>>(
+        getModelToken(Organization.name),
+      );
+      const membershipModel = moduleFixture.get<
+        Model<OrganizationMembershipDocument>
+      >(getModelToken(OrganizationMembership.name));
+
+      // Organisation A : `org-a` active, propriétaire admin.
+      await organizationModel.create({
+        _id: new Types.ObjectId(ORG_A_ID),
+        slug: 'org-a',
+        name: 'Org A',
+      });
+      // Organisation B : `org-b` active, propriétaire admin.
+      await organizationModel.create({
+        _id: new Types.ObjectId(ORG_B_ID),
+        slug: 'org-b',
+        name: 'Org B',
+      });
+
+      // Fixtures memberships : admin (owner) et seller (seller) + leurs
+      // 2 orgs respectives. Le `userId` est le ObjectId de l'utilisateur.
+      const adminUserId = adminDoc!._id.toString();
+      const sellerUserDoc = await userModel.findOne({ email: SELLER_EMAIL });
+      const sellerUserId = sellerUserDoc!._id.toString();
+
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(ORG_A_ID),
+        userId: new Types.ObjectId(adminUserId),
+        role: 'owner',
+        status: 'active',
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(ORG_B_ID),
+        userId: new Types.ObjectId(adminUserId),
+        role: 'owner',
+        status: 'active',
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(ORG_A_ID),
+        userId: new Types.ObjectId(sellerUserId),
+        role: 'seller',
+        status: 'active',
+      });
+
+      // ---- Utilisateur "multi" : 2 orgs → sélection requise ----
+      const multiReg = await register('Multi E2E', MULTI_EMAIL, MULTI_PW);
+      expect(multiReg.status).toBe(201);
+      const multiUserDoc = await userModel.findOne({ email: MULTI_EMAIL });
+      expect(multiUserDoc).toBeTruthy();
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(ORG_A_ID),
+        userId: multiUserDoc!._id,
+        role: 'seller',
+        status: 'active',
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(ORG_B_ID),
+        userId: multiUserDoc!._id,
+        role: 'seller',
+        status: 'active',
+      });
+
+      // Admin a 2 orgs (A et B) : le login CHOISIT explicitement A
+      // (cas C/D du login — le cas B auto-sélection est prouvé par le
+      // login du seller, mono-org A, sans `organizationId`).
+      const adminLogin = await login(ADMIN_EMAIL, 'admin-e2e-pw-!1x', ORG_A_ID);
       expect(adminLogin.status).toBe(201);
       adminToken = adminLogin.body.access_token as string;
 
@@ -538,6 +630,135 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
         expect(res.status).toBe(403);
         expect(res.body.code).toBe('REGISTRATION_DISABLED');
       }
+    });
+  });
+
+  describe('9. Multi-organisation (1-3B.1) : login + switch', () => {
+    // Isolation du stockage mémoire (même motif que §8) : chaque test
+    // part d'une fenêtre de login vide.
+    const clearThrottle = (): void => {
+      const s = moduleFixture.get(ThrottlerStorage);
+      s.onApplicationShutdown();
+    };
+    beforeEach(clearThrottle);
+
+    const decodePayload = (token: string): Record<string, unknown> =>
+      jwtService.decode(token);
+
+    it('login mono-organisation (sans organizationId) → 201 + JWT { sub, orgId }', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: SELLER_EMAIL, password: 'seller-e2e-pw-!1x' });
+      expect(res.status).toBe(201);
+      const token = res.body.access_token as string;
+      expect(typeof token).toBe('string');
+      const payload = decodePayload(token);
+      // payload métier : sub + orgId ; PAS d'email ni de role.
+      expect(payload.sub).toBeDefined();
+      expect(String(payload.orgId)).toBe(ORG_A_ID);
+      expect(payload.email).toBeUndefined();
+      expect(payload.role).toBeUndefined();
+      // claims standards iat/exp : exp ≈ iat + 7 jours.
+      expect(payload.iat).toBeDefined();
+      expect(payload.exp).toBeDefined();
+      expect(Number(payload.exp) - Number(payload.iat)).toBeGreaterThanOrEqual(
+        6 * 24 * 3600,
+      );
+      expect(Number(payload.exp) - Number(payload.iat)).toBeLessThanOrEqual(
+        8 * 24 * 3600 + 60, // tolérance d'arrondi iat + fenêtre de test
+      );
+    });
+
+    it('login multi-organisation sans choix → 201, organisationSelectionRequired sans JWT', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: MULTI_EMAIL, password: MULTI_PW });
+      expect(res.status).toBe(201);
+      expect(res.body.organizationSelectionRequired).toBe(true);
+      expect(res.body.access_token).toBeUndefined();
+      expect(res.body.user).toBeUndefined();
+      // liste minimale + ordonnée (tri par nom, déterministe) :
+      expect(res.body.organizations).toEqual([
+        { organizationId: ORG_A_ID, name: 'Org A' },
+        { organizationId: ORG_B_ID, name: 'Org B' },
+      ]);
+      // aucune donnée sensible :
+      expect(JSON.stringify(res.body)).not.toContain('membershipId');
+      expect(JSON.stringify(res.body)).not.toContain('permissions');
+    });
+
+    it('login multi-organisation avec choice → 201 + JWT portant cette organisation', async () => {
+      const res = await request(app.getHttpServer()).post('/auth/login').send({
+        email: MULTI_EMAIL,
+        password: MULTI_PW,
+        organizationId: ORG_B_ID,
+      });
+      expect(res.status).toBe(201);
+      const payload = decodePayload(res.body.access_token as string);
+      expect(String(payload.orgId)).toBe(ORG_B_ID);
+      expect(payload.email).toBeUndefined();
+    });
+
+    it('login avec organizationId inaccessible → 403 ORGANIZATION_ACCESS_DENIED (message uniforme)', async () => {
+      // Le seller n'a de membership active que sur A : choisir B → refus
+      // uniforme (même corps que tous les autres cas de refus).
+      const res = await request(app.getHttpServer()).post('/auth/login').send({
+        email: SELLER_EMAIL,
+        password: 'seller-e2e-pw-!1x',
+        organizationId: ORG_B_ID,
+      });
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('ORGANIZATION_ACCESS_DENIED');
+      expect(res.body.message).toBe("Accès à l'organisation refusé.");
+      expect(res.body.access_token).toBeUndefined();
+    });
+
+    it('POST /auth/switch-organization A → B : 200 + nouveau JWT (même sub, new orgId)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/auth/switch-organization')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ organizationId: ORG_B_ID });
+      expect(res.status).toBe(200);
+      const payload = decodePayload(res.body.access_token as string);
+      const original = decodePayload(adminToken);
+      expect(payload.sub).toBe(original.sub);
+      expect(String(payload.orgId)).toBe(ORG_B_ID);
+      // le token original (A) reste utilisable — aucun changement persistant :
+      const meRes = await request(app.getHttpServer())
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(meRes.status).toBe(200);
+    });
+
+    it('POST /auth/switch-organization : sans JWT → 401', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/auth/switch-organization')
+        .send({ organizationId: ORG_A_ID });
+      expect(res.status).toBe(401);
+    });
+
+    it('POST /auth/switch-organization : organisation inaccessible → 403 uniforme', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/auth/switch-organization')
+        .set('Authorization', `Bearer ${sellerToken}`)
+        .send({ organizationId: ORG_B_ID });
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('ORGANIZATION_ACCESS_DENIED');
+      expect(res.body.message).toBe("Accès à l'organisation refusé.");
+    });
+
+    it('POST /auth/switch-organization : userId falsifié dans le body → 400 (rejeté) et ignoré', async () => {
+      // forbidNonWhitelisted : `userId` n'existe pas dans le DTO → 400
+      // AVANT la logique ; le sub ne provient QUE du JWT.
+      const res = await request(app.getHttpServer())
+        .post('/auth/switch-organization')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          organizationId: ORG_B_ID,
+          userId: sellerToken && '444444444444444444444444',
+        });
+      expect(res.status).toBe(400);
+      expect(messageOf(res.body)).toContain('userId');
     });
   });
 });

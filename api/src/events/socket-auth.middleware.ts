@@ -51,9 +51,22 @@ import { OriginAllowlist } from './origin.helpers';
  */
 export const SOCKET_AUTH_TOKEN_KEY = 'token';
 
-/** Principal minimal et sûr attaché à `socket.data.user`. */
+// ObjectId canonique : une CHAÎNE strictement de 24 caractères hexadécimaux.
+// Aucune forme non-canonique n'est acceptée (nombre, objet, chaîne vide,
+// 12/24 caractères non-hex) — la validation rejette AVANT toute requête DB.
+// `isValidObjectId()` n'est PAS utilisé (cast trop permissif).
+const isStrictObjectId = (value: unknown): value is string =>
+  typeof value === 'string' && /^[0-9a-fA-F]{24}$/.test(value);
+
+/**
+ * Principal attaché à `socket.data.user` : `sub`/`orgId` issus du JWT
+ * vérifié ; `email`/`role` lus EXCLUSIVEMENT du document User chargé de la
+ * base (les claims éventuels du token sont ignorés). Base de l'isolation
+ * par rooms à venir (`organization:{orgId}`).
+ */
 export interface SocketPrincipal {
   sub: string;
+  orgId: string;
   email: string;
   role: string;
 }
@@ -79,12 +92,14 @@ export type SocketMiddlewareNext = (err?: Error) => void;
  *   (MÊME instance/secret que l'auth HTTP — AuthModule, `JWT_SECRET`) ;
  * - re-vérification de l'existence de l'utilisateur via
  *   `UsersService.findById` (MÊME politique que `JwtStrategy.validate`) ;
+ * - principal = `sub`/`orgId` du JWT vérifié + `email`/`role` du document
+ *   User de la base (les claims `email`/`role` du token sont ignorés) ;
  * - `next()` (sans erreur) appelé EXACTEMENT UNE FOIS, uniquement quand le
  *   principal est attaché dans `socket.data.user` ; en cas de refus,
  *   `next(err)` appelé EXACTEMENT UNE FOIS (garde interne `done`) ;
- * - `socket.data.user` ne contient QUE `sub`, `email`, `role` — jamais
- *   `password`, le token, ni un document Mongoose complet ;
- * - le payload vérifié DOIT porter `exp` (number fini) dans le futur :
+ * - `socket.data.user` ne contient QUE `sub`, `orgId`, `email`, `role`
+ *   — jamais `password`, le token, ni un document Mongoose complet ;
+ * - le payload vérifié porte `{ sub, orgId }` + `exp` (number fini) futur :
  *   `exp` absent, non-number, NaN, Infinity ou déjà dépassé
  *   (`exp <= Date.now()/1000`) → **refus au handshake**
  *   `next(Error('unauthorized'))` exactement une fois, **aucun timer
@@ -127,23 +142,18 @@ export function installSocketAuthMiddleware(
 
         // 2 + 3. Vérification signature + expiration (MÊME configuration
         //    que l'auth HTTP : instance du JwtModule du AuthModule) +
-        //    structure minimale du payload ({ sub, email, role }).
+        //    structure minimale du payload ({ sub, orgId }).
         // `Record<string, unknown>` (et non le `any` par défaut du
         // générique `JwtService.verifyAsync<T = any>`) : le reste du
         // payload (dont `exp`, §timer) reste typé inconnu.
         const payload =
           await jwtService.verifyAsync<Record<string, unknown>>(token);
-        const sub = payload?.sub;
-        const email = payload?.email;
-        const role = payload?.role;
-        if (
-          typeof sub !== 'string' ||
-          sub.length === 0 ||
-          typeof email !== 'string' ||
-          email.length === 0 ||
-          typeof role !== 'string' ||
-          role.length === 0
-        ) {
+        const sub: unknown = payload?.sub;
+        const orgId: unknown = payload?.orgId;
+        // STRICT : string + 24 hex (jamais de cast). Une valeur non canonique
+        // (nombre, objet, chaîne vide, 12/24 caractères non-hex) est refusée
+        // AVANT toute requête DB et AVANT l'attachement du principal.
+        if (!isStrictObjectId(sub) || !isStrictObjectId(orgId)) {
           logger.warn(
             'Socket.IO: connection rejected — JWT payload missing required fields',
           );
@@ -182,10 +192,13 @@ export function installSocketAuthMiddleware(
           return;
         }
 
-        // 5 + 6. Principal minimal dans `socket.data.user` — JAMAIS de
-        //    `password`, du token ou du document Mongoose complet.
+        // 5 + 6. Principal dans `socket.data.user` — JAMAIS de `password`,
+        //    du token ou du document Mongoose complet. `email`/`role` sont
+        //    lus du document User (base) JAMAIS du token ; `orgId` vient du
+        //    JWT vérifié (future isolation par rooms `organization:{id}`).
         socket.data.user = {
           sub: user._id.toString(),
+          orgId,
           email: user.email,
           role: user.role,
         } satisfies SocketPrincipal;

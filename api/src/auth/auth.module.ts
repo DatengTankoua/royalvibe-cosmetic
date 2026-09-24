@@ -14,10 +14,12 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { UsersModule } from '../users/users.module';
+import { OrganizationsModule } from '../organizations/organizations.module';
 
 @Module({
   imports: [
     UsersModule,
+    OrganizationsModule,
     PassportModule,
     // Instance du JwtModule (secret `JWT_SECRET`, `signOptions.expiresIn: '7d'`)
     // — MÊME configuration que l'auth HTTP : le handshake Socket.IO (0B.3)
