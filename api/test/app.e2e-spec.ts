@@ -13,6 +13,8 @@ import { Organization } from './../src/organizations/schemas/organization.schema
 import type { OrganizationDocument } from './../src/organizations/schemas/organization.schema';
 import { OrganizationMembership } from './../src/organizations/schemas/membership.schema';
 import type { OrganizationMembershipDocument } from './../src/organizations/schemas/membership.schema';
+import { Section } from './../src/sections/schemas/section.schema';
+import type { SectionDocument } from './../src/sections/schemas/section.schema';
 import {
   MembershipStatus,
   OrganizationStatus,
@@ -1012,6 +1014,371 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
         .send({ organizationId: FORGED_ORG_ID });
       expect(forged.status).toBe(200);
       expect(forged.body.email).toBe(ADMIN_EMAIL);
+    });
+
+    // ---- 1-4A : isolation multi-tenant des Sections (première consommation
+    // de `@CurrentOrganization()` côté business). Le token admin (org A) est
+    // `adminToken` ; le token org B est obtenu par switch (aucune écriture
+    // persistante du switch). Chaque test crée ses sections puis les
+    // supprime précisément (mêmes _id), sans sleep.
+    describe('11. Isolation multi-tenant des Sections (1-4A)', () => {
+      const clearThrottle = (): void => {
+        moduleFixture.get(ThrottlerStorage).onApplicationShutdown();
+      };
+      beforeEach(clearThrottle);
+
+      const MISSING_SECTION_ID = 'ffffffffffffffffffffffff';
+      const sectionModel = (): Model<SectionDocument> =>
+        moduleFixture.get(getModelToken(Section.name));
+
+      // Token admin portant l'org `orgId` (switch depuis le token A —
+      // l'admin a des memberships actives sur A et B).
+      const getTokenFor = async (orgId: string): Promise<string> => {
+        const res = await request(app.getHttpServer())
+          .post('/auth/switch-organization')
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({ organizationId: orgId });
+        expect(res.status).toBe(200);
+        return res.body.access_token as string;
+      };
+
+      // POST /sections qui piste les _id créés (201) pour le nettoyage.
+      const trackedCreate = (
+        token: string,
+        body: Record<string, unknown>,
+        created: string[],
+      ) =>
+        request(app.getHttpServer())
+          .post('/sections')
+          .set('Authorization', `Bearer ${token}`)
+          .send(body)
+          .then((res) => {
+            const id = (res.body as { _id?: unknown })._id;
+            if (res.status === 201 && typeof id === 'string') created.push(id);
+            return res;
+          });
+
+      const cleanupSections = async (created: string[]): Promise<void> => {
+        if (created.length === 0) return;
+        await sectionModel().deleteMany({
+          _id: { $in: created.map((id) => new Types.ObjectId(id)) },
+        });
+      };
+
+      it('1. A ne liste que ses sections ; B ne liste que les siennes', async () => {
+        const tB = await getTokenFor(ORG_B_ID);
+        const created: string[] = [];
+        try {
+          const aRes = await trackedCreate(
+            adminToken,
+            { name: 'A-sect-1' },
+            created,
+          );
+          expect(aRes.status).toBe(201);
+          const aChild = await trackedCreate(
+            adminToken,
+            { name: 'A-enf', parentId: aRes.body._id },
+            created,
+          );
+          expect(aChild.status).toBe(201);
+          const b1 = await trackedCreate(tB, { name: 'B-sect-1' }, created);
+          expect(b1.status).toBe(201);
+          const b2 = await trackedCreate(tB, { name: 'B-sect-2' }, created);
+          expect(b2.status).toBe(201);
+
+          // Liste par défaut = sections racine (parentId nul — contrat actuel).
+          const listA = await request(app.getHttpServer())
+            .get('/sections')
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(listA.status).toBe(200);
+          const namesA = (listA.body as Array<{ name: string }>).map(
+            (s) => s.name,
+          );
+          expect(namesA).toContain('A-sect-1');
+          expect(namesA).not.toContain('B-sect-1');
+          expect(namesA).not.toContain('B-sect-2');
+
+          const listB = await request(app.getHttpServer())
+            .get('/sections')
+            .set('Authorization', `Bearer ${tB}`);
+          expect(listB.status).toBe(200);
+          const namesB = (listB.body as Array<{ name: string }>).map(
+            (s) => s.name,
+          );
+          expect(namesB).toContain('B-sect-1');
+          expect(namesB).toContain('B-sect-2');
+          expect(namesB).not.toContain('A-sect-1');
+
+          // Liste `?parentId=` isolée par tenant : A voit ses enfants ;
+          // B, sur le MÊME parent A, ne voit RIEN (parent invisible).
+          const parentAId: string = (aRes.body as { _id: string })._id;
+          const childA = await request(app.getHttpServer())
+            .get(`/sections?parentId=${parentAId}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(childA.status).toBe(200);
+          const childANames = (childA.body as Array<{ name: string }>).map(
+            (s) => s.name,
+          );
+          expect(childANames).toContain('A-enf');
+
+          const childBForA = await request(app.getHttpServer())
+            .get(`/sections?parentId=${parentAId}`)
+            .set('Authorization', `Bearer ${tB}`);
+          expect(childBForA.status).toBe(200);
+          expect(childBForA.body).toEqual([]);
+        } finally {
+          await cleanupSections(created);
+        }
+      });
+
+      it('3. A ne consulte pas une section B par son ID : même 404 qu’absente', async () => {
+        const tB = await getTokenFor(ORG_B_ID);
+        const created: string[] = [];
+        try {
+          const bRes = await trackedCreate(tB, { name: 'B-cible' }, created);
+          expect(bRes.status).toBe(201);
+          const idB: string = (bRes.body as { _id: string })._id;
+
+          const foreign = await request(app.getHttpServer())
+            .get(`/sections/${idB}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          const missing = await request(app.getHttpServer())
+            .get(`/sections/${MISSING_SECTION_ID}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+
+          // Indistinguable d'une ressource inexistante : même code et même
+          // structure de message (écho de l'id demandé — contrat actuel).
+          expect(missing.status).toBe(404);
+          expect(foreign.status).toBe(404);
+          expect(foreign.body.statusCode).toBe(missing.body.statusCode);
+          expect(foreign.body.error).toBe(missing.body.error);
+          expect(foreign.body.message).toBe(`Section ${idB} not found`);
+          expect(missing.body.message).toBe(
+            `Section ${MISSING_SECTION_ID} not found`,
+          );
+          // Aucune donnée de la section B n'est exposée :
+          expect(JSON.stringify(foreign.body)).not.toContain('B-cible');
+        } finally {
+          await cleanupSections(created);
+        }
+      });
+
+      it('4. A ne modifie pas une section B : 404 et document strictement inchangé', async () => {
+        const tB = await getTokenFor(ORG_B_ID);
+        const created: string[] = [];
+        try {
+          const bRes = await trackedCreate(tB, { name: 'B-mod' }, created);
+          const idB: string = (bRes.body as { _id: string })._id;
+
+          const patched = await request(app.getHttpServer())
+            .patch(`/sections/${idB}`)
+            .set('Authorization', `Bearer ${adminToken}`)
+            .send({ name: 'Volé', description: 'hacked' });
+          expect(patched.status).toBe(404);
+
+          // Le document B n'a subi AUCUN changement :
+          const docB = await sectionModel().findOne({ _id: idB });
+          expect(docB).toBeTruthy();
+          expect(docB!.name).toBe('B-mod');
+          expect(docB!.description).toBe('');
+          expect(docB!.deletedAt).toBeNull();
+        } finally {
+          await cleanupSections(created);
+        }
+      });
+
+      it('5. A ne supprime, ne restaure ni ne purgue une section B : 3 × 404, document B toujours présent et inchangé', async () => {
+        const tB = await getTokenFor(ORG_B_ID);
+        const created: string[] = [];
+        try {
+          const bRes = await trackedCreate(tB, { name: 'B-del' }, created);
+          const idB: string = (bRes.body as { _id: string })._id;
+
+          // L'état du document B après CHACUNE des 3 opérations A.
+          const expectDocBIntact = async (): Promise<void> => {
+            const docB = await sectionModel().findOne({ _id: idB });
+            expect(docB).toBeTruthy();
+            expect(docB!.name).toBe('B-del');
+            expect(docB!.description).toBe('');
+            expect(docB!.deletedAt).toBeNull();
+          };
+
+          // 1) Soft delete inter-organisation → 404, document intact :
+          const delRes = await request(app.getHttpServer())
+            .delete(`/sections/${idB}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(delRes.status).toBe(404);
+          await expectDocBIntact();
+
+          // 2) Restauration inter-organisation → 404, document intact :
+          const restoreRes = await request(app.getHttpServer())
+            .patch(`/sections/${idB}/restore`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(restoreRes.status).toBe(404);
+          await expectDocBIntact();
+
+          // 3) Suppression définitive inter-organisation → 404,
+          //    document TOUT ENCORE PRÉSENT et intact :
+          const permRes = await request(app.getHttpServer())
+            .delete(`/sections/${idB}/permanent`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(permRes.status).toBe(404);
+          await expectDocBIntact();
+        } finally {
+          await cleanupSections(created);
+        }
+      });
+
+      it('6. une création par A reçoit TOUJOURS organizationId = A (vérifiée en base)', async () => {
+        const created: string[] = [];
+        try {
+          const res = await trackedCreate(
+            adminToken,
+            { name: 'A-tenant', description: 'owned by A' },
+            created,
+          );
+          expect(res.status).toBe(201);
+          const docA = await sectionModel().findOne({
+            _id: (res.body as { _id: string })._id,
+          });
+          expect(docA).toBeTruthy();
+          expect(String(docA!.organizationId)).toBe(ORG_A_ID);
+        } finally {
+          await cleanupSections(created);
+        }
+      });
+
+      it('7. organizationId: B envoyée dans le body → 400 et jamais utilisée (ni en A, ni en B)', async () => {
+        const res = await request(app.getHttpServer())
+          .post('/sections')
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({
+            name: 'Fausse',
+            description: '',
+            organizationId: ORG_B_ID,
+          });
+        expect(res.status).toBe(400);
+        // Jamais persistée ni dans A (tenant serveur) ni dans B :
+        const orgA = await sectionModel()
+          .find({ organizationId: new Types.ObjectId(ORG_A_ID) })
+          .exec();
+        const orgB = await sectionModel()
+          .find({ organizationId: new Types.ObjectId(ORG_B_ID) })
+          .exec();
+        expect(orgA.map((s) => s.name)).not.toContain('Fausse');
+        expect(orgB.map((s) => s.name)).not.toContain('Fausse');
+      });
+
+      it('8. A ne crée pas de sous-section sous un parent B : 404, rien n’est créé', async () => {
+        const tB = await getTokenFor(ORG_B_ID);
+        const created: string[] = [];
+        try {
+          const bParent = await trackedCreate(
+            tB,
+            { name: 'B-parent' },
+            created,
+          );
+          const idBParent: string = (bParent.body as { _id: string })._id;
+
+          const res = await trackedCreate(
+            adminToken,
+            { name: 'A-orphelin', parentId: idBParent },
+            created,
+          );
+          expect(res.status).toBe(404);
+          expect(res.body.message).toBe(`Section ${idBParent} not found`);
+
+          // Aucune section A « A-orphelin » n'a été créée :
+          const orphan = await sectionModel()
+            .find({
+              organizationId: new Types.ObjectId(ORG_A_ID),
+              name: 'A-orphelin',
+            })
+            .exec();
+          expect(orphan.length).toBe(0);
+        } finally {
+          await cleanupSections(created);
+        }
+      });
+
+      it('9. un même nom dans A et B reste indépendant (pas de collision)', async () => {
+        const tB = await getTokenFor(ORG_B_ID);
+        const created: string[] = [];
+        try {
+          const aRes = await trackedCreate(
+            adminToken,
+            { name: 'Même nom' },
+            created,
+          );
+          expect(aRes.status).toBe(201);
+          const bRes = await trackedCreate(tB, { name: 'Même nom' }, created);
+          expect(bRes.status).toBe(201);
+          const idA: string = (aRes.body as { _id: string })._id;
+          const idB: string = (bRes.body as { _id: string })._id;
+          expect(idA).not.toBe(idB);
+
+          // Chacune reste modifiable dans son org :
+          const patchedA = await request(app.getHttpServer())
+            .patch(`/sections/${idA}`)
+            .set('Authorization', `Bearer ${adminToken}`)
+            .send({ name: 'A-renommé' });
+          expect(patchedA.status).toBe(200);
+          expect(patchedA.body.name).toBe('A-renommé');
+          const docB = await sectionModel().findOne({ _id: idB });
+          expect(docB!.name).toBe('Même nom');
+        } finally {
+          await cleanupSections(created);
+        }
+      });
+
+      it('10. rôles et statuts HTTP historiques inchangés (lecture seller OK, écriture seller 403, cycle admin 201/200)', async () => {
+        const created: string[] = [];
+        try {
+          // Lecture seller : autorisée (contrat actuel, sans RolesGuard).
+          const sellerList = await request(app.getHttpServer())
+            .get('/sections')
+            .set('Authorization', `Bearer ${sellerToken}`);
+          expect(sellerList.status).toBe(200);
+
+          // Écriture seller : 403 (rôles actuels conservés).
+          const sellerCreate = await request(app.getHttpServer())
+            .post('/sections')
+            .set('Authorization', `Bearer ${sellerToken}`)
+            .send({ name: 'Interdit' });
+          expect(sellerCreate.status).toBe(403);
+
+          // Cycle admin : 201 → 404 si id inconnu → cycle 200 → purge 200.
+          const missingDel = await request(app.getHttpServer())
+            .delete(`/sections/${MISSING_SECTION_ID}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(missingDel.status).toBe(404);
+
+          const cRes = await trackedCreate(
+            adminToken,
+            { name: 'A-cycle' },
+            created,
+          );
+          expect(cRes.status).toBe(201);
+          const idC: string = (cRes.body as { _id: string })._id;
+          const delRes = await request(app.getHttpServer())
+            .delete(`/sections/${idC}`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(delRes.status).toBe(200);
+          const restoreRes = await request(app.getHttpServer())
+            .patch(`/sections/${idC}/restore`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(restoreRes.status).toBe(200);
+          const permRes = await request(app.getHttpServer())
+            .delete(`/sections/${idC}/permanent`)
+            .set('Authorization', `Bearer ${adminToken}`);
+          expect(permRes.status).toBe(200);
+          // Le document est effectivement purgé :
+          const gone = await sectionModel().findOne({ _id: idC });
+          expect(gone).toBeNull();
+        } finally {
+          await cleanupSections(created);
+        }
+      });
     });
   });
 });
