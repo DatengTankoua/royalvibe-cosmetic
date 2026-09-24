@@ -12,6 +12,7 @@ import {
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { OrganizationGuard } from './guards/organization.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { UsersModule } from '../users/users.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
@@ -43,7 +44,15 @@ import { OrganizationsModule } from '../organizations/organizations.module';
     AuthService,
     JwtStrategy,
     AuthThrottlerGuard,
+    // Ordre global FIXÉ (NestJS exécute dans l'ordre du tableau) :
+    // 1. JwtAuthGuard → 401 si absent/invalide / laisse passer si @Public()
+    // 2. OrganizationGuard → 403 uniforme si membership/organisation inactive
+    //    ; brancher `request.organizationContext` (jamais de mutation sur
+    //    `request.user`).
+    // 3. RolesGuard → contrôle du rôle `User.role` du document chargé.
+    // L'ordre est contractuel : les tests E2E / unitaires l'assertent.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: OrganizationGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
   controllers: [AuthController],

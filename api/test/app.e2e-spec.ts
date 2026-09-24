@@ -14,6 +14,10 @@ import type { OrganizationDocument } from './../src/organizations/schemas/organi
 import { OrganizationMembership } from './../src/organizations/schemas/membership.schema';
 import type { OrganizationMembershipDocument } from './../src/organizations/schemas/membership.schema';
 import {
+  MembershipStatus,
+  OrganizationStatus,
+} from './../src/organizations/permissions';
+import {
   E2E_DB_NAME,
   startEphemeralMongo,
   stopEphemeralMongoSafe,
@@ -66,6 +70,9 @@ const E2E_CORS_ORIGIN = 'https://e2e.example.com';
 // sans référence RoyalVibe).
 const ORG_A_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const ORG_B_ID = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+// 1-3B.2 : organisation FALSIFIÉE (valeur fournie par le client) — la garde
+// ne doit jamais l'utiliser (seul le claim signé du JWT compte).
+const FORGED_ORG_ID = 'cc0000000000000000000000';
 const MULTI_EMAIL = 'multi-e2e@royalvibe.test';
 const MULTI_PW = 'multi-e2e-pw-!1x';
 
@@ -759,6 +766,252 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
         });
       expect(res.status).toBe(400);
       expect(messageOf(res.body)).toContain('userId');
+    });
+  });
+
+  // 1-3B.2 — Garde organisationnelle HTTP : contexte attaché + refus uniforme.
+  // Aucune infra MongoDB nouvelle : on réutilise les fixtures A/B/admin/seller.
+  // Chaque test modifie un fixture (membership / org) puis le RESTAURE
+  // précisément (pas de sleep, pas d'infra additionnelle). Les tests d'avant
+  // (login + switch) restent verts grâce à cette restauration.
+  describe('10. Contexte organisationnel HTTP (1-3B.2)', () => {
+    const clearThrottle = (): void => {
+      const s = moduleFixture.get(ThrottlerStorage);
+      s.onApplicationShutdown();
+    };
+    beforeEach(clearThrottle);
+
+    const membershipModel = (): Model<OrganizationMembershipDocument> =>
+      moduleFixture.get(getModelToken(OrganizationMembership.name));
+    const organizationModel = (): Model<OrganizationDocument> =>
+      moduleFixture.get(getModelToken(Organization.name));
+    const users = (): Model<UserDocument> =>
+      moduleFixture.get(getModelToken('User'));
+
+    // `organizationId` de la membership seller→A (cible des mutations).
+    const sellerMembershipA = async () => {
+      const doc = await users().findOne({ email: SELLER_EMAIL });
+      expect(doc).toBeTruthy();
+      const found = await membershipModel().findOne({
+        organizationId: new Types.ObjectId(ORG_A_ID),
+        userId: doc!._id,
+      });
+      expect(found).toBeTruthy();
+      return found!;
+    };
+
+    // Mutation `try/finally` : même si l'assertion échoue, le fixture est
+    // restauré (pas de sleep — les mutations Mongoose sont synchro-réseau).
+    const withMembershipStatus = async (
+      membership: OrganizationMembershipDocument,
+      status: 'suspended' | 'revoked',
+      fn: () => Promise<void>,
+    ): Promise<void> => {
+      const original = membership.status;
+      membership.status =
+        status === 'suspended'
+          ? MembershipStatus.SUSPENDED
+          : MembershipStatus.REVOKED;
+      try {
+        await membership.save();
+        await fn();
+      } finally {
+        membership.status = original;
+        await membership.save();
+      }
+    };
+
+    const withOrgSuspended = async (
+      organization: OrganizationDocument,
+      fn: () => Promise<void>,
+    ): Promise<void> => {
+      const original = organization.status;
+      organization.status = OrganizationStatus.SUSPENDED;
+      try {
+        await organization.save();
+        await fn();
+      } finally {
+        organization.status = original;
+        await organization.save();
+      }
+    };
+
+    /**
+     * Cas A : membership + org actives → GET /auth/me 200 (contrat 1-3B.1
+     * intact : le handler renvoie le User Document de `request.user`).
+     * `@CurrentOrganization()` n'est pas encore consommé côté E2E à ce
+     * stade : la phase 1-4 (première consommation, endpoints business)
+     * couvrira ce décorateur de bout en bout.
+     */
+    it('A — membership + org actives → GET /auth/me 200 et le corps USER du JWT', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${sellerToken}`);
+      expect(res.status).toBe(200);
+      expect(res.body.email).toBe(SELLER_EMAIL);
+    });
+
+    /**
+     * Cas B : membership SUSPENDUE → 403 exact code + message + absence de
+     * `access_token` / `user` dans le corps (le 403 remonte UNIFORME).
+     * Restoration AUTOMATIQUE du fixture.
+     */
+    it('B — membership SUSPENDUE → 403 ORGANIZATION_ACCESS_DENIED (corps exact)', async () => {
+      const membership = await sellerMembershipA();
+      await withMembershipStatus(membership, 'suspended', async () => {
+        const denied = await request(app.getHttpServer())
+          .get('/auth/me')
+          .set('Authorization', `Bearer ${sellerToken}`);
+        expect(denied.status).toBe(403);
+        expect(denied.body.code).toBe('ORGANIZATION_ACCESS_DENIED');
+        expect(denied.body.message).toBe("Accès à l'organisation refusé.");
+      });
+      // Post-restauration : fixture intact, seller à nouveau autorisé.
+      const back = await request(app.getHttpServer())
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${sellerToken}`);
+      expect(back.status).toBe(200);
+    });
+
+    it('C — membership RÉVOQUÉE → 403 uniforme (même corps)', async () => {
+      const membership = await sellerMembershipA();
+      await withMembershipStatus(membership, 'revoked', async () => {
+        const denied = await request(app.getHttpServer())
+          .get('/auth/me')
+          .set('Authorization', `Bearer ${sellerToken}`);
+        expect(denied.status).toBe(403);
+        expect(denied.body.code).toBe('ORGANIZATION_ACCESS_DENIED');
+        expect(denied.body.message).toBe("Accès à l'organisation refusé.");
+      });
+      const back = await request(app.getHttpServer())
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${sellerToken}`);
+      expect(back.status).toBe(200);
+    });
+
+    it('D — membership SUPPRIMÉE → 403 uniforme (fixture restaurée)', async () => {
+      const sellerId = (await users().findOne({ email: SELLER_EMAIL }))!._id;
+      // Snapshot EXACT (même _id, tous champs) AVANT suppression : la
+      // restauration se fait par ré-insertion brute — plus fiable qu'une
+      // re-création Mongoose (readback instable constaté sur cette instance
+      // ; la doc origine est la source de vérité, _id non régénéré).
+      const rawMemberships = moduleFixture
+        .get(getConnectionToken())
+        .getClient()
+        .db(E2E_DB_NAME)
+        .collection('organizationmemberships');
+      const snapshot = await rawMemberships
+        .find({
+          organizationId: new Types.ObjectId(ORG_A_ID),
+          userId: sellerId,
+        })
+        .toArray();
+      expect(snapshot.length).toBe(1);
+      // Suppression par la collection brute (même _id) — canal unique de
+      // mutation/restauration de ce fixture (évite l'API `deleteOne` d'un
+      // document Mongoose, indisponible ici).
+      await rawMemberships.deleteOne({ _id: snapshot[0]._id });
+      try {
+        const denied = await request(app.getHttpServer())
+          .get('/auth/me')
+          .set('Authorization', `Bearer ${sellerToken}`);
+        expect(denied.status).toBe(403);
+        expect(denied.body.code).toBe('ORGANIZATION_ACCESS_DENIED');
+        expect(denied.body.message).toBe("Accès à l'organisation refusé.");
+      } finally {
+        await rawMemberships.insertMany(snapshot);
+        // Invariant de restauration : la doc d'origine (même _id) est de
+        // nouveau présente et `active` — lue via LE MÊME canal que la
+        // résolution (`resolveActiveContext` lit par le modèle Mongoose de
+        // la connexion Nest, base physique identique).
+        const restoredRaw = await rawMemberships
+          .find({
+            // `_id` BSON non typé (any) : String() → string strict.
+            _id: new Types.ObjectId(String(snapshot[0]._id)),
+          })
+          .toArray();
+        expect(restoredRaw.length).toBe(1);
+        // Docs brutes BSON (non typées) : extraction `unknown` typée pour
+        // l'assertion (pas d'arg `any` passé en paramètre).
+        const restoredStatus: unknown = (restoredRaw[0] as { status: unknown })
+          .status;
+        expect(restoredStatus).toBe('active');
+      }
+      const back = await request(app.getHttpServer())
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${sellerToken}`);
+      expect(back.status).toBe(200);
+    });
+
+    it('E — org SUSPENDUE → 403 uniforme (org A ré-activée en fin de test)', async () => {
+      const orgA = await organizationModel().findById(
+        new Types.ObjectId(ORG_A_ID),
+      );
+      expect(orgA).toBeTruthy();
+      await withOrgSuspended(orgA!, async () => {
+        const denied = await request(app.getHttpServer())
+          .get('/auth/me')
+          .set('Authorization', `Bearer ${sellerToken}`);
+        expect(denied.status).toBe(403);
+        expect(denied.body.code).toBe('ORGANIZATION_ACCESS_DENIED');
+        expect(denied.body.message).toBe("Accès à l'organisation refusé.");
+      });
+      const back = await request(app.getHttpServer())
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${sellerToken}`);
+      expect(back.status).toBe(200);
+    });
+
+    /**
+     * Cas F : SANS JWT → 401 (JwtAuthGuard refuse AVANT la guard).
+     * La 403 n'arrive pas — `OrganizationGuard` ne s'exécute même pas.
+     */
+    it('F — sans JWT → 401 (JwtAuthGuard refuse avant la guard)', () =>
+      request(app.getHttpServer()).get('/auth/me').expect(401));
+
+    /**
+     * Cas G : `/auth/login` reste PUBLIQUE et conserve le contrat 1-3B.1
+     * (201 + corps `{ access_token, user }`). Les routes @Public() sont
+     * exclues de la guard (mécanisme `IS_PUBLIC_KEY` — cf. `JwtAuthGuard`).
+     * Le `user` retourné ne doit pas exposer `password` ni `organizationId`.
+     */
+    it('G — POST /auth/login reste PUBLIQUE (201, contrat 1-3B.1 intact)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: SELLER_EMAIL, password: 'seller-e2e-pw-!1x' });
+      expect(res.status).toBe(201);
+      expect(typeof res.body.access_token).toBe('string');
+      expect(res.body.user.email).toBe(SELLER_EMAIL);
+      // Le corps `user` ne doit PAS exposer le hash (sanitize 1-3B.1) ni
+      // la transient `organizationId` du principal (serveur uniquement,
+      // jamais sérialisée dans le corps).
+      expect(res.body.user.password).toBeUndefined();
+      expect(res.body.user.organizationId).toBeUndefined();
+      expect(JSON.stringify(res.body.user)).not.toContain('organizationId');
+    });
+
+    /**
+     * Cas H : `organizationId` FALSIFIÉE dans le body / header / query /
+     * params ne remplace JAMAIS l'org du JWT. La guard ne se fie qu'au
+     * principal (`request.user.organizationId`), attaché par la stratégie.
+     *
+     * `/auth/me` (GET) n'accepte pas de body/query — les headers et les
+     * `Authorization` falsifiés couvrent le cas ; la `orgId` signée reste
+     * celle d'origine (`ORG_A_ID`, non remplacée). Le cas "query/params
+     * falsifiés" se verra à la phase 1-4 sur les endpoints business qui
+     * ont de telles routes (ex. `?organizationId=forged`).
+     */
+    it("H — organizationId FALSIFIÉE (body/header/query) ne remplace JAMAIS l'org signée", async () => {
+      // Body + 2 headers falsifiés sur un GET : le corps du 200 reste celui
+      // de l'admin (org A signée). `organizationId` n'est jamais lu.
+      const forged = await request(app.getHttpServer())
+        .get('/auth/me?organizationId=' + FORGED_ORG_ID)
+        .set('x-organization-id', FORGED_ORG_ID)
+        .set('organization-id', FORGED_ORG_ID)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ organizationId: FORGED_ORG_ID });
+      expect(forged.status).toBe(200);
+      expect(forged.body.email).toBe(ADMIN_EMAIL);
     });
   });
 });

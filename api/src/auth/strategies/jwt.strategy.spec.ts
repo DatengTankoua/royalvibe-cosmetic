@@ -53,7 +53,10 @@ describe('JwtStrategy', () => {
       role: 'admin',
     } as never);
 
-    expect(user).toEqual(makeUser());
+    // Le claim `orgId` signé est attaché au principal sous `organizationId`
+    // (1-3B.2) : c'est la source UNIQUE de l'organisation pour
+    // `OrganizationGuard` (jamais d'origine client).
+    expect(user).toEqual({ ...makeUser(), organizationId: ORG_ID });
     expect(usersService.findById).toHaveBeenCalledTimes(1);
     expect(usersService.findById).toHaveBeenCalledWith(USER_ID);
     // le rôle retourné provient DU DOCUMENT CHARGÉ (ici 'seller'), JAMAIS du
