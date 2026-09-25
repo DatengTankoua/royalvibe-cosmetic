@@ -206,6 +206,7 @@ export class ProductsService {
     id: string,
     dto: UpdateProductDto,
     actorId: string,
+    newImageUrl?: string,
   ): Promise<ProductWithMetrics> {
     // §4 — relecture composite tenant : produit étranger = 404, pas de fuite.
     const product = await this.productModel
@@ -217,6 +218,8 @@ export class ProductsService {
     if (!product) throw new NotFoundException(`Product ${id} not found`);
 
     const changes: Record<string, unknown> = {};
+    const previousImageUrl = product.imageUrl;
+    if (newImageUrl) product.imageUrl = newImageUrl;
 
     if (dto.name && dto.name !== product.name) {
       changes.name = { from: product.name, to: dto.name };
@@ -300,6 +303,13 @@ export class ProductsService {
     // §5 — `organizationId` n'est JAMAIS attribuée ici : le $set implicite de
     // `save()` ne porte que les champs mutés ci-dessus.
     const saved = await product.save();
+    // Ancienne image supprimée SEULEMENT après succès de la mutation.
+    if (newImageUrl && previousImageUrl !== newImageUrl) {
+      await this.s3Service.deleteFile(
+        previousImageUrl,
+        `organizations/${organizationId}/products`,
+      );
+    }
     const enriched = this.withMetrics(saved);
     this.eventsGateway.emitToOrganization(
       organizationId,
@@ -384,7 +394,10 @@ export class ProductsService {
       .findOne({ _id: id, organizationId: new Types.ObjectId(organizationId) })
       .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
-    await this.s3Service.deleteFile(product.imageUrl);
+    await this.s3Service.deleteFile(
+      product.imageUrl,
+      `organizations/${organizationId}/products`,
+    );
     const deleted = await this.productModel
       .findOneAndDelete({
         _id: id,

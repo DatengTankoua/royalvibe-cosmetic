@@ -13,6 +13,11 @@ export class S3Service {
   private readonly bucket: string;
   private readonly endpoint: string;
   private readonly publicUrlBase: string;
+  // Origine + chemin de base RÉELLEMENT utilisés pour produire les URLs
+  // (cf. `uploadFile`) : seule frontière acceptée par `deleteFile`.
+  // `undefined` si la config est un URL invalide → suppressions refusées.
+  private readonly publicUrlOrigin: string | undefined;
+  private readonly publicUrlBasePath: string | undefined;
 
   constructor(private configService: ConfigService) {
     this.bucket = this.configService.get<string>('S3_BUCKET')!;
@@ -21,6 +26,15 @@ export class S3Service {
       this.configService.get<string>('S3_PUBLIC_URL') ??
       `${this.endpoint}/${this.bucket}`
     ).replace(/\/+$/, '');
+
+    try {
+      const parsedBase = new URL(this.publicUrlBase);
+      this.publicUrlOrigin = parsedBase.origin;
+      this.publicUrlBasePath = `${parsedBase.pathname.replace(/\/+$/, '')}/`;
+    } catch {
+      this.publicUrlOrigin = undefined;
+      this.publicUrlBasePath = undefined;
+    }
 
     this.s3Client = new S3Client({
       endpoint: this.endpoint,
@@ -34,8 +48,16 @@ export class S3Service {
     });
   }
 
-  async uploadFile(file: Express.Multer.File): Promise<string> {
-    const key = `${randomUUID()}-${file.originalname}`;
+  /**
+   * `keyPrefix` (ex. `organizations/<orgId>/products`) est fourni par
+   * l'appelant : ce service reste agnostique du tenant, la frontière org
+   * est imposée côté appelant (jamais déduite d'un DTO/nom de fichier ici).
+   */
+  async uploadFile(
+    file: Express.Multer.File,
+    keyPrefix: string,
+  ): Promise<string> {
+    const key = `${keyPrefix}/${randomUUID()}-${this.sanitizeFilename(file.originalname)}`;
 
     await this.s3Client.send(
       new PutObjectCommand({
@@ -49,8 +71,14 @@ export class S3Service {
     return `${this.publicUrlBase}/${key}`;
   }
 
-  async deleteFile(imageUrl: string): Promise<void> {
-    const key = imageUrl.split(`${this.bucket}/`)[1];
+  /**
+   * `allowedPrefix` doit correspondre EXACTEMENT au préfixe de tenant sous
+   * lequel la clé a été émise. Clé rejetée (URL étrangère/malformée/hors
+   * frontière/hors préfixe) : no-op silencieux, aucun appel réseau, jamais
+   * l'URL ni un secret journalisés.
+   */
+  async deleteFile(imageUrl: string, allowedPrefix: string): Promise<void> {
+    const key = this.extractTenantKey(imageUrl, allowedPrefix);
     if (!key) return;
 
     await this.s3Client.send(
@@ -59,5 +87,82 @@ export class S3Service {
         Key: key,
       }),
     );
+  }
+
+  /**
+   * Parse STRUCTURÉ (`new URL`, jamais un `split`/`includes` naïf) : origine
+   * ET chemin de base doivent correspondre EXACTEMENT à la configuration
+   * réellement utilisée pour produire les URLs (`publicUrlBase`), sinon une
+   * origine étrangère portant le même nom de bucket dans son chemin
+   * (`https://evil.example/<bucket>/...`) serait acceptée à tort. Ensuite
+   * seulement, la clé décodée doit porter `allowedPrefix + '/'` (jamais un
+   * `startsWith` nu). Toute anomalie (credentials, origine/chemin voisin,
+   * encodage invalide, clé plate) → `undefined`.
+   */
+  private extractTenantKey(
+    imageUrl: string,
+    allowedPrefix: string,
+  ): string | undefined {
+    if (!this.publicUrlOrigin || !this.publicUrlBasePath) return undefined;
+
+    let parsed: URL;
+    try {
+      parsed = new URL(imageUrl);
+    } catch {
+      return undefined;
+    }
+    if (parsed.username || parsed.password) return undefined;
+    if (parsed.origin !== this.publicUrlOrigin) return undefined;
+    if (!parsed.pathname.startsWith(this.publicUrlBasePath)) return undefined;
+
+    let key: string;
+    try {
+      key = decodeURIComponent(
+        parsed.pathname.slice(this.publicUrlBasePath.length),
+      );
+    } catch {
+      return undefined;
+    }
+    if (!key) return undefined;
+
+    const boundedPrefix = allowedPrefix.endsWith('/')
+      ? allowedPrefix
+      : `${allowedPrefix}/`;
+    if (!key.startsWith(boundedPrefix)) return undefined;
+
+    return key;
+  }
+
+  /**
+   * Nom de fichier serveur : basename seul (traversal/slashes neutralisés),
+   * caractères de contrôle et Unicode hors ASCII retirés, espaces en tirets ;
+   * extension utile préservée et nettoyée séparément.
+   */
+  private sanitizeFilename(originalName: string): string {
+    const base =
+      originalName
+        .split(/[/\\]/)
+        .filter((segment) => segment.length > 0 && segment !== '..')
+        .pop() ?? '';
+    // eslint-disable-next-line no-control-regex -- neutralise volontairement les caractères de contrôle du nom de fichier
+    const noControl = base.normalize('NFKC').replace(/[\x00-\x1f\x7f]/g, '');
+
+    const dotIndex = noControl.lastIndexOf('.');
+    const hasExtension = dotIndex > 0 && dotIndex < noControl.length - 1;
+    const stem = hasExtension ? noControl.slice(0, dotIndex) : noControl;
+    const rawExtension = hasExtension ? noControl.slice(dotIndex + 1) : '';
+
+    const cleanStem =
+      stem
+        .replace(/\s+/g, '-')
+        .replace(/[^a-zA-Z0-9._-]/g, '')
+        .replace(/\.+/g, '.')
+        .replace(/^[.-]+|[.-]+$/g, '') || 'file';
+    const cleanExtension = rawExtension
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .slice(0, 10)
+      .toLowerCase();
+
+    return cleanExtension ? `${cleanStem}.${cleanExtension}` : cleanStem;
   }
 }

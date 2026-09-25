@@ -52,6 +52,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
 
   const s3Stub = {
     uploadFile: jest.fn().mockResolvedValue('http://s3-e2e/key.png'),
+    deleteFile: jest.fn().mockResolvedValue(undefined),
   };
 
   beforeEach(async () => {
@@ -60,6 +61,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       serviceStub[key].mockResolvedValue(undefined);
     }
     s3Stub.uploadFile.mockReset().mockResolvedValue('http://s3-e2e/key.png');
+    s3Stub.deleteFile.mockReset().mockResolvedValue(undefined);
     const module: TestingModule = await Test.createTestingModule({
       controllers: [ProductsController],
       providers: [
@@ -83,6 +85,10 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     };
     await controller.create(dto, file, user, ctxA);
     expect(s3Stub.uploadFile).toHaveBeenCalledTimes(1);
+    expect(s3Stub.uploadFile).toHaveBeenCalledWith(
+      file,
+      `organizations/${ORG_A}/products`,
+    );
     expect(serviceStub.create).toHaveBeenCalledTimes(1);
     expect(serviceStub.create).toHaveBeenCalledWith(
       ORG_A,
@@ -90,6 +96,40 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       'http://s3-e2e/key.png',
       actorId,
     );
+    expect(s3Stub.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('create : mutation métier échouée après upload → supprime UNIQUEMENT la nouvelle image sous le préfixe tenant, repropage l’erreur', async () => {
+    const dto = {
+      sectionId: SECTION_QUERY,
+      name: 'N',
+      purchasePrice: 5,
+      salePrice: 10,
+      initialQuantity: 7,
+    };
+    const error = new Error('create failed');
+    serviceStub.create.mockRejectedValueOnce(error);
+    await expect(controller.create(dto, file, user, ctxA)).rejects.toBe(error);
+    expect(s3Stub.deleteFile).toHaveBeenCalledTimes(1);
+    expect(s3Stub.deleteFile).toHaveBeenCalledWith(
+      'http://s3-e2e/key.png',
+      `organizations/${ORG_A}/products`,
+    );
+  });
+
+  it('create : uploadFile échoue AVANT toute URL → aucune suppression, erreur repropagée', async () => {
+    const dto = {
+      sectionId: SECTION_QUERY,
+      name: 'N',
+      purchasePrice: 5,
+      salePrice: 10,
+      initialQuantity: 7,
+    };
+    const error = new Error('upload failed');
+    s3Stub.uploadFile.mockReset().mockRejectedValueOnce(error);
+    await expect(controller.create(dto, file, user, ctxA)).rejects.toBe(error);
+    expect(serviceStub.create).not.toHaveBeenCalled();
+    expect(s3Stub.deleteFile).not.toHaveBeenCalled();
   });
 
   it('findAll : transmet l’org du contexte + sectionId de la query inchangée', async () => {
@@ -106,15 +146,57 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     expect(serviceStub.findOne).toHaveBeenCalledWith(ORG_A, PRODUCT_ID);
   });
 
-  it('update : transmet l’org du contexte AVANT id, DTO et actorId', async () => {
+  it('update sans image : ne touche pas S3, transmet newImageUrl undefined', async () => {
     const dto = { name: 'N2' };
-    await controller.update(PRODUCT_ID, dto, user, ctxA);
+    await controller.update(PRODUCT_ID, dto, undefined, user, ctxA);
+    expect(s3Stub.uploadFile).not.toHaveBeenCalled();
     expect(serviceStub.update).toHaveBeenCalledWith(
       ORG_A,
       PRODUCT_ID,
       dto,
       actorId,
+      undefined,
     );
+  });
+
+  it('update avec nouvelle image : upload sous le préfixe de l’org puis transmission de newImageUrl', async () => {
+    const dto = { name: 'N2' };
+    await controller.update(PRODUCT_ID, dto, file, user, ctxA);
+    expect(s3Stub.uploadFile).toHaveBeenCalledWith(
+      file,
+      `organizations/${ORG_A}/products`,
+    );
+    expect(serviceStub.update).toHaveBeenCalledWith(
+      ORG_A,
+      PRODUCT_ID,
+      dto,
+      actorId,
+      'http://s3-e2e/key.png',
+    );
+    expect(s3Stub.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('update avec nouvelle image : mutation échouée → supprime la nouvelle image et repropage l’erreur', async () => {
+    const dto = { name: 'N2' };
+    const error = new Error('mutation failed');
+    serviceStub.update.mockRejectedValueOnce(error);
+    await expect(
+      controller.update(PRODUCT_ID, dto, file, user, ctxA),
+    ).rejects.toBe(error);
+    expect(s3Stub.deleteFile).toHaveBeenCalledWith(
+      'http://s3-e2e/key.png',
+      `organizations/${ORG_A}/products`,
+    );
+  });
+
+  it('update sans image : mutation échouée ne déclenche aucun appel S3', async () => {
+    const dto = { name: 'N2' };
+    const error = new Error('mutation failed');
+    serviceStub.update.mockRejectedValueOnce(error);
+    await expect(
+      controller.update(PRODUCT_ID, dto, undefined, user, ctxA),
+    ).rejects.toBe(error);
+    expect(s3Stub.deleteFile).not.toHaveBeenCalled();
   });
 
   it('remove : transmet l’org du contexte AVANT id et actorId', async () => {

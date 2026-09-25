@@ -483,6 +483,47 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       'product:updated',
       expect.any(Object),
     );
+    expect(s3Service.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it("update avec newImageUrl : remplace imageUrl et supprime l'ancienne APRÈS save, sous le préfixe de l'org", async () => {
+    await build();
+    const doc = productDoc();
+    const previousImageUrl = doc.imageUrl as string;
+    productOneChain.exec.mockResolvedValue(doc);
+
+    const res = await service.update(
+      ORG_A,
+      PRODUCT_ID,
+      { name: 'Nouveau' },
+      'actor',
+      'http://s3-e2e/new.png',
+    );
+
+    expect(doc.imageUrl).toBe('http://s3-e2e/new.png');
+    expect(doc.save).toHaveBeenCalledTimes(1);
+    expect(s3Service.deleteFile).toHaveBeenCalledTimes(1);
+    expect(s3Service.deleteFile).toHaveBeenCalledWith(
+      previousImageUrl,
+      `organizations/${ORG_A}/products`,
+    );
+    expect(res.product.imageUrl).toBe('http://s3-e2e/new.png');
+  });
+
+  it("update avec newImageUrl identique à l'existante : aucune suppression S3", async () => {
+    await build();
+    const doc = productDoc({ imageUrl: 'http://s3-e2e/same.png' });
+    productOneChain.exec.mockResolvedValue(doc);
+
+    await service.update(
+      ORG_A,
+      PRODUCT_ID,
+      { name: 'Nouveau' },
+      'actor',
+      'http://s3-e2e/same.png',
+    );
+
+    expect(s3Service.deleteFile).not.toHaveBeenCalled();
   });
 
   it('update : mouvement vers une section étrangère → 404 `Section`, rien sauvegardé', async () => {
@@ -571,7 +612,10 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     const res = await service.permanentDelete(ORG_A, PRODUCT_ID);
     expect(res).toBe(doc);
     expect(s3Service.deleteFile).toHaveBeenCalledTimes(1);
-    expect(s3Service.deleteFile).toHaveBeenCalledWith(doc.imageUrl);
+    expect(s3Service.deleteFile).toHaveBeenCalledWith(
+      doc.imageUrl,
+      `organizations/${ORG_A}/products`,
+    );
     expect(productModel.findOneAndDelete).toHaveBeenCalledWith({
       _id: PRODUCT_ID,
       organizationId: new Types.ObjectId(ORG_A),

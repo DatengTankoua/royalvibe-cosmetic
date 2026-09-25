@@ -101,7 +101,10 @@ describe('ObjectsService', () => {
 
     const result = await service.remove('abc123');
 
-    expect(s3Service.deleteFile).toHaveBeenCalledWith(mockObject.imageUrl);
+    expect(s3Service.deleteFile).toHaveBeenCalledWith(
+      mockObject.imageUrl,
+      'legacy/objects',
+    );
     expect(model.findByIdAndDelete).toHaveBeenCalledWith('abc123');
     expect(result).toEqual(mockObject);
   });

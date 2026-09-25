@@ -39,6 +39,11 @@ export class ProductsController {
     private readonly s3Service: S3Service,
   ) {}
 
+  // Clé serveur (1-5B) : jamais dérivée du DTO/nom de fichier client.
+  private imageKeyPrefix(organizationId: string): string {
+    return `organizations/${organizationId}/products`;
+  }
+
   @Post()
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
@@ -61,13 +66,22 @@ export class ProductsController {
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
     if (!file) throw new BadRequestException('Image file is required');
-    const imageUrl = await this.s3Service.uploadFile(file);
-    return this.productsService.create(
-      organizationContext.organizationId,
-      dto,
-      imageUrl,
-      user._id.toString(),
-    );
+    const prefix = this.imageKeyPrefix(organizationContext.organizationId);
+    // Si `uploadFile` échoue, aucune URL n'existe encore : rien à nettoyer.
+    const imageUrl = await this.s3Service.uploadFile(file, prefix);
+    try {
+      return await this.productsService.create(
+        organizationContext.organizationId,
+        dto,
+        imageUrl,
+        user._id.toString(),
+      );
+    } catch (err) {
+      // Mutation échouée après upload : la nouvelle image ne doit jamais
+      // rester orpheline sur le tenant.
+      await this.s3Service.deleteFile(imageUrl, prefix);
+      throw err;
+    }
   }
 
   @Get()
@@ -94,18 +108,43 @@ export class ProductsController {
   @Patch(':id')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
-  update(
+  @UseInterceptors(
+    FileInterceptor('image', {
+      limits: { fileSize: MAX_IMAGE_SIZE },
+      fileFilter: (_req, file, cb) => {
+        if (!file.mimetype.startsWith('image/')) {
+          cb(new BadRequestException('Only image files are allowed'), false);
+          return;
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  async update(
     @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: UpdateProductDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
     @CurrentUser() user: User,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.productsService.update(
-      organizationContext.organizationId,
-      id,
-      dto,
-      user._id.toString(),
-    );
+    const prefix = this.imageKeyPrefix(organizationContext.organizationId);
+    const newImageUrl = file
+      ? await this.s3Service.uploadFile(file, prefix)
+      : undefined;
+    try {
+      return await this.productsService.update(
+        organizationContext.organizationId,
+        id,
+        dto,
+        user._id.toString(),
+        newImageUrl,
+      );
+    } catch (err) {
+      // Mutation échouée après upload : la nouvelle image ne doit jamais
+      // rester orpheline sur le tenant.
+      if (newImageUrl) await this.s3Service.deleteFile(newImageUrl, prefix);
+      throw err;
+    }
   }
 
   @Patch(':id/restore')

@@ -5,6 +5,9 @@ import { ObjectEntity, ObjectDocument } from './schemas/object.schema';
 import { CreateObjectDto } from './dto/create-object.dto';
 import { S3Service } from '../s3/s3.service';
 
+// Dette 1-5B : module orphelin (jamais importé dans AppModule), sans org.
+const LEGACY_OBJECTS_PREFIX = 'legacy/objects';
+
 @Injectable()
 export class ObjectsService {
   constructor(
@@ -39,7 +42,7 @@ export class ObjectsService {
 
   async remove(id: string): Promise<ObjectDocument> {
     const object = await this.findOne(id);
-    await this.s3Service.deleteFile(object.imageUrl);
+    await this.s3Service.deleteFile(object.imageUrl, LEGACY_OBJECTS_PREFIX);
     await this.objectModel.findByIdAndDelete(id).exec();
     return object;
   }
