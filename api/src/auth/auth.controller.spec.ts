@@ -24,6 +24,7 @@ describe('AuthController', () => {
     name: 'E2E User',
     email: 'e2e-register@royalvibe.test',
     password: 'secret-123',
+    organizationName: 'E2E Org',
   };
   const VALID_LOGIN: LoginDto = {
     email: 'seller@royalvibe.test',

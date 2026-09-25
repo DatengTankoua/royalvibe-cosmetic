@@ -181,6 +181,10 @@ describe('Phase 1-4E — portail transversal d’isolation multi-tenant', () => 
           name: 'Admin Gate 1-4E',
           email: ADMIN_EMAIL,
           password: ADMIN_PASSWORD,
+          // 1-6A : organizationName obligatoire ; l'org auto-cr\u00e9\u00e9e n'est
+          // jamais utilis\u00e9e (org A/B cr\u00e9\u00e9es manuellement ci-dessous, login
+          // toujours explicite).
+          organizationName: 'Admin Gate 1-4E Org',
         });
       expect(registration.status).toBe(201);
       const admin = await userModel.findOne({ email: ADMIN_EMAIL });

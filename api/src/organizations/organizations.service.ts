@@ -1,6 +1,8 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import type { Connection } from 'mongoose';
+import { randomBytes } from 'crypto';
 import {
   Organization,
   OrganizationDocument,
@@ -15,6 +17,29 @@ import {
   OrganizationRole,
   OrganizationStatus,
 } from './permissions';
+
+// Session transactionnelle Mongoose (`mongodb.ClientSession`) : même
+// convention que `products.service.ts`/`audit.service.ts`.
+type MongooseSession = Awaited<ReturnType<Connection['startSession']>>;
+
+/**
+ * Slug serveur : jamais fourni par le client (1-6A). Dérivé du nom
+ * (diacritiques retirés, minuscules, `[0-9a-z-]` uniquement, tronqué) +
+ * suffixe aléatoire SÛR (`crypto.randomBytes`, pas `Math.random`) pour
+ * l'unicité — total borné à 80 caractères (contrainte du schéma).
+ */
+export function generateOrganizationSlug(name: string): string {
+  const base =
+    name
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^0-9a-z]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'org';
+  const suffix = randomBytes(4).toString('hex');
+  return `${base}-${suffix}`.slice(0, 80);
+}
 
 /**
  * ObjectId canonique : une CHAÎNE strictement de 24 caractères hexadécimaux.
@@ -140,6 +165,57 @@ export class OrganizationsService {
       if (byName !== 0) return byName;
       return a.organizationId.localeCompare(b.organizationId);
     });
+  }
+
+  /**
+   * Onboarding atomique (1-6A) : crée l'Organization (branding/devise du
+   * SCHÉMA, jamais du client) puis sa membership `owner` active
+   * (`permissions: []`, `invitedById: null`), MÊME session que l'appelant
+   * (transaction du registre). Slug généré serveur, jamais fourni.
+   */
+  async createOwnerOrganization(
+    name: string,
+    ownerId: string,
+    session: MongooseSession,
+  ): Promise<{
+    organization: OrganizationDocument;
+    membership: OrganizationMembershipDocument;
+  }> {
+    const [organization] = await this.organizationModel.create(
+      [{ name, slug: generateOrganizationSlug(name) }],
+      { session },
+    );
+    const [membership] = await this.membershipModel.create(
+      [
+        {
+          organizationId: organization._id,
+          userId: new Types.ObjectId(ownerId),
+          role: OrganizationRole.OWNER,
+          permissions: [],
+          invitedById: null,
+        },
+      ],
+      { session },
+    );
+
+    // Garde défensive : l'index unique partiel garantit au plus un owner
+    // actif, jamais son existence — cette organisation vient d'être créée,
+    // donc exactement 1 est l'unique résultat correct.
+    const activeOwners = await this.membershipModel.countDocuments(
+      {
+        organizationId: organization._id,
+        role: OrganizationRole.OWNER,
+        status: MembershipStatus.ACTIVE,
+      },
+      { session },
+    );
+    if (activeOwners !== 1) {
+      throw new Error(
+        'Owner onboarding invariant violated: expected exactly one active owner.',
+      );
+    }
+
+    return { organization, membership };
   }
 
   private accessDenied(): ForbiddenException {

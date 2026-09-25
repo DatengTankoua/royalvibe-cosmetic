@@ -1,7 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { User, UserDocument } from './schemas/user.schema';
+import type { Connection } from 'mongoose';
+import { User, UserDocument, UserRole } from './schemas/user.schema';
+
+// Session transactionnelle Mongoose (`mongodb.ClientSession`) : même
+// convention que `products.service.ts`/`audit.service.ts` (type dérivé,
+// driver `mongodb` non résolvable directement depuis ce workspace pnpm).
+type MongooseSession = Awaited<ReturnType<Connection['startSession']>>;
 
 @Injectable()
 export class UsersService {
@@ -15,12 +21,17 @@ export class UsersService {
     return this.userModel.findById(id).exec();
   }
 
-  async create(data: {
-    name: string;
-    email: string;
-    password: string;
-  }): Promise<UserDocument> {
-    return this.userModel.create(data);
+  async create(
+    data: {
+      name: string;
+      email: string;
+      password: string;
+      role?: UserRole;
+    },
+    session?: MongooseSession,
+  ): Promise<UserDocument> {
+    const [user] = await this.userModel.create([data], { session });
+    return user;
   }
 
   async findAll(): Promise<UserDocument[]> {

@@ -303,10 +303,20 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
       ioServer = moduleFixture.get(EventsGateway).server;
 
       // ---- Fixtures : users + tokens par scénario ----
+      // 1-6A : /auth/register crée désormais AUSSI une organisation
+      // propriétaire (organizationName obligatoire) — ces fixtures n'utilisent
+      // QUE le User créé ; l'organisation auto-créée n'est jamais rejointe par
+      // un login SANS organizationId dans ce fichier (tous les logins ci-dessous
+      // fournissent un organizationId explicite), donc aucune interférence.
       const register = (name: string, email: string, password: string) =>
         request(app.getHttpServer())
           .post('/auth/register')
-          .send({ name, email, password });
+          .send({
+            name,
+            email,
+            password,
+            organizationName: `${name} Org`,
+          });
       const login = (
         email: string,
         password: string,

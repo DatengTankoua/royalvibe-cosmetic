@@ -4,6 +4,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 // 1-3B.1 : sans une org active, le login ne fournit plus de JWT.
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
+import * as bcrypt from 'bcryptjs';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
@@ -192,17 +193,19 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       >(getModelToken(OrganizationMembership.name));
 
       // ---- utilisateur admin de test ----
-      const reg = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          name: 'Admin 0B.7',
-          email: ADMIN_EMAIL,
-          password: 'adm-0b7-pw-!1x',
-        });
-      expect(reg.status).toBe(201);
-      const adminDoc = await userModel.findOne({ email: ADMIN_EMAIL });
-      adminDoc!.role = UserRole.ADMIN;
-      await adminDoc!.save();
+      // 1-6A : /auth/register crée désormais AUSSI une organisation
+      // propriétaire. L'admin B de ce fichier DOIT rester STRICTEMENT
+      // mono-org (login SANS organizationId, sélection automatique) : les
+      // deux users de fixture sont donc créés DIRECTEMENT (hash bcrypt),
+      // jamais via /auth/register, pour ne pas leur attacher une
+      // organisation parasite.
+      const adminDoc = await userModel.create({
+        name: 'Admin 0B.7',
+        email: ADMIN_EMAIL,
+        password: await bcrypt.hash('adm-0b7-pw-!1x', 10),
+      });
+      adminDoc.role = UserRole.ADMIN;
+      await adminDoc.save();
 
       // ---- organisation + membership de l'admin (1-3B.1) ----
       await organizationModel.create({
@@ -212,23 +215,19 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       });
       await membershipModel.create({
         organizationId: new Types.ObjectId(TRADE_ORG_ID),
-        userId: adminDoc!._id,
+        userId: adminDoc._id,
         role: 'owner',
         status: 'active',
       });
 
       // 1-4C.1 : seconde org (B) + son admin + login dédié.
-      const regB = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          name: 'Admin B 1-4C.1',
-          email: ADMIN_B_EMAIL,
-          password: 'adm-b-14c1-pw-!1x',
-        });
-      expect(regB.status).toBe(201);
-      const adminBUser = await userModel.findOne({ email: ADMIN_B_EMAIL });
-      adminBUser!.role = UserRole.ADMIN;
-      await adminBUser!.save();
+      const adminBUser = await userModel.create({
+        name: 'Admin B 1-4C.1',
+        email: ADMIN_B_EMAIL,
+        password: await bcrypt.hash('adm-b-14c1-pw-!1x', 10),
+      });
+      adminBUser.role = UserRole.ADMIN;
+      await adminBUser.save();
 
       await organizationModel.create({
         _id: ORG_B_ID,
@@ -237,7 +236,7 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       });
       await membershipModel.create({
         organizationId: new Types.ObjectId(ORG_B_ID),
-        userId: adminBUser!._id,
+        userId: adminBUser._id,
         role: 'owner',
         status: 'active',
       });

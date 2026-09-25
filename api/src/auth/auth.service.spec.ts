@@ -4,6 +4,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { getConnectionToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as bcrypt from 'bcryptjs';
 import { AuthService } from './auth.service';
@@ -39,6 +40,26 @@ function makeUserDoc(overrides: Record<string, unknown> = {}): unknown {
   return { ...doc, toObject: () => ({ ...doc }) };
 }
 
+/**
+ * Session transactionnelle mockée (1-6A) : même motif que
+ * `sales.service.spec.ts` — une référence STABLE et UNIQUE renvoyée par
+ * `startSession()`, comparée par `toBe` pour prouver que la MÊME session est
+ * transmise à `UsersService.create` et à
+ * `OrganizationsService.createOwnerOrganization`. `withTransaction` EXÉCUTE
+ * le callback (comme le driver réel) et propage tout rejet.
+ */
+function makeConnectionFixture() {
+  const endSession = jest.fn().mockResolvedValue(true);
+  const withTransaction = jest.fn(
+    async (cb: (s: unknown) => Promise<unknown>) => cb(sessionRef),
+  );
+  const sessionRef = { withTransaction, endSession };
+  const connection = {
+    startSession: jest.fn(() => Promise.resolve(sessionRef)),
+  };
+  return { withTransaction, endSession, session: sessionRef, connection };
+}
+
 describe('AuthService', () => {
   let service: AuthService;
   let usersService: { findByEmail: jest.Mock; create: jest.Mock };
@@ -46,7 +67,9 @@ describe('AuthService', () => {
   let organizations: {
     resolveActiveContext: jest.Mock;
     listActiveOrganizations: jest.Mock;
+    createOwnerOrganization: jest.Mock;
   };
+  let connectionFixture: ReturnType<typeof makeConnectionFixture>;
 
   async function build() {
     usersService = { findByEmail: jest.fn(), create: jest.fn() };
@@ -54,13 +77,19 @@ describe('AuthService', () => {
     organizations = {
       resolveActiveContext: jest.fn(),
       listActiveOrganizations: jest.fn(),
+      createOwnerOrganization: jest.fn(),
     };
+    connectionFixture = makeConnectionFixture();
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         { provide: UsersService, useValue: usersService },
         { provide: JwtService, useValue: jwt },
         { provide: OrganizationsService, useValue: organizations },
+        {
+          provide: getConnectionToken(),
+          useValue: connectionFixture.connection,
+        },
       ],
     }).compile();
     return module.get(AuthService);
@@ -68,52 +97,50 @@ describe('AuthService', () => {
 
   const hashRight = async () => bcrypt.hash('right-password-1', 10);
 
-  // ---- register ----
+  // ---- register : onboarding atomique propriétaire (1-6A) ----
 
-  describe('register', () => {
-    it('rejette si l’email est déjà pris (service create jamais appelé)', async () => {
-      service = await build();
-      usersService.findByEmail.mockResolvedValue(makeUserDoc());
-      usersService.create.mockRejectedValue(
-        new Error('create must not be called when the email exists'),
-      );
-      await expect(
-        service.register({
-          name: 'Ada',
-          email: 'ada@example.com',
-          password: 'secret1',
-        }),
-      ).rejects.toThrow(BadRequestException);
-      expect(usersService.create).not.toHaveBeenCalled();
-    });
+  describe('register — onboarding atomique propriétaire (1-6A)', () => {
+    const VALID_DTO = {
+      name: 'Ada',
+      email: 'ada@example.com',
+      password: 'secret1',
+      organizationName: 'Ada Corp',
+    };
 
-    it('renvoie l’utilisateur SANS mot de passe et SANS token JWT', async () => {
-      service = await build();
-      usersService.findByEmail.mockResolvedValue(null);
-      usersService.create.mockResolvedValue(makeUserDoc());
-
-      const result = await service.register({
+    function makeCreatedUser(overrides: Record<string, unknown> = {}) {
+      return {
+        _id: { toString: () => USER_OBJECT_ID },
         name: 'Ada',
         email: 'ada@example.com',
-        password: 'secret1',
+        password: 'hashed-value',
+        role: 'admin',
+        ...overrides,
+      };
+    }
+
+    function makeCreatedOrganization(overrides: Record<string, unknown> = {}) {
+      return {
+        _id: { toString: () => ORG_A_ID },
+        name: 'Ada Corp',
+        slug: 'ada-corp-a1b2c3d4',
+        currency: 'XAF',
+        status: 'active',
+        ...overrides,
+      };
+    }
+
+    function mockHappyPath() {
+      usersService.create.mockResolvedValue(makeCreatedUser());
+      organizations.createOwnerOrganization.mockResolvedValue({
+        organization: makeCreatedOrganization(),
+        membership: { _id: 'membership-id' },
       });
+    }
 
-      expect(result.user.email).toBe('ada@example.com');
-      expect(result.user.password).toBeUndefined();
-      expect('password' in result.user).toBe(false);
-      expect('access_token' in result).toBe(false);
-      expect(jwt.sign).not.toHaveBeenCalled();
-    });
-
-    it('stocke un hash bcrypt (jamais le texte en clair)', async () => {
+    it('hache le mot de passe (jamais le texte en clair) avant de créer le User', async () => {
       service = await build();
-      usersService.findByEmail.mockResolvedValue(null);
-      usersService.create.mockResolvedValue(makeUserDoc());
-      await service.register({
-        name: 'Ada',
-        email: 'ada@example.com',
-        password: 'secret1',
-      });
+      mockHappyPath();
+      await service.register(VALID_DTO);
       const created = usersService.create.mock.calls[0][0] as {
         password: string;
       };
@@ -121,6 +148,96 @@ describe('AuthService', () => {
       await expect(bcrypt.compare('secret1', created.password)).resolves.toBe(
         true,
       );
+    });
+
+    it('crée le User avec le rôle legacy admin (jamais exposé dans la réponse)', async () => {
+      service = await build();
+      mockHappyPath();
+      const result = await service.register(VALID_DTO);
+      expect(usersService.create.mock.calls[0][0]).toMatchObject({
+        role: 'admin',
+      });
+      expect(JSON.stringify(result)).not.toContain('admin');
+      expect('role' in result.user).toBe(false);
+    });
+
+    it('startSession()/endSession() : session ouverte puis TOUJOURS fermée', async () => {
+      service = await build();
+      mockHappyPath();
+      await service.register(VALID_DTO);
+      expect(connectionFixture.connection.startSession).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(connectionFixture.withTransaction).toHaveBeenCalledTimes(1);
+      expect(connectionFixture.endSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('MÊME session transmise à UsersService.create ET OrganizationsService.createOwnerOrganization', async () => {
+      service = await build();
+      mockHappyPath();
+      await service.register(VALID_DTO);
+      const userSession = usersService.create.mock.calls[0][1] as unknown;
+      const orgSession = organizations.createOwnerOrganization.mock
+        .calls[0][2] as unknown;
+      expect(userSession).toBe(connectionFixture.session);
+      expect(orgSession).toBe(connectionFixture.session);
+    });
+
+    it("l'organisation reçoit le nom du DTO et l'id du User créé (jamais un id client)", async () => {
+      service = await build();
+      mockHappyPath();
+      await service.register(VALID_DTO);
+      expect(organizations.createOwnerOrganization).toHaveBeenCalledWith(
+        'Ada Corp',
+        USER_OBJECT_ID,
+        connectionFixture.session,
+      );
+    });
+
+    it('réponse exacte : user{_id,name,email} + organization{_id,name,slug,currency,status} — rien de plus', async () => {
+      service = await build();
+      mockHappyPath();
+      const result = await service.register(VALID_DTO);
+      expect(Object.keys(result).sort()).toEqual(['organization', 'user']);
+      expect(Object.keys(result.user).sort()).toEqual(['_id', 'email', 'name']);
+      expect(Object.keys(result.organization).sort()).toEqual([
+        '_id',
+        'currency',
+        'name',
+        'slug',
+        'status',
+      ]);
+      const flat = JSON.stringify(result);
+      expect(flat).not.toContain('password');
+      expect(flat).not.toContain('access_token');
+      expect(flat).not.toContain('membershipId');
+      expect(flat).not.toContain('permissions');
+      expect(jwt.sign).not.toHaveBeenCalled();
+    });
+
+    it('email dupliqué (E11000) → conflit stable existant, Organization JAMAIS créée', async () => {
+      service = await build();
+      const duplicateError = Object.assign(new Error('E11000 duplicate key'), {
+        code: 11000,
+      });
+      usersService.create.mockRejectedValue(duplicateError);
+      await expect(service.register(VALID_DTO)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(organizations.createOwnerOrganization).not.toHaveBeenCalled();
+      expect(connectionFixture.endSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("échec de création de l'Organization → rollback (session fermée, propagation de l'erreur d'origine)", async () => {
+      service = await build();
+      usersService.create.mockResolvedValue(makeCreatedUser());
+      organizations.createOwnerOrganization.mockRejectedValue(
+        new Error('organization creation failed'),
+      );
+      await expect(service.register(VALID_DTO)).rejects.toThrow(
+        'organization creation failed',
+      );
+      expect(connectionFixture.endSession).toHaveBeenCalledTimes(1);
     });
   });
 

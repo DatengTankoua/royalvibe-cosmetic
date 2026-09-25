@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { Connection, Model, Types } from 'mongoose';
 import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcryptjs';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
@@ -144,10 +145,30 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       await app.init();
 
       // ---- Fixtures utilisateurs (base éphémère uniquement) ----
-      const register = (name: string, email: string, password: string) =>
-        request(app.getHttpServer())
-          .post('/auth/register')
-          .send({ name, email, password });
+      // 1-6A : POST /auth/register crée désormais AUSSI une organisation
+      // propriétaire. Les fixtures admin/seller/multi de ce fichier gèrent
+      // leurs organisations/memberships MANUELLEMENT (org A/B, rôles
+      // précis) : les créer via /auth/register leur attacherait une
+      // organisation parasite et fausserait la sélection multi-org (§9,
+      // corps exact `organizations: [A, B]`). Ces users sont donc créés
+      // directement (hash bcrypt, même algorithme que l'AuthService),
+      // jamais via /auth/register. Le contrat de /auth/register lui-même
+      // (flag, DTO, transaction) reste exercé par les tests dédiés (§2, §7,
+      // §8, §14).
+      const userModel = moduleFixture.get<Model<UserDocument>>(
+        getModelToken('User'),
+      );
+      const createLegacyUser = async (
+        name: string,
+        email: string,
+        password: string,
+      ) =>
+        userModel.create({
+          name,
+          email,
+          password: await bcrypt.hash(password, 10),
+        });
+
       const login = (
         email: string,
         password: string,
@@ -161,32 +182,23 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
               : { email, password, organizationId },
           );
 
-      const adminReg = await register(
+      // Le schéma donne le rôle seller par défaut et le périmètre interdit
+      // toute modification de la logique d'inscription : l'admin de test est
+      // donc élevé directement (écriture de test uniquement, aucun
+      // changement de logique de production).
+      const adminDoc = await createLegacyUser(
         'Admin E2E',
         ADMIN_EMAIL,
         'admin-e2e-pw-!1x',
       );
-      expect(adminReg.status).toBe(201);
+      adminDoc.role = UserRole.ADMIN;
+      await adminDoc.save();
 
-      const sellerReg = await register(
+      const sellerUserDoc = await createLegacyUser(
         'Seller E2E',
         SELLER_EMAIL,
         'seller-e2e-pw-!1x',
       );
-      expect(sellerReg.status).toBe(201);
-
-      // Le schéma donne le rôle seller par défaut et le périmètre interdit
-      // toute modification de la logique d'inscription : l'admin de test est
-      // donc élevé via la base éphémère UNIQUEMENT (écriture directe de test,
-      // aucun changement de logique de production). Le modèle est lu via le
-      // conteneur Nest (sa propre connexion Mongoose, pas la globale).
-      const userModel = moduleFixture.get<Model<UserDocument>>(
-        getModelToken('User'),
-      );
-      const adminDoc = await userModel.findOne({ email: ADMIN_EMAIL });
-      expect(adminDoc).toBeTruthy();
-      adminDoc!.role = UserRole.ADMIN;
-      await adminDoc!.save();
 
       // ---- Fixtures organisations (1-3B.1) ----
       // Admin : membership actives sur les 2 orgs A et B (peut switch).
@@ -214,9 +226,8 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
 
       // Fixtures memberships : admin (owner) et seller (seller) + leurs
       // 2 orgs respectives. Le `userId` est le ObjectId de l'utilisateur.
-      const adminUserId = adminDoc!._id.toString();
-      const sellerUserDoc = await userModel.findOne({ email: SELLER_EMAIL });
-      const sellerUserId = sellerUserDoc!._id.toString();
+      const adminUserId = adminDoc._id.toString();
+      const sellerUserId = sellerUserDoc._id.toString();
 
       await membershipModel.create({
         organizationId: new Types.ObjectId(ORG_A_ID),
@@ -238,19 +249,20 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       });
 
       // ---- Utilisateur "multi" : 2 orgs → sélection requise ----
-      const multiReg = await register('Multi E2E', MULTI_EMAIL, MULTI_PW);
-      expect(multiReg.status).toBe(201);
-      const multiUserDoc = await userModel.findOne({ email: MULTI_EMAIL });
-      expect(multiUserDoc).toBeTruthy();
+      const multiUserDoc = await createLegacyUser(
+        'Multi E2E',
+        MULTI_EMAIL,
+        MULTI_PW,
+      );
       await membershipModel.create({
         organizationId: new Types.ObjectId(ORG_A_ID),
-        userId: multiUserDoc!._id,
+        userId: multiUserDoc._id,
         role: 'seller',
         status: 'active',
       });
       await membershipModel.create({
         organizationId: new Types.ObjectId(ORG_B_ID),
-        userId: multiUserDoc!._id,
+        userId: multiUserDoc._id,
         role: 'seller',
         status: 'active',
       });
@@ -299,10 +311,12 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
           name: 'Isolation E2E',
           email: ISO_EMAIL,
           password: 'iso-e2e-pw-!1x',
+          organizationName: 'Isolation E2E Org',
         });
       expect(res.status).toBe(201);
       expect(res.body.user.email).toBe(ISO_EMAIL);
       expect(res.body.user.password).toBeUndefined();
+      expect(res.body.organization.name).toBe('Isolation E2E Org');
     });
 
     it('la connexion avec les identifiants de test fonctionne et renvoie un token', async () => {
@@ -495,6 +509,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
           name: 'Refusé',
           email: 'refuse-0b5@royalvibe.test',
           password: 'secret-123',
+          organizationName: 'Refusé Org',
         });
       expect(res.status).toBe(403);
       expect(res.body.code).toBe('REGISTRATION_DISABLED');
@@ -637,6 +652,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
             name: 'RL',
             email: `rl-${i}-${Date.now()}@royalvibe.test`,
             password: 'secret-123',
+            organizationName: 'RL Org',
           });
         expect(res.status).toBe(403);
         expect(res.body.code).toBe('REGISTRATION_DISABLED');
@@ -1906,6 +1922,252 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
           await cleanupSections(sections);
         }
       });
+    });
+  });
+
+  // 1-6A — onboarding atomique du propriétaire : POST /auth/register crée
+  // désormais User + Organization + Membership owner en UNE transaction.
+  // Réutilise le replica set éphémère déjà démarré pour ce fichier (vraies
+  // transactions, vrai rollback, vraie concurrence — aucun mock de driver).
+  describe('14. Onboarding atomique propriétaire (1-6A)', () => {
+    const clearThrottle = (): void => {
+      moduleFixture.get(ThrottlerStorage).onApplicationShutdown();
+    };
+    beforeEach(clearThrottle);
+
+    const users = (): Model<UserDocument> =>
+      moduleFixture.get(getModelToken('User'));
+    const orgs = (): Model<OrganizationDocument> =>
+      moduleFixture.get(getModelToken(Organization.name));
+    const memberships = (): Model<OrganizationMembershipDocument> =>
+      moduleFixture.get(getModelToken(OrganizationMembership.name));
+
+    const registerOwner = (body: Record<string, unknown>) =>
+      request(app.getHttpServer()).post('/auth/register').send(body);
+
+    const validBody = (email: string) => ({
+      name: 'Owner E2E',
+      email,
+      password: 'owner-e2e-pw-!1x',
+      organizationName: 'Owner E2E Org',
+    });
+
+    it('flag absent → 403 REGISTRATION_DISABLED, zéro écriture (User/Organization/Membership)', async () => {
+      delete process.env.PUBLIC_REGISTRATION_ENABLED;
+      const [u0, o0, m0] = await Promise.all([
+        users().countDocuments(),
+        orgs().countDocuments(),
+        memberships().countDocuments(),
+      ]);
+      const res = await registerOwner(
+        validBody(`onboard-flag-${Date.now()}@royalvibe.test`),
+      );
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('REGISTRATION_DISABLED');
+      const [u1, o1, m1] = await Promise.all([
+        users().countDocuments(),
+        orgs().countDocuments(),
+        memberships().countDocuments(),
+      ]);
+      expect([u1, o1, m1]).toEqual([u0, o0, m0]);
+    });
+
+    it('succès : exactement 1 User + 1 Organization + 1 owner actif ; réponse exacte ; rôle legacy admin jamais exposé', async () => {
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+      const email = `onboard-ok-${Date.now()}@royalvibe.test`;
+      const res = await registerOwner(validBody(email));
+      expect(res.status).toBe(201);
+
+      // Réponse exacte, sans donnée sensible ni token :
+      const body = res.body as Record<string, unknown>;
+      expect(Object.keys(body).sort()).toEqual(['organization', 'user']);
+      expect(Object.keys(body.user as object).sort()).toEqual([
+        '_id',
+        'email',
+        'name',
+      ]);
+      expect(Object.keys(body.organization as object).sort()).toEqual([
+        '_id',
+        'currency',
+        'name',
+        'slug',
+        'status',
+      ]);
+      const flat = JSON.stringify(res.body);
+      expect(flat).not.toContain('access_token');
+      expect(flat).not.toContain('password');
+      expect(flat).not.toContain('admin');
+      expect(flat).not.toContain('membershipId');
+      expect(flat).not.toContain('permissions');
+
+      const userDoc = await users().findOne({ email });
+      expect(userDoc).toBeTruthy();
+      // Rôle legacy (jamais exposé dans la réponse — assertion ci-dessus) :
+      expect(userDoc!.role).toBe(UserRole.ADMIN);
+      expect(await users().countDocuments({ email })).toBe(1);
+
+      const orgId = res.body.organization._id as string;
+      expect(
+        await orgs().countDocuments({ _id: new Types.ObjectId(orgId) }),
+      ).toBe(1);
+      expect(
+        await memberships().countDocuments({
+          organizationId: new Types.ObjectId(orgId),
+          role: 'owner',
+          status: 'active',
+        }),
+      ).toBe(1);
+      expect(res.body.organization.currency).toBe('XAF');
+      expect(res.body.organization.status).toBe('active');
+      expect(res.body.organization.slug).toMatch(/^[0-9a-z-]{1,80}$/);
+    });
+
+    it('login suivant : org unique → sélection automatique + JWT { sub, orgId } correct', async () => {
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+      const email = `onboard-login-${Date.now()}@royalvibe.test`;
+      const password = 'owner-e2e-pw-!1x';
+      const reg = await registerOwner({ ...validBody(email), password });
+      expect(reg.status).toBe(201);
+
+      const loginRes = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email, password });
+      expect(loginRes.status).toBe(201);
+      expect(typeof loginRes.body.access_token).toBe('string');
+      const payload = jwtService.decode(loginRes.body.access_token as string);
+      expect(String(payload.orgId)).toBe(reg.body.organization._id);
+    });
+
+    it("erreur de création d'Organization → rollback complet (User jamais persisté)", async () => {
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+      const email = `onboard-rollback-org-${Date.now()}@royalvibe.test`;
+      const organizationModel = orgs();
+      const originalCreate = organizationModel.create.bind(
+        organizationModel,
+      ) as (docs: unknown, opts?: { session?: unknown }) => Promise<unknown>;
+      organizationModel.create = ((
+        docs: unknown,
+        opts?: { session?: unknown },
+      ) => {
+        if (opts?.session) {
+          return Promise.reject(
+            new Error('simulated organization creation failure'),
+          );
+        }
+        return originalCreate(docs, opts);
+      }) as unknown as typeof organizationModel.create;
+
+      let res: request.Response;
+      try {
+        res = await registerOwner(validBody(email));
+      } finally {
+        organizationModel.create =
+          originalCreate as unknown as typeof organizationModel.create;
+      }
+      expect(res.status).toBeGreaterThanOrEqual(500);
+      expect(await users().countDocuments({ email })).toBe(0);
+    });
+
+    it('erreur de création de Membership → rollback complet (User + Organization jamais persistés)', async () => {
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+      const email = `onboard-rollback-mem-${Date.now()}@royalvibe.test`;
+      const membershipModel = memberships();
+      const orgsBefore = await orgs().countDocuments();
+      const originalCreate = membershipModel.create.bind(membershipModel) as (
+        docs: unknown,
+        opts?: { session?: unknown },
+      ) => Promise<unknown>;
+      membershipModel.create = ((
+        docs: unknown,
+        opts?: { session?: unknown },
+      ) => {
+        if (opts?.session) {
+          return Promise.reject(
+            new Error('simulated membership creation failure'),
+          );
+        }
+        return originalCreate(docs, opts);
+      }) as unknown as typeof membershipModel.create;
+
+      let res: request.Response;
+      try {
+        res = await registerOwner(validBody(email));
+      } finally {
+        membershipModel.create =
+          originalCreate as unknown as typeof membershipModel.create;
+      }
+      expect(res.status).toBeGreaterThanOrEqual(500);
+      expect(await users().countDocuments({ email })).toBe(0);
+      expect(await orgs().countDocuments()).toBe(orgsBefore);
+    });
+
+    it('email concurrent identique : exactement une réussite, aucun doublon ni écriture partielle', async () => {
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+      const email = `onboard-race-${Date.now()}@royalvibe.test`;
+      const [a, b] = await Promise.all([
+        registerOwner(validBody(email)),
+        registerOwner(validBody(email)),
+      ]);
+      const statuses = [a.status, b.status].sort();
+      expect(statuses).toEqual([201, 400]);
+      expect(await users().countDocuments({ email })).toBe(1);
+
+      const winner = a.status === 201 ? a : b;
+      const orgId = winner.body.organization._id as string;
+      expect(
+        await orgs().countDocuments({ _id: new Types.ObjectId(orgId) }),
+      ).toBe(1);
+      expect(
+        await memberships().countDocuments({
+          organizationId: new Types.ObjectId(orgId),
+        }),
+      ).toBe(1);
+    }, 20_000);
+
+    it('champs interdits → 400 avant toute écriture (organizationId/slug/role/permissions/status/currency/brandColor/ownerId)', async () => {
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+      const before = await users().countDocuments();
+      const res = await registerOwner({
+        ...validBody(`onboard-forbidden-${Date.now()}@royalvibe.test`),
+        organizationId: '112233445566778899001122',
+        role: 'owner',
+      });
+      expect(res.status).toBe(400);
+      expect(await users().countDocuments()).toBe(before);
+    });
+
+    it('seconde exécution avec le même email après succès → conflit stable, premier triplet intact', async () => {
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+      const email = `onboard-dup-${Date.now()}@royalvibe.test`;
+      const first = await registerOwner(validBody(email));
+      expect(first.status).toBe(201);
+
+      const second = await registerOwner({
+        ...validBody(email),
+        organizationName: 'Second Attempt Org',
+      });
+      expect(second.status).toBe(400);
+
+      expect(await users().countDocuments({ email })).toBe(1);
+      const orgId = first.body.organization._id as string;
+      expect(
+        await orgs().countDocuments({ _id: new Types.ObjectId(orgId) }),
+      ).toBe(1);
+      expect(await orgs().countDocuments({ name: 'Second Attempt Org' })).toBe(
+        0,
+      );
+    });
+
+    it('le rate limiting existant (429) s’applique aussi à /auth/register, sans stockage séparé', async () => {
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+      let last: request.Response | undefined;
+      for (let i = 0; i < 11; i++) {
+        last = await registerOwner(
+          validBody(`onboard-rl-${i}-${Date.now()}@royalvibe.test`),
+        );
+      }
+      expect(last!.status).toBe(429);
+      expect(last!.body.code).toBe(AUTH_RATE_LIMIT_CODE);
     });
   });
 });

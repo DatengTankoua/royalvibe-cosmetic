@@ -33,6 +33,9 @@ export function isPublicRegistrationEnabled(): boolean {
 export class AuthController {
   constructor(private authService: AuthService) {}
 
+  // Rate limiting (0B.6) : MÊME garde/fenêtres que /auth/login, sans
+  // stockage séparé — clé générée par handler, donc compteur distinct.
+  @UseGuards(AuthThrottlerGuard)
   @Public()
   @Post('register')
   register(@Body() dto: RegisterDto) {

@@ -53,7 +53,12 @@ describe('DTO validation (same ValidationPipe options as production)', () => {
     it('accepts a valid payload', async () => {
       expect(
         await collectErrors(
-          { name: 'Ada', email: 'ada@example.com', password: 'secret1' },
+          {
+            name: 'Ada',
+            email: 'ada@example.com',
+            password: 'secret1',
+            organizationName: 'Ada Corp',
+          },
           RegisterDto,
         ),
       ).toHaveLength(0);
@@ -77,6 +82,75 @@ describe('DTO validation (same ValidationPipe options as production)', () => {
         ),
       ).toBe(true);
     });
+
+    // 1-6A — DTO strict : { name, email, password, organizationName } uniquement.
+    it('requires organizationName (missing → error)', async () => {
+      const errors = await collectErrors(
+        { name: 'Ada', email: 'ada@example.com', password: 'secret1' },
+        RegisterDto,
+      );
+      expect(errors.some((e) => e.property === 'organizationName')).toBe(true);
+    });
+
+    it('rejects an empty organizationName', async () => {
+      const errors = await collectErrors(
+        {
+          name: 'Ada',
+          email: 'ada@example.com',
+          password: 'secret1',
+          organizationName: '',
+        },
+        RegisterDto,
+      );
+      expect(errors.some((e) => e.property === 'organizationName')).toBe(true);
+    });
+
+    it('rejects an organizationName longer than 100 characters', async () => {
+      const errors = await collectErrors(
+        {
+          name: 'Ada',
+          email: 'ada@example.com',
+          password: 'secret1',
+          organizationName: 'x'.repeat(101),
+        },
+        RegisterDto,
+      );
+      expect(errors.some((e) => e.property === 'organizationName')).toBe(true);
+    });
+
+    it.each([
+      'organizationId',
+      'slug',
+      'role',
+      'permissions',
+      'status',
+      'currency',
+      'brandColor',
+      'ownerId',
+    ])(
+      'rejects the forbidden field "%s" (forbidNonWhitelisted, even with a valid payload otherwise)',
+      async (field) => {
+        const errors = await collectErrors(
+          {
+            name: 'Ada',
+            email: 'ada@example.com',
+            password: 'secret1',
+            organizationName: 'Ada Corp',
+            [field]: 'anything',
+          },
+          RegisterDto,
+        );
+        expect(
+          errors.some(
+            (e) =>
+              e.property === field &&
+              Object.values(e.constraints ?? {}).some(
+                (c) => typeof c === 'string' && c.includes('should not exist'),
+              ),
+          ),
+        ).toBe(true);
+      },
+    );
   });
 
   describe('LoginDto', () => {
