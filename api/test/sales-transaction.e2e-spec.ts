@@ -927,4 +927,204 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       expect(persisted!.organizationId.toString()).toBe(TRADE_ORG_ID);
     });
   });
+
+  describe('8. Isolation Analytics, Audit et corbeille (1-4D)', () => {
+    const analyticsSnapshot = async (token: string) => {
+      const endpoints = [
+        '/analytics/overview',
+        '/analytics/products/ranking',
+        '/analytics/sellers/ranking',
+        '/analytics/monthly',
+      ];
+      const responses = await Promise.all(
+        endpoints.map((endpoint) =>
+          request(app.getHttpServer())
+            .get(endpoint)
+            .set('Authorization', `Bearer ${token}`),
+        ),
+      );
+      for (const response of responses) expect(response.status).toBe(200);
+      const productRanking = [
+        ...(responses[1].body as Array<{ productId: string }>),
+      ].sort((a, b) => String(a.productId).localeCompare(String(b.productId)));
+      const sellerRanking = [
+        ...(responses[2].body as Array<{ sellerId: string }>),
+      ].sort((a, b) => String(a.sellerId).localeCompare(String(b.sellerId)));
+      return [
+        responses[0].body as unknown,
+        productRanking,
+        sellerRanking,
+        responses[3].body as unknown,
+      ];
+    };
+
+    it('toutes les métriques A restent identiques après variation des données B', async () => {
+      const aProduct = await seedProduct(
+        'AnalyticsA-' + Date.now(),
+        6,
+        TRADE_ORG_ID,
+        sectionId,
+      );
+      expect((await createSale(aProduct.id, 2, adminToken)).status).toBe(201);
+      const beforeB = await analyticsSnapshot(adminToken);
+
+      const bProduct = await seedProduct(
+        'AnalyticsB-' + Date.now(),
+        40,
+        ORG_B_ID,
+        sectionIdB,
+      );
+      expect((await createSale(bProduct.id, 17, adminBToken)).status).toBe(201);
+
+      expect(await analyticsSnapshot(adminToken)).toEqual(beforeB);
+      const productRanking = beforeB[1] as Array<{ productId: string }>;
+      expect(productRanking.map((row) => String(row.productId))).toContain(
+        aProduct.id,
+      );
+      expect(productRanking.map((row) => String(row.productId))).not.toContain(
+        bProduct.id,
+      );
+
+      const forged = await request(app.getHttpServer())
+        .get(`/analytics/overview?organizationId=${ORG_B_ID}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Organization-Id', ORG_B_ID)
+        .send({ organizationId: ORG_B_ID });
+      expect(forged.status).toBe(200);
+      expect(forged.body).toEqual(beforeB[0]);
+    });
+
+    it('historique Audit A exclut B et un produit B est un 404 identique à l’absent', async () => {
+      const aProduct = await seedProduct(
+        'AuditA-' + Date.now(),
+        5,
+        TRADE_ORG_ID,
+        sectionId,
+      );
+      const bProduct = await seedProduct(
+        'AuditB-' + Date.now(),
+        5,
+        ORG_B_ID,
+        sectionIdB,
+      );
+      expect((await createSale(aProduct.id, 1, adminToken)).status).toBe(201);
+      const adminB = await userModel.findOne({ email: ADMIN_B_EMAIL });
+      await auditModel.create({
+        organizationId: new Types.ObjectId(ORG_B_ID),
+        productId: new Types.ObjectId(aProduct.id),
+        action: 'price_changed',
+        actorId: adminB!._id,
+        details: { marker: 'foreign-audit' },
+      });
+
+      const detail = await request(app.getHttpServer())
+        .get(`/products/${aProduct.id}?organizationId=${ORG_B_ID}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Organization-Id', ORG_B_ID)
+        .send({ organizationId: ORG_B_ID });
+      expect(detail.status).toBe(200);
+      const logs = detail.body.auditLogs as Array<{
+        organizationId: string;
+        details: { marker?: string };
+      }>;
+      expect(logs.length).toBeGreaterThanOrEqual(1);
+      expect(
+        logs.every((log) => String(log.organizationId) === TRADE_ORG_ID),
+      ).toBe(true);
+      expect(logs.some((log) => log.details.marker === 'foreign-audit')).toBe(
+        false,
+      );
+
+      const foreign = await request(app.getHttpServer())
+        .get(`/products/${bProduct.id}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      const missingId = new Types.ObjectId().toString();
+      const missing = await request(app.getHttpServer())
+        .get(`/products/${missingId}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(foreign.status).toBe(404);
+      expect(missing.status).toBe(404);
+      expect(messageOf(foreign.body)).toBe(`Product ${bProduct.id} not found`);
+      expect(messageOf(missing.body)).toBe(`Product ${missingId} not found`);
+    });
+
+    it('corbeilles A/B sont strictement disjointes et les valeurs falsifiées sont ignorées', async () => {
+      const createSection = (name: string, token: string) =>
+        request(app.getHttpServer())
+          .post('/sections')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ name });
+      const sectionA = await createSection('TrashA-' + Date.now(), adminToken);
+      const sectionB = await createSection('TrashB-' + Date.now(), adminBToken);
+      expect(sectionA.status).toBe(201);
+      expect(sectionB.status).toBe(201);
+      expect(
+        (
+          await request(app.getHttpServer())
+            .delete(`/sections/${sectionA.body._id as string}`)
+            .set('Authorization', `Bearer ${adminToken}`)
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await request(app.getHttpServer())
+            .delete(`/sections/${sectionB.body._id as string}`)
+            .set('Authorization', `Bearer ${adminBToken}`)
+        ).status,
+      ).toBe(200);
+
+      const productA = await seedProduct(
+        'TrashProductA-' + Date.now(),
+        2,
+        TRADE_ORG_ID,
+        sectionId,
+      );
+      const productB = await seedProduct(
+        'TrashProductB-' + Date.now(),
+        2,
+        ORG_B_ID,
+        sectionIdB,
+      );
+      await productModel.updateMany(
+        { _id: { $in: [productA.product._id, productB.product._id] } },
+        { $set: { deletedAt: new Date() } },
+      );
+
+      const getTrash = (token: string) =>
+        request(app.getHttpServer())
+          .get('/trash')
+          .set('Authorization', `Bearer ${token}`);
+      const [trashA, trashB] = await Promise.all([
+        getTrash(adminToken),
+        getTrash(adminBToken),
+      ]);
+      expect(trashA.status).toBe(200);
+      expect(trashB.status).toBe(200);
+      const ids = (rows: Array<{ _id: string }>) =>
+        rows.map((row) => String(row._id));
+      const aSections = ids(trashA.body.sections as Array<{ _id: string }>);
+      const bSections = ids(trashB.body.sections as Array<{ _id: string }>);
+      const aProducts = ids(trashA.body.products as Array<{ _id: string }>);
+      const bProducts = ids(trashB.body.products as Array<{ _id: string }>);
+      expect(aSections).toContain(sectionA.body._id as string);
+      expect(bSections).toContain(sectionB.body._id as string);
+      expect(aProducts).toContain(productA.id);
+      expect(bProducts).toContain(productB.id);
+      expect(aSections.filter((id) => bSections.includes(id))).toEqual([]);
+      expect(aProducts.filter((id) => bProducts.includes(id))).toEqual([]);
+
+      const forged = await request(app.getHttpServer())
+        .get(`/trash?organizationId=${ORG_B_ID}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Organization-Id', ORG_B_ID)
+        .send({ organizationId: ORG_B_ID });
+      expect(forged.status).toBe(200);
+      expect(ids(forged.body.sections as Array<{ _id: string }>)).toEqual(
+        aSections,
+      );
+      expect(ids(forged.body.products as Array<{ _id: string }>)).toEqual(
+        aProducts,
+      );
+    });
+  });
 });

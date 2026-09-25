@@ -54,10 +54,15 @@ export class AuditService {
     );
   }
 
-  async findByProduct(productId: string): Promise<AuditLogDocument[]> {
-    const oid = new Types.ObjectId(productId);
+  async findByProduct(
+    organizationId: string,
+    productId: string,
+  ): Promise<AuditLogDocument[]> {
     return this.auditModel
-      .find({ $or: [{ productId: oid }, { productId: productId }] })
+      .find({
+        organizationId: new Types.ObjectId(organizationId),
+        productId: new Types.ObjectId(productId),
+      })
       .populate('actorId', 'name email role')
       .sort({ createdAt: -1 })
       .exec();

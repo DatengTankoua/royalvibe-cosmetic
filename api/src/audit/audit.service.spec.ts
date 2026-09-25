@@ -90,4 +90,13 @@ describe('AuditService — écriture tenant obligatoire', () => {
     expect(String(doc.productId)).toBe(PRODUCT_ID);
     expect(String(doc.actorId)).toBe(ACTOR_ID);
   });
+
+  it('findByProduct filtre exactement par organizationId et productId ObjectId', async () => {
+    await service.findByProduct(ORG_A, PRODUCT_ID);
+
+    expect(auditModel.find).toHaveBeenCalledWith({
+      organizationId: new Types.ObjectId(ORG_A),
+      productId: new Types.ObjectId(PRODUCT_ID),
+    });
+  });
 });

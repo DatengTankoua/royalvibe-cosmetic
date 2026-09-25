@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Sale, SaleDocument } from '../sales/schemas/sale.schema';
 import { Product, ProductDocument } from '../products/schemas/product.schema';
 
@@ -11,8 +11,12 @@ export class AnalyticsService {
     @InjectModel(Product.name) private productModel: Model<ProductDocument>,
   ) {}
 
-  async getOverview(month?: string) {
-    const matchStage = month ? this.monthMatch(month) : {};
+  async getOverview(organizationId: string, month?: string) {
+    const organizationOid = new Types.ObjectId(organizationId);
+    const matchStage = {
+      organizationId: organizationOid,
+      ...(month ? this.monthMatch(month) : {}),
+    };
 
     const [salesAgg, products] = await Promise.all([
       this.saleModel.aggregate([
@@ -26,7 +30,7 @@ export class AnalyticsService {
           },
         },
       ]),
-      this.productModel.find().exec(),
+      this.productModel.find({ organizationId: organizationOid }).exec(),
     ]);
 
     const totalInvested = products.reduce(
@@ -60,8 +64,12 @@ export class AnalyticsService {
     };
   }
 
-  async getProductsRanking(month?: string) {
-    const matchStage = month ? this.monthMatch(month) : {};
+  async getProductsRanking(organizationId: string, month?: string) {
+    const organizationOid = new Types.ObjectId(organizationId);
+    const matchStage = {
+      organizationId: organizationOid,
+      ...(month ? this.monthMatch(month) : {}),
+    };
     return this.saleModel.aggregate([
       { $match: matchStage },
       {
@@ -77,8 +85,19 @@ export class AnalyticsService {
       {
         $lookup: {
           from: 'products',
-          localField: '_id',
-          foreignField: '_id',
+          let: { productId: '$_id', organizationId: organizationOid },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$_id', '$$productId'] },
+                    { $eq: ['$organizationId', '$$organizationId'] },
+                  ],
+                },
+              },
+            },
+          ],
           as: 'product',
         },
       },
@@ -121,8 +140,11 @@ export class AnalyticsService {
     ]);
   }
 
-  async getSellersRanking(month?: string) {
-    const matchStage = month ? this.monthMatch(month) : {};
+  async getSellersRanking(organizationId: string, month?: string) {
+    const matchStage = {
+      organizationId: new Types.ObjectId(organizationId),
+      ...(month ? this.monthMatch(month) : {}),
+    };
     return this.saleModel.aggregate([
       { $match: matchStage },
       {
@@ -156,8 +178,9 @@ export class AnalyticsService {
     ]);
   }
 
-  async getMonthlyTrend() {
+  async getMonthlyTrend(organizationId: string) {
     return this.saleModel.aggregate([
+      { $match: { organizationId: new Types.ObjectId(organizationId) } },
       {
         $group: {
           _id: {

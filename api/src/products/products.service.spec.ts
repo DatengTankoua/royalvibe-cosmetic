@@ -434,7 +434,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     });
     expect(res.product.name).toBe('Prod');
     expect(saleModel.find).toHaveBeenCalledTimes(1);
-    expect(auditService.findByProduct).toHaveBeenCalledWith(PRODUCT_ID);
+    expect(auditService.findByProduct).toHaveBeenCalledWith(ORG_A, PRODUCT_ID);
   });
 
   it('findOne : produit invisible dans l’org → 404 comme l’absent (sales/audit non lus)', async () => {

@@ -179,7 +179,7 @@ export class ProductsService {
       .sort({ createdAt: -1 })
       .exec();
 
-    const auditLogs = await this.auditService.findByProduct(id);
+    const auditLogs = await this.auditService.findByProduct(organizationId, id);
 
     const actualRevenue = sales.reduce(
       (sum, s) => sum + s.salePrice * s.quantity,
