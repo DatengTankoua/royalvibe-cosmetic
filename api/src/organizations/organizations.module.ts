@@ -14,6 +14,8 @@ import {
 } from './schemas/invitation.schema';
 import { OrganizationsService } from './organizations.service';
 import { OrganizationsController } from './organizations.controller';
+import { OrganizationMembersController } from './organization-members.controller';
+import { SocketRegistryService } from './socket-registry.service';
 import { UsersModule } from '../users/users.module';
 
 @Module({
@@ -31,8 +33,8 @@ import { UsersModule } from '../users/users.module';
       },
     ]),
   ],
-  controllers: [OrganizationsController],
-  providers: [OrganizationsService],
-  exports: [OrganizationsService],
+  controllers: [OrganizationsController, OrganizationMembersController],
+  providers: [OrganizationsService, SocketRegistryService],
+  exports: [OrganizationsService, SocketRegistryService],
 })
 export class OrganizationsModule {}

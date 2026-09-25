@@ -23,15 +23,20 @@ import {
 } from './schemas/invitation.schema';
 import {
   DelegablePermission,
+  effectivePermissions,
   InvitationStatus,
+  isPermissionSubset,
   MembershipStatus,
   OrganizationRole,
   OrganizationStatus,
+  PERMISSION_DENIED_RESPONSE,
 } from './permissions';
 import { UsersService } from '../users/users.service';
 import { UserRole } from '../users/schemas/user.schema';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
+import { UpdateMembershipDto } from './dto/update-membership.dto';
 import { AcceptInvitationDto } from '../auth/dto/accept-invitation.dto';
+import { SocketRegistryService } from './socket-registry.service';
 import * as bcrypt from 'bcryptjs';
 
 // Session transactionnelle Mongoose (`mongodb.ClientSession`) : même
@@ -123,6 +128,22 @@ export interface InvitationAcceptanceResult {
 /** Code stable et générique : ne révèle jamais LA raison exacte du refus. */
 export const INVITATION_INVALID_OR_EXPIRED = 'INVITATION_INVALID_OR_EXPIRED';
 
+/** Vue minimale d'un membre (1-7C) : jamais `password`/`User.role`. */
+export interface MemberView {
+  membershipId: string;
+  user: { _id: string; name: string; email: string };
+  role: OrganizationRole;
+  permissions: DelegablePermission[];
+  status: MembershipStatus;
+  joinedAt: Date;
+}
+
+/** Réponse du transfert de propriété (1-7C). */
+export interface TransferOwnershipResult {
+  previousOwner: MemberView;
+  newOwner: MemberView;
+}
+
 @Injectable()
 export class OrganizationsService {
   constructor(
@@ -134,6 +155,7 @@ export class OrganizationsService {
     private invitationModel: Model<OrganizationInvitationDocument>,
     private usersService: UsersService,
     @InjectConnection() private connection: Connection,
+    private socketRegistry: SocketRegistryService,
   ) {}
 
   /**
@@ -535,11 +557,273 @@ export class OrganizationsService {
     return result;
   }
 
+  /** Membres de l'organisation courante uniquement, jamais `password`/`User.role`. */
+  async listMembers(organizationId: string): Promise<MemberView[]> {
+    const memberships = await this.membershipModel
+      .find({ organizationId: new Types.ObjectId(organizationId) })
+      .populate('userId', 'name email')
+      .sort({ joinedAt: 1 })
+      .exec();
+    return memberships.map((m) => this.toMemberView(m));
+  }
+
+  /**
+   * Mutation d'une membership (1-7C) — `members.manage`. Filtre composite
+   * `{_id, organizationId}` : cible étrangère/absente → même 404. Actor ET
+   * cible sont RELUS dans la transaction (jamais le `organizationContext`
+   * HTTP, potentiellement obsolète). Anti-escalade : un acteur non-owner ne
+   * peut agir que sur un membre dont les permissions effectives ACTUELLES
+   * sont incluses dans les siennes, et ne peut jamais produire un état
+   * cible dont les permissions effectives PROSPECTIVES dépasseraient les
+   * siennes. `owner` contourne cette borne (ses permissions effectives sont
+   * déjà l'ensemble complet).
+   */
+  async updateMembership(
+    organizationId: string,
+    actorUserId: string,
+    targetMembershipId: string,
+    dto: UpdateMembershipDto,
+  ): Promise<MemberView> {
+    if (
+      dto.role === undefined &&
+      dto.permissions === undefined &&
+      dto.status === undefined
+    ) {
+      throw new BadRequestException({
+        code: 'EMPTY_MEMBERSHIP_UPDATE',
+        message: 'Au moins un champ (role, permissions, status) est requis.',
+      });
+    }
+
+    const orgOid = new Types.ObjectId(organizationId);
+    const session = await this.connection.startSession();
+    let result: MemberView | undefined;
+    let targetUserId: string | undefined;
+
+    try {
+      await session.withTransaction(async () => {
+        const target = await this.membershipModel
+          .findOne({
+            _id: new Types.ObjectId(targetMembershipId),
+            organizationId: orgOid,
+          })
+          .populate('userId', 'name email')
+          .session(session)
+          .exec();
+        if (!target) throw new NotFoundException();
+
+        const targetUserIdStr = String(
+          (target.userId as unknown as { _id?: Types.ObjectId })._id ??
+            target.userId,
+        );
+        if (targetUserIdStr === actorUserId) {
+          throw new ForbiddenException({
+            code: 'SELF_MANAGEMENT_FORBIDDEN',
+            message: 'Un membre ne peut pas modifier sa propre membership.',
+          });
+        }
+        if (target.role === OrganizationRole.OWNER) {
+          throw new ForbiddenException({
+            code: 'OWNER_NOT_MANAGEABLE',
+            message:
+              'Le propriétaire ne peut pas être modifié par cette route.',
+          });
+        }
+
+        // Relecture FRAÎCHE de l'acteur (jamais le contexte HTTP) : ses
+        // droits effectifs peuvent avoir changé depuis la garde HTTP.
+        const actor = await this.membershipModel
+          .findOne({
+            userId: new Types.ObjectId(actorUserId),
+            organizationId: orgOid,
+          })
+          .session(session)
+          .exec();
+        if (!actor || actor.status !== MembershipStatus.ACTIVE) {
+          throw this.accessDenied();
+        }
+
+        if (actor.role !== OrganizationRole.OWNER) {
+          const actorEffective = effectivePermissions(
+            actor.role,
+            actor.permissions,
+          );
+          const targetCurrentEffective = effectivePermissions(
+            target.role,
+            target.permissions,
+          );
+          const prospectiveEffective = effectivePermissions(
+            dto.role ?? target.role,
+            dto.permissions ?? target.permissions,
+          );
+          if (
+            !isPermissionSubset(targetCurrentEffective, actorEffective) ||
+            !isPermissionSubset(prospectiveEffective, actorEffective)
+          ) {
+            throw new ForbiddenException(PERMISSION_DENIED_RESPONSE);
+          }
+        }
+
+        if (dto.role !== undefined) target.role = dto.role;
+        if (dto.permissions !== undefined) target.permissions = dto.permissions;
+        // Aucune réactivation implicite : `status` n'est touché QUE si
+        // explicitement demandé (jamais un effet de bord de role/permissions).
+        if (dto.status !== undefined) target.status = dto.status;
+
+        await target.save({ session });
+        targetUserId = targetUserIdStr;
+        result = this.toMemberView(target);
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    if (!result || !targetUserId) {
+      throw new Error(
+        'Membership update transaction completed without a result',
+      );
+    }
+    // APRÈS le commit uniquement : jamais avant, jamais sur rollback.
+    this.socketRegistry.disconnectMember(organizationId, targetUserId);
+    return result;
+  }
+
+  /**
+   * Transfert atomique de propriété (1-7C) — `ownership.transfer`,
+   * `@OwnerOnly` (rôle STRICT, jamais via `permissions`). L'acteur ET la
+   * cible sont RELUS dans la transaction. Ancien owner → `admin`/`active` ;
+   * cible → `owner`/`active` ; garde défensive « exactement un owner actif »
+   * AVANT commit (échec → transaction entière annulée, aucun état
+   * intermédiaire observable).
+   */
+  async transferOwnership(
+    organizationId: string,
+    actorUserId: string,
+    targetMembershipId: string,
+  ): Promise<TransferOwnershipResult> {
+    const orgOid = new Types.ObjectId(organizationId);
+    const session = await this.connection.startSession();
+    let result: TransferOwnershipResult | undefined;
+    let previousOwnerUserId: string | undefined;
+    let newOwnerUserId: string | undefined;
+
+    try {
+      await session.withTransaction(async () => {
+        const actor = await this.membershipModel
+          .findOne({
+            userId: new Types.ObjectId(actorUserId),
+            organizationId: orgOid,
+          })
+          .populate('userId', 'name email')
+          .session(session)
+          .exec();
+        if (
+          !actor ||
+          actor.status !== MembershipStatus.ACTIVE ||
+          actor.role !== OrganizationRole.OWNER
+        ) {
+          throw this.accessDenied();
+        }
+
+        const target = await this.membershipModel
+          .findOne({
+            _id: new Types.ObjectId(targetMembershipId),
+            organizationId: orgOid,
+          })
+          .populate('userId', 'name email')
+          .session(session)
+          .exec();
+        if (!target) throw new NotFoundException();
+
+        const targetUserIdStr = String(
+          (target.userId as unknown as { _id?: Types.ObjectId })._id ??
+            target.userId,
+        );
+        if (targetUserIdStr === actorUserId) {
+          throw new ConflictException({
+            code: 'TRANSFER_TARGET_IS_CURRENT_OWNER',
+            message: 'La cible est déjà propriétaire de cette organisation.',
+          });
+        }
+        if (target.status !== MembershipStatus.ACTIVE) {
+          throw new ConflictException({
+            code: 'TRANSFER_TARGET_NOT_ACTIVE',
+            message: 'La cible du transfert doit avoir une membership active.',
+          });
+        }
+
+        actor.role = OrganizationRole.ADMIN;
+        target.role = OrganizationRole.OWNER;
+        await actor.save({ session });
+        await target.save({ session });
+
+        // Garde défensive AVANT commit (même esprit que
+        // `createOwnerOrganization`) : jamais un état à 0 ou 2 owners actifs.
+        const activeOwners = await this.membershipModel.countDocuments(
+          {
+            organizationId: orgOid,
+            role: OrganizationRole.OWNER,
+            status: MembershipStatus.ACTIVE,
+          },
+          { session },
+        );
+        if (activeOwners !== 1) {
+          throw new Error(
+            'Ownership transfer invariant violated: expected exactly one active owner.',
+          );
+        }
+
+        previousOwnerUserId = actorUserId;
+        newOwnerUserId = targetUserIdStr;
+        result = {
+          previousOwner: this.toMemberView(actor),
+          newOwner: this.toMemberView(target),
+        };
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    if (!result || !previousOwnerUserId || !newOwnerUserId) {
+      throw new Error(
+        'Ownership transfer transaction completed without a result',
+      );
+    }
+    // APRÈS le commit uniquement : ancien ET nouveau owner rechargent leur
+    // contexte à la prochaine connexion.
+    this.socketRegistry.disconnectMember(organizationId, previousOwnerUserId);
+    this.socketRegistry.disconnectMember(organizationId, newOwnerUserId);
+    return result;
+  }
+
   private invitationInvalidOrExpired(): BadRequestException {
     return new BadRequestException({
       code: INVITATION_INVALID_OR_EXPIRED,
       message: 'Cette invitation est invalide ou a expiré.',
     });
+  }
+
+  private toMemberView(membership: OrganizationMembershipDocument): MemberView {
+    // `userId` est soit un ObjectId brut (non peuplé), soit le document
+    // `{_id,name,email}` peuplé par `listMembers` — jamais `password`.
+    const populated = membership.userId as unknown as
+      { _id: Types.ObjectId; name: string; email: string } | Types.ObjectId;
+    const user =
+      populated instanceof Types.ObjectId
+        ? { _id: populated.toString(), name: '', email: '' }
+        : {
+            _id: populated._id.toString(),
+            name: populated.name,
+            email: populated.email,
+          };
+    return {
+      membershipId: membership._id.toString(),
+      user,
+      role: membership.role,
+      permissions: [...membership.permissions],
+      status: membership.status,
+      joinedAt: membership.joinedAt,
+    };
   }
 
   private toInvitationView(

@@ -5,6 +5,7 @@ import type { IncomingHttpHeaders, IncomingMessage } from 'http';
 import type { Server, Socket } from 'socket.io';
 import { UsersService } from '../users/users.service';
 import { OrganizationsService } from '../organizations/organizations.service';
+import { SocketRegistryService } from '../organizations/socket-registry.service';
 import {
   buildOriginAllowlist,
   parseCORSOrigin,
@@ -143,6 +144,7 @@ export class EventsGateway {
     private readonly jwtService: JwtService,
     private readonly usersService: UsersService,
     private readonly organizationsService: OrganizationsService,
+    private readonly socketRegistry: SocketRegistryService,
   ) {}
 
   /**
@@ -170,13 +172,27 @@ export class EventsGateway {
   }
 
   handleConnection(client: Socket): void {
-    const organizationId = client.data.organizationContext?.organizationId as
-      string | undefined;
-    if (!organizationId) {
+    const organizationContext = client.data.organizationContext as
+      { organizationId?: string; userId?: string } | undefined;
+    const organizationId = organizationContext?.organizationId;
+    const userId = organizationContext?.userId;
+    if (!organizationId || !userId) {
       client.disconnect(true);
       return;
     }
     void client.join(organizationRoom(organizationId));
+    // 1-7C : registre en mémoire — permet de déconnecter ce membre après
+    // une mutation de membership (suspension/révocation/transfert).
+    this.socketRegistry.register(organizationId, userId, client);
+  }
+
+  handleDisconnect(client: Socket): void {
+    const organizationContext = client.data.organizationContext as
+      { organizationId?: string; userId?: string } | undefined;
+    const organizationId = organizationContext?.organizationId;
+    const userId = organizationContext?.userId;
+    if (!organizationId || !userId) return;
+    this.socketRegistry.unregister(organizationId, userId, client);
   }
 
   emitToOrganization(

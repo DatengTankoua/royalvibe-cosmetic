@@ -100,6 +100,23 @@ export const OWNER_ONLY_OPERATIONS = Object.freeze([
 export type OwnerOnlyOperation = (typeof OWNER_ONLY_OPERATIONS)[number];
 
 /**
+ * 1-7C — ensemble des permissions effectives (rôle ∪ permissions
+ * supplémentaires). Base commune à `hasPermission` et aux contrôles
+ * anti-escalade de gestion des membres.
+ */
+export function effectivePermissions(
+  role: OrganizationRole,
+  permissions: readonly DelegablePermission[],
+): Set<DelegablePermission> {
+  // `?? []` : défensif contre un rôle invalide/futur non couvert par la
+  // table (jamais un TypeError → jamais 500).
+  return new Set([
+    ...(DEFAULT_PERMISSIONS_BY_ROLE[role] ?? []),
+    ...permissions,
+  ]);
+}
+
+/**
  * 1-7B — calcule si les permissions effectives (rôle ∪ permissions
  * supplémentaires) couvrent `permission`. Type structurel (pas
  * `ResolvedOrganizationContext`) pour éviter un import circulaire avec
@@ -114,12 +131,20 @@ export function hasPermission(
   },
   permission: DelegablePermission,
 ): boolean {
-  // `?? []` : défensif contre un rôle invalide/futur non couvert par la
-  // table (jamais un TypeError sur `.includes(undefined)` → jamais 500).
-  return (
-    (DEFAULT_PERMISSIONS_BY_ROLE[context.role] ?? []).includes(permission) ||
-    context.permissions.includes(permission)
+  return effectivePermissions(context.role, context.permissions).has(
+    permission,
   );
+}
+
+/** 1-7C — `subset` ⊆ `superset` (anti-escalade gestion des membres). */
+export function isPermissionSubset(
+  subset: ReadonlySet<DelegablePermission>,
+  superset: ReadonlySet<DelegablePermission>,
+): boolean {
+  for (const permission of subset) {
+    if (!superset.has(permission)) return false;
+  }
+  return true;
 }
 
 /** Corps 403 UNIFORME (même contrat que `PermissionGuard`, 1-7A). */

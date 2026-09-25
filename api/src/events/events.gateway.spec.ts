@@ -4,6 +4,7 @@ import { Test } from '@nestjs/testing';
 import { EventsGateway } from './events.gateway';
 import { UsersService } from '../users/users.service';
 import { OrganizationsService } from '../organizations/organizations.service';
+import { SocketRegistryService } from '../organizations/socket-registry.service';
 
 /**
  * Tests unitaires du `EventsGateway` (phase 0B.3).
@@ -48,8 +49,10 @@ const GATEWAY_METADATA_KEY = 'websockets:is_gateway';
 
 describe('EventsGateway (unité)', () => {
   let gateway: EventsGateway;
+  let socketRegistry: { register: jest.Mock; unregister: jest.Mock };
 
   async function compileGateway() {
+    socketRegistry = { register: jest.fn(), unregister: jest.fn() };
     const module = await Test.createTestingModule({
       providers: [
         EventsGateway,
@@ -65,6 +68,7 @@ describe('EventsGateway (unité)', () => {
           provide: OrganizationsService,
           useValue: { resolveActiveContext: jest.fn() },
         },
+        { provide: SocketRegistryService, useValue: socketRegistry },
       ],
     }).compile();
     gateway = module.get(EventsGateway);
@@ -197,6 +201,7 @@ describe('EventsGateway (unité)', () => {
         data: {
           organizationContext: {
             organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+            userId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
           },
         },
         join: jest.fn(),
@@ -222,6 +227,68 @@ describe('EventsGateway (unité)', () => {
 
       expect(client.join).not.toHaveBeenCalled();
       expect(client.disconnect).toHaveBeenCalledWith(true);
+    });
+
+    it('déconnecte défensivement un socket avec organizationId mais SANS userId (contexte incomplet)', () => {
+      const client = {
+        data: {
+          organizationContext: { organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+        },
+        join: jest.fn(),
+        disconnect: jest.fn(),
+      };
+
+      gateway.handleConnection(client as never);
+
+      expect(client.join).not.toHaveBeenCalled();
+      expect(client.disconnect).toHaveBeenCalledWith(true);
+      expect(socketRegistry.register).not.toHaveBeenCalled();
+    });
+
+    it('1-7C : enregistre la socket dans le registre (org+user) à la connexion', () => {
+      const client = {
+        data: {
+          organizationContext: {
+            organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+            userId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+          },
+        },
+        join: jest.fn(),
+        disconnect: jest.fn(),
+      };
+
+      gateway.handleConnection(client as never);
+
+      expect(socketRegistry.register).toHaveBeenCalledWith(
+        'aaaaaaaaaaaaaaaaaaaaaaaa',
+        'bbbbbbbbbbbbbbbbbbbbbbbb',
+        client,
+      );
+    });
+
+    it('1-7C : désenregistre la socket du registre à la déconnexion', () => {
+      const client = {
+        data: {
+          organizationContext: {
+            organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+            userId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+          },
+        },
+      };
+
+      gateway.handleDisconnect(client as never);
+
+      expect(socketRegistry.unregister).toHaveBeenCalledWith(
+        'aaaaaaaaaaaaaaaaaaaaaaaa',
+        'bbbbbbbbbbbbbbbbbbbbbbbb',
+        client,
+      );
+    });
+
+    it('1-7C : handleDisconnect sans contexte est un no-op (aucune erreur, aucun appel)', () => {
+      const client = { data: {} };
+      expect(() => gateway.handleDisconnect(client as never)).not.toThrow();
+      expect(socketRegistry.unregister).not.toHaveBeenCalled();
     });
 
     it('émet uniquement via server.to(room).emit', () => {

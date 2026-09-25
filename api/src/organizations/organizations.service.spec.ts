@@ -18,6 +18,7 @@ import { OrganizationMembership } from './schemas/membership.schema';
 import { OrganizationInvitation } from './schemas/invitation.schema';
 import { UsersService } from '../users/users.service';
 import { UserRole } from '../users/schemas/user.schema';
+import { SocketRegistryService } from './socket-registry.service';
 import {
   DelegablePermission,
   InvitationStatus,
@@ -62,6 +63,10 @@ describe('OrganizationsService.resolveActiveContext', () => {
         },
         { provide: UsersService, useValue: { findByEmail: jest.fn() } },
         { provide: getConnectionToken(), useValue: {} },
+        {
+          provide: SocketRegistryService,
+          useValue: { disconnectMember: jest.fn() },
+        },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -389,6 +394,10 @@ describe('OrganizationsService.listActiveOrganizations', () => {
         },
         { provide: UsersService, useValue: { findByEmail: jest.fn() } },
         { provide: getConnectionToken(), useValue: {} },
+        {
+          provide: SocketRegistryService,
+          useValue: { disconnectMember: jest.fn() },
+        },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -666,6 +675,10 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
         },
         { provide: UsersService, useValue: usersService },
         { provide: getConnectionToken(), useValue: {} },
+        {
+          provide: SocketRegistryService,
+          useValue: { disconnectMember: jest.fn() },
+        },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1002,6 +1015,10 @@ describe('OrganizationsService.acceptInvitation (1-6B.2)', () => {
           provide: getConnectionToken(),
           useValue: connectionFixture.connection,
         },
+        {
+          provide: SocketRegistryService,
+          useValue: { disconnectMember: jest.fn() },
+        },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1225,5 +1242,477 @@ describe('OrganizationsService.acceptInvitation (1-6B.2)', () => {
 
     await service.acceptInvitation(VALID_DTO, NOW).catch(() => undefined);
     expect(connectionFixture.session.endSession).toHaveBeenCalledTimes(1);
+  });
+});
+
+// =============================================================================
+// 1-7C — gestion des membres + transfert de propriété
+// =============================================================================
+
+const ORG_ID_17C = 'aa1122334455667788990011';
+const ACTOR_USER_ID = 'bb1122334455667788990011';
+const ACTOR_MEMBERSHIP_ID = 'cc1122334455667788990011';
+const TARGET_USER_ID = 'dd1122334455667788990011';
+const TARGET_MEMBERSHIP_ID = 'ee1122334455667788990011';
+
+/** Chaîne de requête Mongoose minimale : `populate`/`sort`/`session` chaînables, `exec` résout `result`. */
+function makeChain(result: unknown) {
+  const chain: Record<string, jest.Mock> = {};
+  chain.populate = jest.fn(() => chain);
+  chain.sort = jest.fn(() => chain);
+  chain.session = jest.fn(() => chain);
+  chain.exec = jest.fn().mockResolvedValue(result);
+  return chain;
+}
+
+function populatedUser(userId: string, name = 'U', email = 'u@example.com') {
+  return { _id: new Types.ObjectId(userId), name, email };
+}
+
+function membershipDoc(
+  userId: string,
+  membershipId: string,
+  overrides: Record<string, unknown> = {},
+) {
+  const doc: Record<string, unknown> = {
+    _id: new Types.ObjectId(membershipId),
+    organizationId: new Types.ObjectId(ORG_ID_17C),
+    userId: populatedUser(userId),
+    role: OrganizationRole.SELLER,
+    permissions: [] as DelegablePermission[],
+    status: MembershipStatus.ACTIVE,
+    joinedAt: new Date('2026-01-01T00:00:00.000Z'),
+    ...overrides,
+  };
+  doc.save = jest.fn().mockResolvedValue(doc);
+  return doc;
+}
+
+function makeSessionFixture17C() {
+  const endSession = jest.fn().mockResolvedValue(true);
+  const withTransaction = jest.fn(
+    async (cb: (s: unknown) => Promise<unknown>) => cb(sessionRef),
+  );
+  const sessionRef = { withTransaction, endSession };
+  const connection = {
+    startSession: jest.fn(() => Promise.resolve(sessionRef)),
+  };
+  return { session: sessionRef, connection, endSession };
+}
+
+describe('OrganizationsService.listMembers (1-7C)', () => {
+  let service: OrganizationsService;
+  let membershipModel: { find: jest.Mock };
+
+  async function build(members: unknown[]) {
+    membershipModel = { find: jest.fn(() => makeChain(members)) };
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrganizationsService,
+        { provide: getModelToken(Organization.name), useValue: {} },
+        {
+          provide: getModelToken(OrganizationMembership.name),
+          useValue: membershipModel,
+        },
+        { provide: getModelToken(OrganizationInvitation.name), useValue: {} },
+        { provide: UsersService, useValue: {} },
+        { provide: getConnectionToken(), useValue: {} },
+        {
+          provide: SocketRegistryService,
+          useValue: { disconnectMember: jest.fn() },
+        },
+      ],
+    }).compile();
+    service = module.get(OrganizationsService);
+  }
+
+  it('filtre EXACTEMENT par organizationId (org B jamais incluse) et ne renvoie jamais password/User.role', async () => {
+    const member = membershipDoc(TARGET_USER_ID, TARGET_MEMBERSHIP_ID);
+    await build([member]);
+
+    const result = await service.listMembers(ORG_ID_17C);
+
+    expect(membershipModel.find).toHaveBeenCalledWith({
+      organizationId: new Types.ObjectId(ORG_ID_17C),
+    });
+    expect(result).toEqual([
+      {
+        membershipId: TARGET_MEMBERSHIP_ID,
+        user: { _id: TARGET_USER_ID, name: 'U', email: 'u@example.com' },
+        role: OrganizationRole.SELLER,
+        permissions: [],
+        status: MembershipStatus.ACTIVE,
+        joinedAt: member.joinedAt,
+      },
+    ]);
+    expect(Object.keys(result[0])).not.toContain('password');
+  });
+});
+
+describe('OrganizationsService.updateMembership (1-7C)', () => {
+  let service: OrganizationsService;
+  let membershipModel: { findOne: jest.Mock };
+  let socketRegistry: { disconnectMember: jest.Mock };
+  let fixture: ReturnType<typeof makeSessionFixture17C>;
+
+  async function build(actor: unknown, target: unknown) {
+    fixture = makeSessionFixture17C();
+    membershipModel = {
+      findOne: jest.fn((filter: Record<string, unknown>) =>
+        makeChain(filter._id ? target : actor),
+      ),
+    };
+    socketRegistry = { disconnectMember: jest.fn() };
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrganizationsService,
+        { provide: getModelToken(Organization.name), useValue: {} },
+        {
+          provide: getModelToken(OrganizationMembership.name),
+          useValue: membershipModel,
+        },
+        { provide: getModelToken(OrganizationInvitation.name), useValue: {} },
+        { provide: UsersService, useValue: {} },
+        { provide: getConnectionToken(), useValue: fixture.connection },
+        { provide: SocketRegistryService, useValue: socketRegistry },
+      ],
+    }).compile();
+    service = module.get(OrganizationsService);
+  }
+
+  it('body vide → 400 EMPTY_MEMBERSHIP_UPDATE, aucune session ouverte', async () => {
+    await build(null, null);
+    const error = await service
+      .updateMembership(ORG_ID_17C, ACTOR_USER_ID, TARGET_MEMBERSHIP_ID, {})
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect((error as BadRequestException).getResponse()).toMatchObject({
+      code: 'EMPTY_MEMBERSHIP_UPDATE',
+    });
+  });
+
+  it('cible étrangère/absente → 404, aucun disconnect', async () => {
+    await build(membershipDoc(ACTOR_USER_ID, ACTOR_MEMBERSHIP_ID), null);
+    const error = await service
+      .updateMembership(ORG_ID_17C, ACTOR_USER_ID, TARGET_MEMBERSHIP_ID, {
+        role: OrganizationRole.ADMIN,
+      })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NotFoundException);
+    expect(socketRegistry.disconnectMember).not.toHaveBeenCalled();
+  });
+
+  it('self-management refusé (403 SELF_MANAGEMENT_FORBIDDEN)', async () => {
+    const self = membershipDoc(ACTOR_USER_ID, TARGET_MEMBERSHIP_ID);
+    await build(self, self);
+    const error = await service
+      .updateMembership(ORG_ID_17C, ACTOR_USER_ID, TARGET_MEMBERSHIP_ID, {
+        status: MembershipStatus.SUSPENDED,
+      })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ForbiddenException);
+    expect((error as ForbiddenException).getResponse()).toMatchObject({
+      code: 'SELF_MANAGEMENT_FORBIDDEN',
+    });
+    expect(socketRegistry.disconnectMember).not.toHaveBeenCalled();
+  });
+
+  it('modification de l’owner refusée (403 OWNER_NOT_MANAGEABLE), même par un autre owner', async () => {
+    const actor = membershipDoc(ACTOR_USER_ID, ACTOR_MEMBERSHIP_ID, {
+      role: OrganizationRole.OWNER,
+    });
+    const target = membershipDoc(TARGET_USER_ID, TARGET_MEMBERSHIP_ID, {
+      role: OrganizationRole.OWNER,
+    });
+    await build(actor, target);
+    const error = await service
+      .updateMembership(ORG_ID_17C, ACTOR_USER_ID, TARGET_MEMBERSHIP_ID, {
+        status: MembershipStatus.SUSPENDED,
+      })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ForbiddenException);
+    expect((error as ForbiddenException).getResponse()).toMatchObject({
+      code: 'OWNER_NOT_MANAGEABLE',
+    });
+  });
+
+  it('owner modifie librement rôle/permissions/statut d’un membre (aucune borne anti-escalade)', async () => {
+    const actor = membershipDoc(ACTOR_USER_ID, ACTOR_MEMBERSHIP_ID, {
+      role: OrganizationRole.OWNER,
+    });
+    const target = membershipDoc(TARGET_USER_ID, TARGET_MEMBERSHIP_ID, {
+      role: OrganizationRole.SELLER,
+      permissions: [],
+    });
+    await build(actor, target);
+
+    const result = await service.updateMembership(
+      ORG_ID_17C,
+      ACTOR_USER_ID,
+      TARGET_MEMBERSHIP_ID,
+      { role: OrganizationRole.ADMIN, permissions: ['analytics.read'] },
+    );
+
+    expect(result.role).toBe(OrganizationRole.ADMIN);
+    expect(result.permissions).toEqual(['analytics.read']);
+    expect(target.save).toHaveBeenCalledWith({ session: fixture.session });
+    // APRÈS le commit uniquement :
+    expect(socketRegistry.disconnectMember).toHaveBeenCalledWith(
+      ORG_ID_17C,
+      TARGET_USER_ID,
+    );
+  });
+
+  it('délégation members.manage SANS escalade : peut gérer un membre dont les permissions ⊆ les siennes', async () => {
+    const actor = membershipDoc(ACTOR_USER_ID, ACTOR_MEMBERSHIP_ID, {
+      role: OrganizationRole.SELLER,
+      permissions: ['members.manage', 'analytics.read', 'sales.view_all'],
+    });
+    const target = membershipDoc(TARGET_USER_ID, TARGET_MEMBERSHIP_ID, {
+      role: OrganizationRole.SELLER,
+      permissions: ['analytics.read'],
+    });
+    await build(actor, target);
+
+    const result = await service.updateMembership(
+      ORG_ID_17C,
+      ACTOR_USER_ID,
+      TARGET_MEMBERSHIP_ID,
+      { permissions: ['sales.view_all'] },
+    );
+    expect(result.permissions).toEqual(['sales.view_all']);
+  });
+
+  it('délégué members.manage : refuse d’attribuer PLUS de droits que les siens (403 PERMISSION_DENIED)', async () => {
+    const actor = membershipDoc(ACTOR_USER_ID, ACTOR_MEMBERSHIP_ID, {
+      role: OrganizationRole.SELLER,
+      permissions: ['members.manage'],
+    });
+    const target = membershipDoc(TARGET_USER_ID, TARGET_MEMBERSHIP_ID, {
+      role: OrganizationRole.SELLER,
+      permissions: [],
+    });
+    await build(actor, target);
+
+    const error = await service
+      .updateMembership(ORG_ID_17C, ACTOR_USER_ID, TARGET_MEMBERSHIP_ID, {
+        permissions: ['analytics.read'],
+      })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ForbiddenException);
+    expect((error as ForbiddenException).getResponse()).toMatchObject({
+      code: 'PERMISSION_DENIED',
+    });
+    expect(target.save).not.toHaveBeenCalled();
+  });
+
+  it('délégué members.manage : refuse de gérer un membre ayant DÉJÀ plus de droits (403 PERMISSION_DENIED)', async () => {
+    const actor = membershipDoc(ACTOR_USER_ID, ACTOR_MEMBERSHIP_ID, {
+      role: OrganizationRole.SELLER,
+      permissions: ['members.manage'],
+    });
+    const target = membershipDoc(TARGET_USER_ID, TARGET_MEMBERSHIP_ID, {
+      role: OrganizationRole.ADMIN, // effective : toutes les permissions
+      permissions: [],
+    });
+    await build(actor, target);
+
+    const error = await service
+      .updateMembership(ORG_ID_17C, ACTOR_USER_ID, TARGET_MEMBERSHIP_ID, {
+        status: MembershipStatus.SUSPENDED,
+      })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ForbiddenException);
+    expect((error as ForbiddenException).getResponse()).toMatchObject({
+      code: 'PERMISSION_DENIED',
+    });
+  });
+
+  it('aucune réactivation implicite : `status` omis reste inchangé après un changement de rôle', async () => {
+    const actor = membershipDoc(ACTOR_USER_ID, ACTOR_MEMBERSHIP_ID, {
+      role: OrganizationRole.OWNER,
+    });
+    const target = membershipDoc(TARGET_USER_ID, TARGET_MEMBERSHIP_ID, {
+      role: OrganizationRole.SELLER,
+      status: MembershipStatus.SUSPENDED,
+    });
+    await build(actor, target);
+
+    const result = await service.updateMembership(
+      ORG_ID_17C,
+      ACTOR_USER_ID,
+      TARGET_MEMBERSHIP_ID,
+      { role: OrganizationRole.ADMIN },
+    );
+    expect(result.status).toBe(MembershipStatus.SUSPENDED);
+  });
+
+  it('rollback (échec après relecture) : aucun disconnect, session toujours fermée', async () => {
+    const actor = membershipDoc(ACTOR_USER_ID, ACTOR_MEMBERSHIP_ID, {
+      role: OrganizationRole.OWNER,
+    });
+    const target = membershipDoc(TARGET_USER_ID, TARGET_MEMBERSHIP_ID);
+    target.save = jest.fn().mockRejectedValue(new Error('save failed'));
+    await build(actor, target);
+
+    await expect(
+      service.updateMembership(
+        ORG_ID_17C,
+        ACTOR_USER_ID,
+        TARGET_MEMBERSHIP_ID,
+        {
+          role: OrganizationRole.ADMIN,
+        },
+      ),
+    ).rejects.toThrow('save failed');
+    expect(socketRegistry.disconnectMember).not.toHaveBeenCalled();
+    expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('OrganizationsService.transferOwnership (1-7C)', () => {
+  let service: OrganizationsService;
+  let membershipModel: { findOne: jest.Mock; countDocuments: jest.Mock };
+  let socketRegistry: { disconnectMember: jest.Mock };
+  let fixture: ReturnType<typeof makeSessionFixture17C>;
+
+  async function build(actor: unknown, target: unknown, activeOwnersAfter = 1) {
+    fixture = makeSessionFixture17C();
+    membershipModel = {
+      findOne: jest.fn((filter: Record<string, unknown>) =>
+        makeChain(filter._id ? target : actor),
+      ),
+      countDocuments: jest.fn().mockResolvedValue(activeOwnersAfter),
+    };
+    socketRegistry = { disconnectMember: jest.fn() };
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrganizationsService,
+        { provide: getModelToken(Organization.name), useValue: {} },
+        {
+          provide: getModelToken(OrganizationMembership.name),
+          useValue: membershipModel,
+        },
+        { provide: getModelToken(OrganizationInvitation.name), useValue: {} },
+        { provide: UsersService, useValue: {} },
+        { provide: getConnectionToken(), useValue: fixture.connection },
+        { provide: SocketRegistryService, useValue: socketRegistry },
+      ],
+    }).compile();
+    service = module.get(OrganizationsService);
+  }
+
+  const owner = () =>
+    membershipDoc(ACTOR_USER_ID, ACTOR_MEMBERSHIP_ID, {
+      role: OrganizationRole.OWNER,
+    });
+
+  it('transfert atomique : ancien owner → admin/active, cible → owner/active', async () => {
+    const actor = owner();
+    const target = membershipDoc(TARGET_USER_ID, TARGET_MEMBERSHIP_ID, {
+      role: OrganizationRole.SELLER,
+    });
+    await build(actor, target);
+
+    const result = await service.transferOwnership(
+      ORG_ID_17C,
+      ACTOR_USER_ID,
+      TARGET_MEMBERSHIP_ID,
+    );
+
+    expect(result.previousOwner.role).toBe(OrganizationRole.ADMIN);
+    expect(result.previousOwner.status).toBe(MembershipStatus.ACTIVE);
+    expect(result.newOwner.role).toBe(OrganizationRole.OWNER);
+    expect(result.newOwner.status).toBe(MembershipStatus.ACTIVE);
+    expect(actor.save).toHaveBeenCalledWith({ session: fixture.session });
+    expect(target.save).toHaveBeenCalledWith({ session: fixture.session });
+    // APRÈS le commit uniquement : ancien ET nouveau owner déconnectés.
+    expect(socketRegistry.disconnectMember).toHaveBeenCalledWith(
+      ORG_ID_17C,
+      ACTOR_USER_ID,
+    );
+    expect(socketRegistry.disconnectMember).toHaveBeenCalledWith(
+      ORG_ID_17C,
+      TARGET_USER_ID,
+    );
+  });
+
+  it('cible = propriétaire actuel → 409 TRANSFER_TARGET_IS_CURRENT_OWNER', async () => {
+    const actor = owner();
+    const sameAsActor = membershipDoc(ACTOR_USER_ID, TARGET_MEMBERSHIP_ID, {
+      role: OrganizationRole.OWNER,
+    });
+    await build(actor, sameAsActor);
+
+    const error = await service
+      .transferOwnership(ORG_ID_17C, ACTOR_USER_ID, TARGET_MEMBERSHIP_ID)
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toMatchObject({
+      code: 'TRANSFER_TARGET_IS_CURRENT_OWNER',
+    });
+  });
+
+  it('cible inactive → 409 TRANSFER_TARGET_NOT_ACTIVE', async () => {
+    const actor = owner();
+    const target = membershipDoc(TARGET_USER_ID, TARGET_MEMBERSHIP_ID, {
+      status: MembershipStatus.SUSPENDED,
+    });
+    await build(actor, target);
+
+    const error = await service
+      .transferOwnership(ORG_ID_17C, ACTOR_USER_ID, TARGET_MEMBERSHIP_ID)
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toMatchObject({
+      code: 'TRANSFER_TARGET_NOT_ACTIVE',
+    });
+  });
+
+  it('cible étrangère/absente → 404', async () => {
+    const actor = owner();
+    await build(actor, null);
+
+    const error = await service
+      .transferOwnership(ORG_ID_17C, ACTOR_USER_ID, TARGET_MEMBERSHIP_ID)
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NotFoundException);
+  });
+
+  it('invariant « exactement un owner actif » violé avant commit → transaction annulée, aucun disconnect', async () => {
+    const actor = owner();
+    const target = membershipDoc(TARGET_USER_ID, TARGET_MEMBERSHIP_ID);
+    await build(actor, target, 2); // countDocuments renvoie 2 : invariant violé
+
+    await expect(
+      service.transferOwnership(
+        ORG_ID_17C,
+        ACTOR_USER_ID,
+        TARGET_MEMBERSHIP_ID,
+      ),
+    ).rejects.toThrow(/exactly one active owner/);
+    expect(socketRegistry.disconnectMember).not.toHaveBeenCalled();
+    expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('acteur non-owner (rôle STRICT, jamais via permissions injectées) → refus accès', async () => {
+    const fakeOwnerPermission = membershipDoc(
+      ACTOR_USER_ID,
+      ACTOR_MEMBERSHIP_ID,
+      {
+        role: OrganizationRole.ADMIN,
+        permissions: ['ownership.transfer' as unknown as DelegablePermission],
+      },
+    );
+    const target = membershipDoc(TARGET_USER_ID, TARGET_MEMBERSHIP_ID);
+    await build(fakeOwnerPermission, target);
+
+    const error = await service
+      .transferOwnership(ORG_ID_17C, ACTOR_USER_ID, TARGET_MEMBERSHIP_ID)
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ForbiddenException);
+    expect((error as ForbiddenException).getResponse()).toMatchObject({
+      code: ACCESS_DENIED_CODE,
+    });
   });
 });
