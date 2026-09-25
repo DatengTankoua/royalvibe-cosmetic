@@ -1,10 +1,10 @@
-import { ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { OrganizationsController } from './organizations.controller';
 import { OrganizationsService } from './organizations.service';
 import { ResolvedOrganizationContext } from './organizations.service';
 import { OrganizationRole } from './permissions';
+import { PERMISSIONS_KEY } from '../auth/decorators/permissions.decorator';
 import type { User } from '../users/schemas/user.schema';
 
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -26,22 +26,14 @@ function makeContext(
 
 const user = { _id: new Types.ObjectId('eeeeeeeeeeeeeeeeeeeeeeee') } as User;
 
-/** Capture une exception SYNCHRONE ou une rejection (méthodes du contrôleur non-async). */
-async function thrown(fn: () => unknown): Promise<unknown> {
-  try {
-    await fn();
-  } catch (e) {
-    return e;
-  }
-  return undefined;
-}
-
 /**
- * OrganizationsController (1-6B.1) — autorisation TEMPORAIRE
- * `context.role === owner` uniquement ; `organizationId` provient
+ * OrganizationsController (1-7B) — autorisation `members.invite` déléguée
+ * à `PermissionGuard` (global) via `@RequirePermissions`, testée
+ * génériquement en 1-7A. Ce spec vérifie UNIQUEMENT : (1) la métadonnée
+ * exacte portée par le contrôleur, (2) que `organizationId` provient
  * EXCLUSIVEMENT de `@CurrentOrganization()`, jamais du DTO/body.
  */
-describe('OrganizationsController — invitations (1-6B.1)', () => {
+describe('OrganizationsController — invitations (1-7B)', () => {
   let controller: OrganizationsController;
 
   const serviceStub = {
@@ -62,12 +54,16 @@ describe('OrganizationsController — invitations (1-6B.1)', () => {
   });
 
   const ownerCtx = makeContext(ORG_A, OrganizationRole.OWNER);
-  const adminCtx = makeContext(ORG_A, OrganizationRole.ADMIN);
-  const sellerCtx = makeContext(ORG_A, OrganizationRole.SELLER);
   const dto = { email: 'invite@example.com', role: OrganizationRole.ADMIN };
 
+  it('@RequirePermissions(members.invite) est déclarée au niveau du contrôleur (les 3 routes)', () => {
+    expect(
+      Reflect.getMetadata(PERMISSIONS_KEY, OrganizationsController),
+    ).toEqual(['members.invite']);
+  });
+
   describe('create (POST /organizations/invitations)', () => {
-    it('owner → transmet organizationId du CONTEXTE + invitedById du USER courant', async () => {
+    it('transmet organizationId du CONTEXTE + invitedById du USER courant', async () => {
       serviceStub.createInvitation.mockResolvedValue({
         invitation: {},
         token: 't',
@@ -80,22 +76,10 @@ describe('OrganizationsController — invitations (1-6B.1)', () => {
         dto,
       );
     });
-
-    it.each([
-      ['admin', adminCtx],
-      ['seller', sellerCtx],
-    ])('%s → 403 OWNER_ONLY, service jamais appelé', async (_label, ctx) => {
-      const error = await thrown(() => controller.create(dto, user, ctx));
-      expect(error).toBeInstanceOf(ForbiddenException);
-      expect((error as ForbiddenException).getResponse()).toMatchObject({
-        code: 'OWNER_ONLY',
-      });
-      expect(serviceStub.createInvitation).not.toHaveBeenCalled();
-    });
   });
 
   describe('findAll (GET /organizations/invitations)', () => {
-    it('owner → liste UNIQUEMENT l’organisation du contexte', async () => {
+    it('liste UNIQUEMENT l’organisation du contexte', async () => {
       serviceStub.listInvitations.mockResolvedValue([]);
       await controller.findAll(ownerCtx);
       expect(serviceStub.listInvitations).toHaveBeenCalledWith(ORG_A);
@@ -106,34 +90,16 @@ describe('OrganizationsController — invitations (1-6B.1)', () => {
       await controller.findAll(makeContext(ORG_A, OrganizationRole.OWNER));
       expect(serviceStub.listInvitations).not.toHaveBeenCalledWith(ORG_B);
     });
-
-    it.each([
-      ['admin', adminCtx],
-      ['seller', sellerCtx],
-    ])('%s → 403 OWNER_ONLY, service jamais appelé', async (_label, ctx) => {
-      const error = await thrown(() => controller.findAll(ctx));
-      expect(error).toBeInstanceOf(ForbiddenException);
-      expect(serviceStub.listInvitations).not.toHaveBeenCalled();
-    });
   });
 
   describe('revoke (POST /organizations/invitations/:id/revoke)', () => {
-    it('owner → transmet organizationId du contexte + id du paramètre', async () => {
+    it('transmet organizationId du contexte + id du paramètre', async () => {
       serviceStub.revokeInvitation.mockResolvedValue({});
       await controller.revoke(INVITATION_ID, ownerCtx);
       expect(serviceStub.revokeInvitation).toHaveBeenCalledWith(
         ORG_A,
         INVITATION_ID,
       );
-    });
-
-    it.each([
-      ['admin', adminCtx],
-      ['seller', sellerCtx],
-    ])('%s → 403 OWNER_ONLY, service jamais appelé', async (_label, ctx) => {
-      const error = await thrown(() => controller.revoke(INVITATION_ID, ctx));
-      expect(error).toBeInstanceOf(ForbiddenException);
-      expect(serviceStub.revokeInvitation).not.toHaveBeenCalled();
     });
   });
 });

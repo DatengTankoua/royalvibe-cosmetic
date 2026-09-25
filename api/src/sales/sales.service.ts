@@ -135,11 +135,14 @@ export class SalesService {
   async findAll(
     organizationId: string,
     productId?: string,
+    scopeSellerId?: string,
   ): Promise<SaleDocument[]> {
     const filter: Record<string, Types.ObjectId> = {
       organizationId: new Types.ObjectId(organizationId),
     };
     if (productId) filter.productId = new Types.ObjectId(productId);
+    // 1-7B — scope `sales.view_own` : restreint au vendeur courant.
+    if (scopeSellerId) filter.sellerId = new Types.ObjectId(scopeSellerId);
     return this.saleModel
       .find(filter)
       .populate('sellerId', 'name email')
@@ -153,20 +156,21 @@ export class SalesService {
     id: string,
     dto: UpdateSaleDto,
     actorId: string,
+    scopeSellerId?: string,
   ): Promise<SaleDocument> {
     const session = await this.connection.startSession();
     let saved: SaleDocument | undefined;
     try {
       await session.withTransaction(async () => {
+        const filter: Record<string, Types.ObjectId> = {
+          _id: new Types.ObjectId(id),
+          organizationId: new Types.ObjectId(organizationId),
+        };
+        // 1-7B — sans `sales.view_all` : une vente d'un autre vendeur est
+        // indistinguable d'une vente absente (même 404, aucune fuite).
+        if (scopeSellerId) filter.sellerId = new Types.ObjectId(scopeSellerId);
         const sale = await this.saleModel
-          .findOne(
-            {
-              _id: new Types.ObjectId(id),
-              organizationId: new Types.ObjectId(organizationId),
-            },
-            null,
-            { session },
-          )
+          .findOne(filter, null, { session })
           .exec();
         if (!sale) throw new NotFoundException(`Sale ${id} not found`);
 
@@ -212,19 +216,18 @@ export class SalesService {
     organizationId: string,
     id: string,
     actorId: string,
+    scopeSellerId?: string,
   ): Promise<void> {
     const session = await this.connection.startSession();
     try {
       await session.withTransaction(async () => {
+        const filter: Record<string, Types.ObjectId> = {
+          _id: new Types.ObjectId(id),
+          organizationId: new Types.ObjectId(organizationId),
+        };
+        if (scopeSellerId) filter.sellerId = new Types.ObjectId(scopeSellerId);
         const sale = await this.saleModel
-          .findOne(
-            {
-              _id: new Types.ObjectId(id),
-              organizationId: new Types.ObjectId(organizationId),
-            },
-            null,
-            { session },
-          )
+          .findOne(filter, null, { session })
           .exec();
         if (!sale) throw new NotFoundException(`Sale ${id} not found`);
 

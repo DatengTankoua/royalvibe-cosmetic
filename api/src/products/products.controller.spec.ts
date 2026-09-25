@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { ProductsController } from './products.controller';
@@ -16,13 +17,17 @@ const SECTION_QUERY = '112233445566778899001122';
  * seul le `@CurrentOrganization()` du contrôleur peut le produire ici —
  * aucun paramètre du client n'est impliqué.
  */
-function makeContext(org: string): ResolvedOrganizationContext {
+function makeContext(
+  org: string,
+  role: OrganizationRole = OrganizationRole.OWNER,
+  permissions: ResolvedOrganizationContext['permissions'] = ['catalog.manage'],
+): ResolvedOrganizationContext {
   return {
     userId: '111111111111111111111111',
     organizationId: org,
     membershipId: '222222222222222222222222',
-    role: OrganizationRole.OWNER,
-    permissions: ['catalog.manage'],
+    role,
+    permissions,
   };
 }
 
@@ -60,6 +65,12 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       serviceStub[key].mockReset();
       serviceStub[key].mockResolvedValue(undefined);
     }
+    // `findOne` retourne toujours un `ProductDetail` réaliste (1-7B : le
+    // contrôleur lit `result.auditLogs` pour appliquer le gate `audit.read`).
+    serviceStub.findOne.mockResolvedValue({
+      product: {},
+      auditLogs: [{ action: 'created' }],
+    });
     s3Stub.uploadFile.mockReset().mockResolvedValue('http://s3-e2e/key.png');
     s3Stub.deleteFile.mockReset().mockResolvedValue(undefined);
     const module: TestingModule = await Test.createTestingModule({
@@ -141,9 +152,88 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     expect(serviceStub.findAll).toHaveBeenCalledWith(ORG_A, undefined);
   });
 
-  it('findOne : transmet l’org du contexte + l’id du paramètre', async () => {
+  it('findOne : transmet l’org du contexte + l’id du paramètre + le scope calculé', async () => {
     await controller.findOne(PRODUCT_ID, ctxA);
-    expect(serviceStub.findOne).toHaveBeenCalledWith(ORG_A, PRODUCT_ID);
+    expect(serviceStub.findOne).toHaveBeenCalledWith(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'all' },
+      true,
+    );
+  });
+
+  describe('findOne — scope ventes + gate audit.read (1-7B correctif : jamais interrogé hors scope)', () => {
+    it('owner/admin (défaut) : scope ventes «all» + audit.read inclus', async () => {
+      await controller.findOne(PRODUCT_ID, ctxA);
+      expect(serviceStub.findOne).toHaveBeenCalledWith(
+        ORG_A,
+        PRODUCT_ID,
+        { kind: 'all' },
+        true,
+      );
+    });
+
+    it('seller sans délégation (défaut) : scope «own» (sellerId = userId du contexte), audit exclu', async () => {
+      const sellerCtx = makeContext(ORG_A, OrganizationRole.SELLER, []);
+      await controller.findOne(PRODUCT_ID, sellerCtx);
+      expect(serviceStub.findOne).toHaveBeenCalledWith(
+        ORG_A,
+        PRODUCT_ID,
+        { kind: 'own', sellerId: sellerCtx.userId },
+        false,
+      );
+    });
+
+    it('seller délégué sales.view_all : scope «all»', async () => {
+      const sellerCtx = makeContext(ORG_A, OrganizationRole.SELLER, [
+        'sales.view_all',
+      ]);
+      await controller.findOne(PRODUCT_ID, sellerCtx);
+      expect(serviceStub.findOne).toHaveBeenCalledWith(
+        ORG_A,
+        PRODUCT_ID,
+        { kind: 'all' },
+        false,
+      );
+    });
+
+    it('seller délégué audit.read : audit inclus, scope ventes toujours «own»', async () => {
+      const sellerCtx = makeContext(ORG_A, OrganizationRole.SELLER, [
+        'audit.read',
+      ]);
+      await controller.findOne(PRODUCT_ID, sellerCtx);
+      expect(serviceStub.findOne).toHaveBeenCalledWith(
+        ORG_A,
+        PRODUCT_ID,
+        { kind: 'own', sellerId: sellerCtx.userId },
+        true,
+      );
+    });
+
+    it('rôle fictif sans aucune des deux permissions ventes : scope «none»', async () => {
+      const noScopeCtx = makeContext(
+        ORG_A,
+        'guest' as unknown as OrganizationRole,
+        [],
+      );
+      await controller.findOne(PRODUCT_ID, noScopeCtx);
+      expect(serviceStub.findOne).toHaveBeenCalledWith(
+        ORG_A,
+        PRODUCT_ID,
+        { kind: 'none' },
+        false,
+      );
+    });
+
+    it('transmet tel quel le résultat du service (aucune transformation en aval)', async () => {
+      serviceStub.findOne.mockResolvedValueOnce({
+        product: {},
+        sales: [],
+        auditLogs: [],
+      });
+      const result = await controller.findOne(PRODUCT_ID, ctxA);
+      expect(result).toEqual({ product: {}, sales: [], auditLogs: [] });
+    });
   });
 
   it('update sans image : ne touche pas S3, transmet newImageUrl undefined', async () => {
@@ -197,6 +287,142 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       controller.update(PRODUCT_ID, dto, undefined, user, ctxA),
     ).rejects.toBe(error);
     expect(s3Stub.deleteFile).not.toHaveBeenCalled();
+  });
+
+  describe('update — permissions dynamiques (correctif 1-7B : stock+prix ⇒ stock.adjust, catalogue/images ⇒ products.manage)', () => {
+    const productsManageOnly = makeContext(ORG_A, OrganizationRole.SELLER, [
+      'products.manage',
+    ]);
+    const stockAdjustOnly = makeContext(ORG_A, OrganizationRole.SELLER, [
+      'stock.adjust',
+    ]);
+    const both = makeContext(ORG_A, OrganizationRole.SELLER, [
+      'products.manage',
+      'stock.adjust',
+    ]);
+    const none = makeContext(ORG_A, OrganizationRole.SELLER, []);
+
+    it('champ descriptif (name) : products.manage seul suffit, stock.adjust non requis', async () => {
+      await controller.update(
+        PRODUCT_ID,
+        { name: 'N2' },
+        undefined,
+        user,
+        productsManageOnly,
+      );
+      expect(serviceStub.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('champ descriptif (name) : refusé SANS products.manage, même avec stock.adjust', async () => {
+      await expect(
+        controller.update(
+          PRODUCT_ID,
+          { name: 'N2' },
+          undefined,
+          user,
+          stockAdjustOnly,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(serviceStub.update).not.toHaveBeenCalled();
+    });
+
+    it('champ stock (additionalStock) : stock.adjust seul suffit, products.manage non requis', async () => {
+      await controller.update(
+        PRODUCT_ID,
+        { additionalStock: 5 },
+        undefined,
+        user,
+        stockAdjustOnly,
+      );
+      expect(serviceStub.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('champ prix (purchasePrice/salePrice) : refusé SANS stock.adjust, même avec products.manage', async () => {
+      await expect(
+        controller.update(
+          PRODUCT_ID,
+          { purchasePrice: 12 },
+          undefined,
+          user,
+          productsManageOnly,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(serviceStub.update).not.toHaveBeenCalled();
+    });
+
+    it('mélange (name + purchasePrice) : exige LES DEUX permissions', async () => {
+      await expect(
+        controller.update(
+          PRODUCT_ID,
+          { name: 'N2', purchasePrice: 12 },
+          undefined,
+          user,
+          productsManageOnly,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      await expect(
+        controller.update(
+          PRODUCT_ID,
+          { name: 'N2', purchasePrice: 12 },
+          undefined,
+          user,
+          stockAdjustOnly,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+
+      await controller.update(
+        PRODUCT_ID,
+        { name: 'N2', purchasePrice: 12 },
+        undefined,
+        user,
+        both,
+      );
+      expect(serviceStub.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('image seule (aucun champ DTO) : traitée comme descriptive ⇒ products.manage requis', async () => {
+      await expect(
+        controller.update(PRODUCT_ID, {}, file, user, stockAdjustOnly),
+      ).rejects.toThrow(ForbiddenException);
+
+      await controller.update(PRODUCT_ID, {}, file, user, productsManageOnly);
+      expect(serviceStub.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('DTO vide et sans image : retombe sur products.manage (jamais une route sans permission)', async () => {
+      await expect(
+        controller.update(PRODUCT_ID, {}, undefined, user, none),
+      ).rejects.toThrow(ForbiddenException);
+
+      await controller.update(
+        PRODUCT_ID,
+        {},
+        undefined,
+        user,
+        productsManageOnly,
+      );
+      expect(serviceStub.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('403 refusé porte le corps PERMISSION_DENIED uniforme', async () => {
+      let thrown: unknown;
+      try {
+        await controller.update(
+          PRODUCT_ID,
+          { name: 'N2' },
+          undefined,
+          user,
+          none,
+        );
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(ForbiddenException);
+      expect((thrown as ForbiddenException).getResponse()).toEqual({
+        code: 'PERMISSION_DENIED',
+        message: 'Permission insuffisante.',
+      });
+    });
   });
 
   it('remove : transmet l’org du contexte AVANT id et actorId', async () => {

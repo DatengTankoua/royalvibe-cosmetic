@@ -317,6 +317,22 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
       });
     });
 
+    it('findAll (1-7B) : scope sellerId ajouté au filtre quand fourni (sales.view_own)', async () => {
+      const chain = {
+        populate: jest.fn().mockReturnThis(),
+        sort: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue([]),
+      };
+      saleModel.find.mockReturnValue(chain);
+
+      await service.findAll(ORG_A, undefined, SELLER_OBJECT_ID);
+
+      expect(saleModel.find).toHaveBeenCalledWith({
+        organizationId: new Types.ObjectId(ORG_A),
+        sellerId: new Types.ObjectId(SELLER_OBJECT_ID),
+      });
+    });
+
     it('update filtre la vente par tenant et transmet la même session aux trois écritures', async () => {
       const entity = makeSaleEntity();
       entity.save = jest.fn(() => Promise.resolve(entity));
@@ -368,6 +384,32 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
       expect(products.adjustStock).not.toHaveBeenCalled();
       expect(audit.log).not.toHaveBeenCalled();
       expect(fixture.endSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('update (1-7B) : scope sellerId ajouté au filtre — vente d’un AUTRE vendeur ⇒ même 404 que l’absent', async () => {
+      saleModel.findOne.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(null),
+      });
+      const FOREIGN_SELLER = 'ffffffffffffffffffffffff';
+
+      await expect(
+        service.update(
+          ORG_A,
+          SALE_OBJECT_ID,
+          { quantity: 2 },
+          'actor-1',
+          FOREIGN_SELLER,
+        ),
+      ).rejects.toThrow(`Sale ${SALE_OBJECT_ID} not found`);
+      expect(saleModel.findOne).toHaveBeenCalledWith(
+        {
+          _id: new Types.ObjectId(SALE_OBJECT_ID),
+          organizationId: new Types.ObjectId(ORG_A),
+          sellerId: new Types.ObjectId(FOREIGN_SELLER),
+        },
+        null,
+        { session: fixture.session },
+      );
     });
 
     it('update propage l’échec audit avant tout effet post-commit', async () => {
@@ -426,6 +468,26 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
         service.remove(ORG_A, SALE_OBJECT_ID, 'actor-1'),
       ).rejects.toThrow('remove audit failure');
       expect(fixture.endSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('remove (1-7B) : scope sellerId ajouté au filtre — vente d’un AUTRE vendeur ⇒ même 404 que l’absent', async () => {
+      saleModel.findOne.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(null),
+      });
+      const FOREIGN_SELLER = 'ffffffffffffffffffffffff';
+
+      await expect(
+        service.remove(ORG_A, SALE_OBJECT_ID, 'actor-1', FOREIGN_SELLER),
+      ).rejects.toThrow(`Sale ${SALE_OBJECT_ID} not found`);
+      expect(saleModel.findOne).toHaveBeenCalledWith(
+        {
+          _id: new Types.ObjectId(SALE_OBJECT_ID),
+          organizationId: new Types.ObjectId(ORG_A),
+          sellerId: new Types.ObjectId(FOREIGN_SELLER),
+        },
+        null,
+        { session: fixture.session },
+      );
     });
   });
 });

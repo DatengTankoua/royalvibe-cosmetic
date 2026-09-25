@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { SalesController } from './sales.controller';
@@ -15,13 +15,17 @@ const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const ORG_B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
 const SELLER_ID = 'eeeeeeeeeeeeeeeeeeeeeeee';
 
-function makeContext(org: string): ResolvedOrganizationContext {
+function makeContext(
+  org: string,
+  role: OrganizationRole = OrganizationRole.OWNER,
+  permissions: ResolvedOrganizationContext['permissions'] = ['catalog.manage'],
+): ResolvedOrganizationContext {
   return {
     userId: SELLER_ID,
     organizationId: org,
     membershipId: '222222222222222222222222',
-    role: OrganizationRole.OWNER,
-    permissions: ['catalog.manage'],
+    role,
+    permissions,
   };
 }
 
@@ -141,6 +145,120 @@ describe('SalesController — transmission du tenant à la création (1-4C.1)', 
     );
 
     await controller.remove(VALID_OBJECT_ID, seller, ctxA);
+    expect(serviceStub.remove).toHaveBeenCalledWith(
+      ORG_A,
+      VALID_OBJECT_ID,
+      SELLER_ID,
+    );
+  });
+});
+
+/**
+ * SalesController (1-7B) — scope `sales.view_own` vs `sales.view_all` :
+ * décidé dans le contrôleur (pas via une simple métadonnée ET), car c'est
+ * un OU entre deux permissions à comportement différent.
+ */
+describe('SalesController — scope own/all (1-7B)', () => {
+  let controller: SalesController;
+
+  const serviceStub = {
+    create: jest.fn(),
+    findAll: jest.fn(),
+    update: jest.fn(),
+    remove: jest.fn(),
+  };
+
+  beforeEach(async () => {
+    for (const key of Object.keys(serviceStub)) {
+      serviceStub[key].mockReset();
+      serviceStub[key].mockResolvedValue(undefined);
+    }
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [SalesController],
+      providers: [{ provide: SalesService, useValue: serviceStub }],
+    }).compile();
+    controller = module.get(SalesController);
+  });
+
+  const sellerDefaultCtx = makeContext(ORG_A, OrganizationRole.SELLER, []);
+  const sellerViewAllCtx = makeContext(ORG_A, OrganizationRole.SELLER, [
+    'sales.view_all',
+  ]);
+  // `owner`/`admin`/`seller` couvrent TOUJOURS au moins l'une des deux
+  // permissions par défaut (invariant de `DEFAULT_PERMISSIONS_BY_ROLE`) :
+  // le rôle bidon simule un futur rôle sans défaut, pour couvrir la branche
+  // défensive 403 (jamais atteignable avec les 3 rôles actuels).
+  const noScopeCtx = makeContext(
+    ORG_A,
+    'guest' as unknown as OrganizationRole,
+    [],
+  );
+
+  it('findAll : seller par défaut (sales.view_own) → scope sellerId = userId du contexte', async () => {
+    await controller.findAll(undefined, sellerDefaultCtx);
+    expect(serviceStub.findAll).toHaveBeenCalledWith(
+      ORG_A,
+      undefined,
+      SELLER_ID,
+    );
+  });
+
+  it('findAll : seller délégué sales.view_all → aucun scope (voit toute l’organisation)', async () => {
+    await controller.findAll(undefined, sellerViewAllCtx);
+    expect(serviceStub.findAll).toHaveBeenCalledWith(ORG_A, undefined);
+  });
+
+  it('findAll : ni sales.view_own ni sales.view_all → 403 PERMISSION_DENIED, service jamais appelé', () => {
+    let thrown: unknown;
+    try {
+      // Lève SYNCHRONEMENT avant tout retour de Promise (branche refusée).
+      void controller.findAll(undefined, noScopeCtx);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ForbiddenException);
+    expect((thrown as ForbiddenException).getResponse()).toEqual({
+      code: 'PERMISSION_DENIED',
+      message: 'Permission insuffisante.',
+    });
+    expect(serviceStub.findAll).not.toHaveBeenCalled();
+  });
+
+  it('update : seller par défaut → scope sellerId = userId du contexte (vente d’un autre seller ⇒ 404 côté service)', async () => {
+    const dto = { quantity: 2 };
+    await controller.update(VALID_OBJECT_ID, dto, seller, sellerDefaultCtx);
+    expect(serviceStub.update).toHaveBeenCalledWith(
+      ORG_A,
+      VALID_OBJECT_ID,
+      dto,
+      SELLER_ID,
+      SELLER_ID,
+    );
+  });
+
+  it('update : seller délégué sales.view_all → aucun scope (peut modifier n’importe quelle vente de l’org)', async () => {
+    const dto = { quantity: 2 };
+    await controller.update(VALID_OBJECT_ID, dto, seller, sellerViewAllCtx);
+    expect(serviceStub.update).toHaveBeenCalledWith(
+      ORG_A,
+      VALID_OBJECT_ID,
+      dto,
+      SELLER_ID,
+    );
+  });
+
+  it('remove : seller par défaut → scope sellerId = userId du contexte', async () => {
+    await controller.remove(VALID_OBJECT_ID, seller, sellerDefaultCtx);
+    expect(serviceStub.remove).toHaveBeenCalledWith(
+      ORG_A,
+      VALID_OBJECT_ID,
+      SELLER_ID,
+      SELLER_ID,
+    );
+  });
+
+  it('remove : seller délégué sales.view_all → aucun scope', async () => {
+    await controller.remove(VALID_OBJECT_ID, seller, sellerViewAllCtx);
     expect(serviceStub.remove).toHaveBeenCalledWith(
       ORG_A,
       VALID_OBJECT_ID,

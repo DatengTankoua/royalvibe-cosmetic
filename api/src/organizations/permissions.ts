@@ -98,3 +98,32 @@ export const OWNER_ONLY_OPERATIONS = Object.freeze([
 ] as const);
 
 export type OwnerOnlyOperation = (typeof OWNER_ONLY_OPERATIONS)[number];
+
+/**
+ * 1-7B — calcule si les permissions effectives (rôle ∪ permissions
+ * supplémentaires) couvrent `permission`. Type structurel (pas
+ * `ResolvedOrganizationContext`) pour éviter un import circulaire avec
+ * `organizations.service.ts`. Utilisé par les contrôleurs métier pour les
+ * décisions de scope (own/all) que `PermissionGuard` ne peut pas exprimer
+ * en un simple ET de métadonnées.
+ */
+export function hasPermission(
+  context: {
+    role: OrganizationRole;
+    permissions: readonly DelegablePermission[];
+  },
+  permission: DelegablePermission,
+): boolean {
+  // `?? []` : défensif contre un rôle invalide/futur non couvert par la
+  // table (jamais un TypeError sur `.includes(undefined)` → jamais 500).
+  return (
+    (DEFAULT_PERMISSIONS_BY_ROLE[context.role] ?? []).includes(permission) ||
+    context.permissions.includes(permission)
+  );
+}
+
+/** Corps 403 UNIFORME (même contrat que `PermissionGuard`, 1-7A). */
+export const PERMISSION_DENIED_RESPONSE = Object.freeze({
+  code: 'PERMISSION_DENIED',
+  message: 'Permission insuffisante.',
+});

@@ -2,30 +2,54 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   Patch,
   Post,
   Query,
   UploadedFile,
-  UseGuards,
   UseInterceptors,
   BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ProductsService } from './products.service';
+import type { SalesHistoryScope } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { S3Service } from '../s3/s3.service';
-import { Roles } from '../auth/decorators/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
 import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
-import { User, UserRole } from '../users/schemas/user.schema';
+import {
+  DelegablePermission,
+  hasPermission,
+  PERMISSION_DENIED_RESPONSE,
+} from '../organizations/permissions';
+import { User } from '../users/schemas/user.schema';
 import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+
+// Matrice audit 1A §3 : stock+prix ⇒ `stock.adjust`, catalogue/images ⇒
+// `products.manage`. Un PATCH ne portant AUCUN champ reconnu retombe sur
+// `products.manage` (jamais une route sans permission requise).
+const STOCK_FIELDS = ['purchasePrice', 'salePrice', 'additionalStock'] as const;
+const BUSINESS_FIELDS = ['sectionId', 'name'] as const;
+
+function requiredPermissionsForUpdate(
+  dto: UpdateProductDto,
+  hasImage: boolean,
+): DelegablePermission[] {
+  const touchesStock = STOCK_FIELDS.some((field) => dto[field] !== undefined);
+  const touchesBusiness =
+    hasImage || BUSINESS_FIELDS.some((field) => dto[field] !== undefined);
+  const required: DelegablePermission[] = [];
+  if (touchesBusiness || !touchesStock) required.push('products.manage');
+  if (touchesStock) required.push('stock.adjust');
+  return required;
+}
 
 /**
  * Tenant = `organizationContext.organizationId` (branché par la garde,
@@ -45,8 +69,7 @@ export class ProductsController {
   }
 
   @Post()
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('products.manage')
   @UseInterceptors(
     FileInterceptor('image', {
       limits: { fileSize: MAX_IMAGE_SIZE },
@@ -102,12 +125,26 @@ export class ProductsController {
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.productsService.findOne(organizationContext.organizationId, id);
+    // Correctif 1-7B : le scope de l'historique des ventes ET l'inclusion de
+    // l'audit sont décidés ICI (jamais dans le service, jamais après coup).
+    const salesScope: SalesHistoryScope = hasPermission(
+      organizationContext,
+      'sales.view_all',
+    )
+      ? { kind: 'all' }
+      : hasPermission(organizationContext, 'sales.view_own')
+        ? { kind: 'own', sellerId: organizationContext.userId }
+        : { kind: 'none' };
+    const includeAudit = hasPermission(organizationContext, 'audit.read');
+    return this.productsService.findOne(
+      organizationContext.organizationId,
+      id,
+      salesScope,
+      includeAudit,
+    );
   }
 
   @Patch(':id')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
   @UseInterceptors(
     FileInterceptor('image', {
       limits: { fileSize: MAX_IMAGE_SIZE },
@@ -127,6 +164,12 @@ export class ProductsController {
     @CurrentUser() user: User,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
+    // Correctif 1-7B : permission(s) requise(s) dépendent des champs réellement
+    // touchés (pas de métadonnée statique possible ici).
+    const required = requiredPermissionsForUpdate(dto, Boolean(file));
+    if (!required.every((p) => hasPermission(organizationContext, p))) {
+      throw new ForbiddenException(PERMISSION_DENIED_RESPONSE);
+    }
     const prefix = this.imageKeyPrefix(organizationContext.organizationId);
     const newImageUrl = file
       ? await this.s3Service.uploadFile(file, prefix)
@@ -148,8 +191,7 @@ export class ProductsController {
   }
 
   @Patch(':id/restore')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('trash.manage')
   restore(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
@@ -158,8 +200,7 @@ export class ProductsController {
   }
 
   @Delete(':id')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('products.manage')
   remove(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentUser() user: User,
@@ -173,8 +214,7 @@ export class ProductsController {
   }
 
   @Delete(':id/permanent')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('trash.manage')
   permanentDelete(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,

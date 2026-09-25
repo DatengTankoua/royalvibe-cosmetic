@@ -359,6 +359,108 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
     });
   });
 
+  describe('3b. Trash : refus seller (1-7B trash.manage)', () => {
+    it('un seller authentifié reçoit 403 PERMISSION_DENIED sur GET /trash', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/trash')
+        .set('Authorization', `Bearer ${sellerToken}`);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('PERMISSION_DENIED');
+    });
+
+    it('un admin de test reçoit 200 sur GET /trash', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/trash')
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('3c. Sections : restore/purge remappés vers trash.manage (correctif 1-7B)', () => {
+    it('catalog.manage délégué SANS trash.manage → 403 sur restore/purge ; trash.manage ajouté → autorisés', async () => {
+      const userModel = moduleFixture.get<Model<UserDocument>>(
+        getModelToken('User'),
+      );
+      const membershipModel = moduleFixture.get<
+        Model<OrganizationMembershipDocument>
+      >(getModelToken(OrganizationMembership.name));
+
+      const delegatedEmail = `delegated-trash-17b-${Date.now()}@royalvibe.test`;
+      const delegatedUser = await userModel.create({
+        name: 'Delegated Trash E2E',
+        email: delegatedEmail,
+        password: await bcrypt.hash('delegated-trash-pw-!1x', 10),
+      });
+      const membership = await membershipModel.create({
+        organizationId: new Types.ObjectId(ORG_A_ID),
+        userId: delegatedUser._id,
+        role: 'seller',
+        status: 'active',
+        permissions: ['catalog.manage'],
+      });
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: delegatedEmail,
+          password: 'delegated-trash-pw-!1x',
+          organizationId: ORG_A_ID,
+        });
+      expect(login.status).toBe(201);
+      const delegatedToken = login.body.access_token as string;
+
+      const created = await request(app.getHttpServer())
+        .post('/sections')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: `Trash Delegation ${Date.now()}` });
+      expect(created.status).toBe(201);
+      const sectionId = created.body._id as string;
+      await request(app.getHttpServer())
+        .delete(`/sections/${sectionId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+
+      // catalog.manage seule (soft-delete l'exige déjà) ne suffit PAS à restaurer/purger.
+      const restoreDenied = await request(app.getHttpServer())
+        .patch(`/sections/${sectionId}/restore`)
+        .set('Authorization', `Bearer ${delegatedToken}`);
+      expect(restoreDenied.status).toBe(403);
+      expect(restoreDenied.body.code).toBe('PERMISSION_DENIED');
+
+      // Résolution FRAÎCHE par requête (§4.1) : pas besoin de relogin.
+      await membershipModel.updateOne(
+        { _id: membership._id },
+        { $set: { permissions: ['catalog.manage', 'trash.manage'] } },
+      );
+      const restoreAllowed = await request(app.getHttpServer())
+        .patch(`/sections/${sectionId}/restore`)
+        .set('Authorization', `Bearer ${delegatedToken}`);
+      expect(restoreAllowed.status).toBe(200);
+
+      await membershipModel.updateOne(
+        { _id: membership._id },
+        { $set: { permissions: ['catalog.manage'] } },
+      );
+      await request(app.getHttpServer())
+        .delete(`/sections/${sectionId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+      const purgeDenied = await request(app.getHttpServer())
+        .delete(`/sections/${sectionId}/permanent`)
+        .set('Authorization', `Bearer ${delegatedToken}`);
+      expect(purgeDenied.status).toBe(403);
+      expect(purgeDenied.body.code).toBe('PERMISSION_DENIED');
+
+      await membershipModel.updateOne(
+        { _id: membership._id },
+        { $set: { permissions: ['catalog.manage', 'trash.manage'] } },
+      );
+      const purgeAllowed = await request(app.getHttpServer())
+        .delete(`/sections/${sectionId}/permanent`)
+        .set('Authorization', `Bearer ${delegatedToken}`);
+      expect(purgeAllowed.status).toBe(200);
+    });
+  });
+
   describe('4. Validation (pipes & DTO de bout en bout)', () => {
     it('un identifiant Sales invalide retourne 400 (et non 500)', async () => {
       const res = await request(app.getHttpServer())

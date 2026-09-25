@@ -427,19 +427,71 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
 
   // ---- findOne ----
 
-  it('findOne : filtre composite {_id, organizationId} puis sales/audit', async () => {
+  const SELLER_ID = 'eeeeeeeeeeeeeeeeeeeeeeee';
+
+  it('findOne : filtre composite {_id, organizationId} puis sales (scope all) + audit inclus', async () => {
     await build();
     productOneChain.exec.mockResolvedValue(productDoc());
 
-    const res = await service.findOne(ORG_A, PRODUCT_ID);
+    const res = await service.findOne(ORG_A, PRODUCT_ID, { kind: 'all' }, true);
 
     expect(productModel.findOne).toHaveBeenCalledWith({
       _id: PRODUCT_ID,
       organizationId: new Types.ObjectId(ORG_A),
     });
     expect(res.product.name).toBe('Prod');
-    expect(saleModel.find).toHaveBeenCalledTimes(1);
+    expect(saleModel.find).toHaveBeenCalledWith({
+      productId: new Types.ObjectId(PRODUCT_ID),
+    });
     expect(auditService.findByProduct).toHaveBeenCalledWith(ORG_A, PRODUCT_ID);
+  });
+
+  it('findOne (correctif 1-7B) : scope «own» → filtre sales par sellerId, jamais les ventes d’un AUTRE vendeur', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+
+    await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'own', sellerId: SELLER_ID },
+      false,
+    );
+
+    expect(saleModel.find).toHaveBeenCalledWith({
+      productId: new Types.ObjectId(PRODUCT_ID),
+      sellerId: new Types.ObjectId(SELLER_ID),
+    });
+  });
+
+  it('findOne (correctif 1-7B) : scope «none» → AUCUNE lecture de ventes (jamais interrogées)', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+
+    const res = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'none' },
+      false,
+    );
+
+    expect(saleModel.find).not.toHaveBeenCalled();
+    expect(res.sales).toEqual([]);
+    expect(res.actualRevenue).toBe(0);
+  });
+
+  it('findOne (correctif 1-7B) : audit.read absent → AUCUNE lecture d’audit (jamais interrogé ni vidé après coup)', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+
+    const res = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'all' },
+      false,
+    );
+
+    expect(auditService.findByProduct).not.toHaveBeenCalled();
+    expect(res.auditLogs).toEqual([]);
   });
 
   it('findOne : produit invisible dans l’org → 404 comme l’absent (sales/audit non lus)', async () => {
@@ -447,7 +499,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     productOneChain.exec.mockResolvedValue(null);
 
     const err = await service
-      .findOne(ORG_A, PRODUCT_ID)
+      .findOne(ORG_A, PRODUCT_ID, { kind: 'all' }, true)
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NotFoundException);
     expect((err as Error).message).toBe(`Product ${PRODUCT_ID} not found`);

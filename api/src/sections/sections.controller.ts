@@ -7,16 +7,13 @@ import {
   Patch,
   Post,
   Query,
-  UseGuards,
 } from '@nestjs/common';
 import { SectionsService } from './sections.service';
 import { CreateSectionDto } from './dto/create-section.dto';
 import { UpdateSectionDto } from './dto/update-section.dto';
-import { Roles } from '../auth/decorators/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
 import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
-import { UserRole } from '../users/schemas/user.schema';
 import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
 
 /**
@@ -28,8 +25,7 @@ export class SectionsController {
   constructor(private readonly sectionsService: SectionsService) {}
 
   @Post()
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('catalog.manage')
   create(
     @Body() dto: CreateSectionDto,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
@@ -59,8 +55,7 @@ export class SectionsController {
   }
 
   @Patch(':id')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('catalog.manage')
   update(
     @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: UpdateSectionDto,
@@ -74,8 +69,7 @@ export class SectionsController {
   }
 
   @Patch(':id/restore')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('trash.manage')
   restore(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
@@ -84,8 +78,7 @@ export class SectionsController {
   }
 
   @Delete(':id')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('catalog.manage')
   remove(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
@@ -94,8 +87,7 @@ export class SectionsController {
   }
 
   @Delete(':id/permanent')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('trash.manage')
   permanentDelete(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,

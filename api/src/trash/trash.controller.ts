@@ -1,15 +1,12 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 import { SectionsService } from '../sections/sections.service';
 import { ProductsService } from '../products/products.service';
-import { Roles } from '../auth/decorators/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
 import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
-import { UserRole } from '../users/schemas/user.schema';
 
 @Controller('trash')
-@UseGuards(RolesGuard)
-@Roles(UserRole.ADMIN)
+@RequirePermissions('trash.manage')
 export class TrashController {
   constructor(
     private readonly sectionsService: SectionsService,

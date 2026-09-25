@@ -35,6 +35,14 @@ export interface ProductDetail extends ProductWithMetrics {
   auditLogs: unknown[];
 }
 
+/**
+ * 1-7B (correctif) — scope de l'historique des ventes exposé par
+ * `findOne` : décidé par le contrôleur (permissions `sales.view_all` /
+ * `sales.view_own`), jamais par le service.
+ */
+export type SalesHistoryScope =
+  { kind: 'all' } | { kind: 'own'; sellerId: string } | { kind: 'none' };
+
 function computeStatus(remaining: number, initial: number): ProductStatus {
   if (remaining === 0) return 'out_of_stock';
   if (remaining / initial <= 0.2) return 'low_stock';
@@ -166,7 +174,12 @@ export class ProductsService {
     return products.map((p) => this.withMetrics(p));
   }
 
-  async findOne(organizationId: string, id: string): Promise<ProductDetail> {
+  async findOne(
+    organizationId: string,
+    id: string,
+    salesScope: SalesHistoryScope,
+    includeAudit: boolean,
+  ): Promise<ProductDetail> {
     // §4 — filtre composite tenant : un produit d'une autre org est
     // indistinguable d'un produit absent (même 404).
     const product = await this.productModel
@@ -177,13 +190,28 @@ export class ProductsService {
       .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
 
-    const sales = await this.saleModel
-      .find({ productId: new Types.ObjectId(id) })
-      .populate('sellerId', 'name email')
-      .sort({ createdAt: -1 })
-      .exec();
+    // Correctif 1-7B — ni interrogé ni exposé hors du scope autorisé :
+    // `none` ne lit AUCUNE vente, `own` filtre par vendeur courant.
+    let sales: SaleDocument[] = [];
+    if (salesScope.kind !== 'none') {
+      const filter: Record<string, Types.ObjectId> = {
+        productId: new Types.ObjectId(id),
+      };
+      if (salesScope.kind === 'own') {
+        filter.sellerId = new Types.ObjectId(salesScope.sellerId);
+      }
+      sales = await this.saleModel
+        .find(filter)
+        .populate('sellerId', 'name email')
+        .sort({ createdAt: -1 })
+        .exec();
+    }
 
-    const auditLogs = await this.auditService.findByProduct(organizationId, id);
+    // Correctif 1-7B — `audit.read` absent : aucune lecture, jamais un vidage
+    // après coup (l'historique n'est même pas interrogé).
+    const auditLogs = includeAudit
+      ? await this.auditService.findByProduct(organizationId, id)
+      : [];
 
     const actualRevenue = sales.reduce(
       (sum, s) => sum + s.salePrice * s.quantity,

@@ -208,24 +208,76 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
     await stopEphemeralMongoSafe();
   }, 60_000);
 
-  describe('Autorisation — owner uniquement', () => {
-    it('admin et seller reçoivent 403 OWNER_ONLY sur les 3 routes', async () => {
-      for (const token of [adminAToken, sellerAToken]) {
-        const created = await invite(token, {
+  describe('Autorisation — members.invite (1-7B, ex owner-only)', () => {
+    it('admin (permission par défaut) : 201/200 sur les 3 routes', async () => {
+      const created = await invite(adminAToken, {
+        email: `admin-delegate-${Date.now()}@royalvibe.test`,
+        role: 'seller',
+      });
+      expect(created.status).toBe(201);
+
+      const listed = await list(adminAToken);
+      expect(listed.status).toBe(200);
+
+      const revoked = await revoke(
+        adminAToken,
+        created.body.invitation._id as string,
+      );
+      expect(revoked.status).toBe(200);
+    });
+
+    it('seller sans délégation → 403 PERMISSION_DENIED sur les 3 routes, service jamais muté', async () => {
+      const before = await invitationModel.countDocuments();
+      for (const res of [
+        await invite(sellerAToken, {
           email: `refused-${Date.now()}@royalvibe.test`,
           role: 'admin',
-        });
-        expect(created.status).toBe(403);
-        expect(created.body.code).toBe('OWNER_ONLY');
-
-        const listed = await list(token);
-        expect(listed.status).toBe(403);
-        expect(listed.body.code).toBe('OWNER_ONLY');
-
-        const revoked = await revoke(token, new Types.ObjectId().toString());
-        expect(revoked.status).toBe(403);
-        expect(revoked.body.code).toBe('OWNER_ONLY');
+        }),
+        await list(sellerAToken),
+        await revoke(sellerAToken, new Types.ObjectId().toString()),
+      ]) {
+        expect(res.status).toBe(403);
+        expect(res.body.code).toBe('PERMISSION_DENIED');
       }
+      expect(await invitationModel.countDocuments()).toBe(before);
+    });
+
+    it('seller DÉLÉGUÉ members.invite (membership.permissions) → 201/200 sur les 3 routes', async () => {
+      const delegatedEmail = `delegated-seller-17b-${Date.now()}@royalvibe.test`;
+      const delegated = await userModel.create({
+        name: 'Delegated Seller',
+        email: delegatedEmail,
+        password: await bcrypt.hash(PASSWORD, 10),
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgAId),
+        userId: delegated._id,
+        role: 'seller',
+        status: 'active',
+        permissions: ['members.invite'],
+      });
+      const loginDelegated = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: delegatedEmail,
+          password: PASSWORD,
+          organizationId: orgAId,
+        });
+      expect(loginDelegated.status).toBe(201);
+      const delegatedToken = loginDelegated.body.access_token as string;
+
+      const created = await invite(delegatedToken, {
+        email: `delegated-invite-${Date.now()}@royalvibe.test`,
+        role: 'seller',
+      });
+      expect(created.status).toBe(201);
+      const listed = await list(delegatedToken);
+      expect(listed.status).toBe(200);
+      const revoked = await revoke(
+        delegatedToken,
+        created.body.invitation._id as string,
+      );
+      expect(revoked.status).toBe(200);
     });
 
     it('sans JWT → 401 (jamais 403)', async () => {

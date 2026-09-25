@@ -382,7 +382,12 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
       // ADMIN + SELLER existent déjà (registrés plus haut). Le user DELETED
       // est enregistré PLUS BAS (scénario « supprimé ») : sa membership est
       // créée juste après son register (ci-dessous), jamais ici.
-      for (const email of [ADMIN_EMAIL, SELLER_EMAIL]) {
+      // 1-7B : le rôle ORGANISATIONNEL (membership) décide désormais des
+      // permissions métier — distinct du `User.role` LEGACY ci-dessus.
+      for (const [email, membershipRole] of [
+        [ADMIN_EMAIL, 'admin'],
+        [SELLER_EMAIL, 'seller'],
+      ] as const) {
         const u = await userModel.findOne({ email });
         if (!u) continue;
         await membershipModel.create({
@@ -390,7 +395,7 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
           // PAS castée en ObjectId à l'écriture (fixtures E2E 1-3B.1).
           organizationId: new Types.ObjectId(SOCKET_ORG_ID),
           userId: u._id,
-          role: 'seller',
+          role: membershipRole,
           status: 'active',
         });
       }

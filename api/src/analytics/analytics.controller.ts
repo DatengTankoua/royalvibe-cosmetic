@@ -1,16 +1,13 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { AnalyticsService } from './analytics.service';
-import { Roles } from '../auth/decorators/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
 import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
-import { UserRole } from '../users/schemas/user.schema';
 
 // KPIs, product/seller rankings include purchase prices and every
-// seller's email + revenue: admin-only (phase 0B.1, audit C-2).
+// seller's email + revenue: gated by `analytics.read` (1-7B, ex-admin-only).
 @Controller('analytics')
-@UseGuards(RolesGuard)
-@Roles(UserRole.ADMIN)
+@RequirePermissions('analytics.read')
 export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
