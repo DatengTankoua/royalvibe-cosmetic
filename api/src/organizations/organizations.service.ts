@@ -1,10 +1,11 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { Connection } from 'mongoose';
 import { randomBytes, createHash } from 'crypto';
@@ -28,7 +29,10 @@ import {
   OrganizationStatus,
 } from './permissions';
 import { UsersService } from '../users/users.service';
+import { UserRole } from '../users/schemas/user.schema';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
+import { AcceptInvitationDto } from '../auth/dto/accept-invitation.dto';
+import * as bcrypt from 'bcryptjs';
 
 // Session transactionnelle Mongoose (`mongodb.ClientSession`) : même
 // convention que `products.service.ts`/`audit.service.ts`.
@@ -83,6 +87,16 @@ export interface SelectableOrganization {
 
 export const ORGANIZATION_ACCESS_DENIED = 'ORGANIZATION_ACCESS_DENIED';
 
+/** Erreur pilote MongoDB E11000 (clé dupliquée) — jamais un cast fragile. */
+function isDuplicateKeyError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code?: unknown }).code === 11000
+  );
+}
+
 /** Durée de vie d'une invitation (1-6B.1) : 72 h, calculée serveur. */
 const INVITATION_TTL_MS = 72 * 60 * 60 * 1000;
 
@@ -99,6 +113,16 @@ export interface InvitationView {
   expiresAt: Date;
 }
 
+/** Réponse minimale de l'acceptation (1-6B.2) : jamais de JWT/token/hash. */
+export interface InvitationAcceptanceResult {
+  user: { _id: string; name: string; email: string };
+  organization: { _id: string; name: string; slug: string };
+  membership: { role: OrganizationRole; status: MembershipStatus };
+}
+
+/** Code stable et générique : ne révèle jamais LA raison exacte du refus. */
+export const INVITATION_INVALID_OR_EXPIRED = 'INVITATION_INVALID_OR_EXPIRED';
+
 @Injectable()
 export class OrganizationsService {
   constructor(
@@ -109,6 +133,7 @@ export class OrganizationsService {
     @InjectModel(OrganizationInvitation.name)
     private invitationModel: Model<OrganizationInvitationDocument>,
     private usersService: UsersService,
+    @InjectConnection() private connection: Connection,
   ) {}
 
   /**
@@ -307,15 +332,29 @@ export class OrganizationsService {
     const rawToken = randomBytes(32).toString('base64url');
     const tokenHash = createHash('sha256').update(rawToken).digest('hex');
 
-    const invitation = await this.invitationModel.create({
-      organizationId: orgOid,
-      email,
-      role: dto.role,
-      permissions: dto.permissions ?? [],
-      tokenHash,
-      invitedById: new Types.ObjectId(invitedById),
-      expiresAt: new Date(now.getTime() + INVITATION_TTL_MS),
-    });
+    let invitation: OrganizationInvitationDocument;
+    try {
+      invitation = await this.invitationModel.create({
+        organizationId: orgOid,
+        email,
+        role: dto.role,
+        permissions: dto.permissions ?? [],
+        tokenHash,
+        invitedById: new Types.ObjectId(invitedById),
+        expiresAt: new Date(now.getTime() + INVITATION_TTL_MS),
+      });
+    } catch (err) {
+      // Course concurrente sur l'index unique partiel (2 émissions en même
+      // temps pour le même (org,email)) : même conflit stable que le
+      // pré-check ci-dessus, jamais un 500.
+      if (isDuplicateKeyError(err)) {
+        throw new ConflictException({
+          code: 'INVITATION_ALREADY_PENDING',
+          message: 'Une invitation est déjà en attente pour cet email.',
+        });
+      }
+      throw err;
+    }
 
     return { invitation: this.toInvitationView(invitation), token: rawToken };
   }
@@ -353,6 +392,154 @@ export class OrganizationsService {
       throw new NotFoundException();
     }
     return this.toInvitationView(invitation);
+  }
+
+  /**
+   * Acceptation atomique (1-6B.2) : réclame l'invitation par un filtre
+   * CONDITIONNEL (`pending` + `expiresAt > now`, une seule écriture
+   * atomique — la garde anti-concurrence), crée le User SI absent (rôle
+   * legacy `seller` — JAMAIS `admin`, même pour une invitation
+   * `role: admin` : l'autorité effective vient de la membership, 1-7+),
+   * puis la Membership (`role`/`permissions`/`organizationId`/
+   * `invitedById` EXCLUSIVEMENT copiés de l'invitation). Toute erreur
+   * abandonne TOUTE la transaction (l'invitation redevient `pending`).
+   * Erreur générique et STABLE (`INVITATION_INVALID_OR_EXPIRED`) pour toute
+   * invitation invalide (inconnue/expirée/revoked/accepted) ET pour une
+   * organisation absente/suspendue : ne révèle jamais laquelle.
+   */
+  async acceptInvitation(
+    dto: AcceptInvitationDto,
+    now: Date = new Date(),
+  ): Promise<InvitationAcceptanceResult> {
+    const tokenHash = createHash('sha256').update(dto.token).digest('hex');
+    const session = await this.connection.startSession();
+    let result: InvitationAcceptanceResult | undefined;
+
+    try {
+      await session.withTransaction(async () => {
+        const invitation = await this.invitationModel
+          .findOneAndUpdate(
+            {
+              tokenHash,
+              status: InvitationStatus.PENDING,
+              expiresAt: { $gt: now },
+            },
+            { status: InvitationStatus.ACCEPTED, acceptedAt: now },
+            { session, new: true },
+          )
+          .exec();
+        if (!invitation) {
+          throw this.invitationInvalidOrExpired();
+        }
+
+        const organization = await this.organizationModel
+          .findById(invitation.organizationId)
+          .session(session)
+          .exec();
+        if (
+          !organization ||
+          organization.status !== OrganizationStatus.ACTIVE
+        ) {
+          throw this.invitationInvalidOrExpired();
+        }
+
+        let user = await this.usersService.findByEmail(
+          invitation.email,
+          session,
+        );
+        if (!user) {
+          if (!dto.name || !dto.password) {
+            throw new BadRequestException({
+              code: 'ACCOUNT_DETAILS_REQUIRED',
+              message: 'name et password sont requis pour créer un compte.',
+            });
+          }
+          const hashed = await bcrypt.hash(dto.password, 10);
+          user = await this.usersService.create(
+            {
+              name: dto.name,
+              email: invitation.email,
+              password: hashed,
+              role: UserRole.SELLER,
+            },
+            session,
+          );
+        }
+
+        // Membre déjà présent (même suspendu/révoqué) : refus stable,
+        // AUCUNE réactivation silencieuse.
+        const existingMembership = await this.membershipModel
+          .findOne({
+            organizationId: invitation.organizationId,
+            userId: user._id,
+          })
+          .session(session)
+          .exec();
+        if (existingMembership) {
+          throw new ConflictException({
+            code: 'MEMBERSHIP_ALREADY_EXISTS',
+            message: 'Ce compte appartient déjà à cette organisation.',
+          });
+        }
+
+        const [membership] = await this.membershipModel.create(
+          [
+            {
+              organizationId: invitation.organizationId,
+              userId: user._id,
+              role: invitation.role,
+              permissions: [...invitation.permissions],
+              invitedById: invitation.invitedById,
+            },
+          ],
+          { session },
+        );
+
+        // Garde défensive finale (même esprit que `createOwnerOrganization`) :
+        // l'index unique `{organizationId,userId}` garantit au plus une
+        // membership, cette vérification prouve qu'elle existe bien.
+        const memberships = await this.membershipModel.countDocuments(
+          { organizationId: invitation.organizationId, userId: user._id },
+          { session },
+        );
+        if (memberships !== 1) {
+          throw new Error(
+            'Invitation acceptance invariant violated: expected exactly one membership.',
+          );
+        }
+
+        result = {
+          user: {
+            _id: user._id.toString(),
+            name: user.name,
+            email: user.email,
+          },
+          organization: {
+            _id: organization._id.toString(),
+            name: organization.name,
+            slug: organization.slug,
+          },
+          membership: { role: membership.role, status: membership.status },
+        };
+      });
+    } finally {
+      // Session fermée dans TOUS les cas (succès ou erreur) — pas de fuite.
+      await session.endSession();
+    }
+
+    if (!result) {
+      throw new Error(
+        'Invitation acceptance transaction completed without a result',
+      );
+    }
+    return result;
+  }
+
+  private invitationInvalidOrExpired(): BadRequestException {
+    return new BadRequestException({
+      code: INVITATION_INVALID_OR_EXPIRED,
+      message: 'Cette invitation est invalide ou a expiré.',
+    });
   }
 
   private toInvitationView(

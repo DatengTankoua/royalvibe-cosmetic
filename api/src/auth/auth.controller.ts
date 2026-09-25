@@ -8,10 +8,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { OrganizationsService } from '../organizations/organizations.service';
 import { AuthThrottlerGuard } from '../common/auth-rate-limiting';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { SwitchOrganizationDto } from './dto/switch-organization.dto';
+import { AcceptInvitationDto } from './dto/accept-invitation.dto';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { User } from '../users/schemas/user.schema';
@@ -31,7 +33,10 @@ export function isPublicRegistrationEnabled(): boolean {
 
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(
+    private authService: AuthService,
+    private organizationsService: OrganizationsService,
+  ) {}
 
   // Rate limiting (0B.6) : MÊME garde/fenêtres que /auth/login, sans
   // stockage séparé — clé générée par handler, donc compteur distinct.
@@ -59,7 +64,16 @@ export class AuthController {
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }
-
+  // 1-6B.2 : publique et rate-limitée, INDÉPENDANTE de
+  // PUBLIC_REGISTRATION_ENABLED (une invitation valide EST l'autorisation).
+  // 200 explicite (pas de ressource "créée" au sens REST du POST par défaut).
+  @HttpCode(200)
+  @UseGuards(AuthThrottlerGuard)
+  @Public()
+  @Post('invitations/accept')
+  acceptInvitation(@Body() dto: AcceptInvitationDto) {
+    return this.organizationsService.acceptInvitation(dto);
+  }
   // 200 explicite : le switch répond un nouveau JWT (le POST par défaut
   // NestJS répond 201 — le conserver ici serait trompeur).
   @HttpCode(200)

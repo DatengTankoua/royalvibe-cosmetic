@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthController, isPublicRegistrationEnabled } from './auth.controller';
 import { AuthService } from './auth.service';
+import { OrganizationsService } from '../organizations/organizations.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import {
@@ -19,6 +20,7 @@ describe('AuthController', () => {
   let registerMock: jest.Mock;
   let loginMock: jest.Mock;
   let switchMock: jest.Mock;
+  let acceptInvitationMock: jest.Mock;
 
   const VALID_REG: RegisterDto = {
     name: 'E2E User',
@@ -48,6 +50,7 @@ describe('AuthController', () => {
     registerMock = jest.fn();
     loginMock = jest.fn();
     switchMock = jest.fn();
+    acceptInvitationMock = jest.fn();
 
     const module: TestingModule = await Test.createTestingModule({
       // Garde 0B.6 : enregistrée pour que la DI du contrôleur se résolve
@@ -63,6 +66,10 @@ describe('AuthController', () => {
             login: loginMock,
             switchOrganization: switchMock,
           },
+        },
+        {
+          provide: OrganizationsService,
+          useValue: { acceptInvitation: acceptInvitationMock },
         },
         AuthThrottlerGuard,
       ],
@@ -166,5 +173,21 @@ describe('AuthController', () => {
     expect(switchMock).toHaveBeenCalledWith(AUTH_USER._id, {
       organizationId: dto.organizationId,
     });
+  });
+
+  // ---- acceptation d'invitation (1-6B.2) ----
+
+  it('acceptInvitation : délègue à OrganizationsService.acceptInvitation avec le DTO exact', async () => {
+    const result = {
+      user: { _id: '1', name: 'A', email: 'a@b.co' },
+      organization: { _id: '2', name: 'Org', slug: 'org' },
+      membership: { role: 'seller', status: 'active' },
+    };
+    acceptInvitationMock.mockResolvedValue(result);
+    const dto = { token: 'raw-token', name: 'Ada', password: 'secret-123' };
+    const out = await controller.acceptInvitation(dto);
+    expect(acceptInvitationMock).toHaveBeenCalledTimes(1);
+    expect(acceptInvitationMock).toHaveBeenCalledWith(dto);
+    expect(out).toEqual(result);
   });
 });

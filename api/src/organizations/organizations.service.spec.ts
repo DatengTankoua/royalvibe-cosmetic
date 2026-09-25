@@ -1,16 +1,23 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
+import { getModelToken, getConnectionToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
-import { OrganizationsService } from './organizations.service';
+import { createHash } from 'crypto';
+import * as bcrypt from 'bcryptjs';
+import {
+  OrganizationsService,
+  INVITATION_INVALID_OR_EXPIRED,
+} from './organizations.service';
 import { Organization } from './schemas/organization.schema';
 import { OrganizationMembership } from './schemas/membership.schema';
 import { OrganizationInvitation } from './schemas/invitation.schema';
 import { UsersService } from '../users/users.service';
+import { UserRole } from '../users/schemas/user.schema';
 import {
   DelegablePermission,
   InvitationStatus,
@@ -54,6 +61,7 @@ describe('OrganizationsService.resolveActiveContext', () => {
           useValue: {},
         },
         { provide: UsersService, useValue: { findByEmail: jest.fn() } },
+        { provide: getConnectionToken(), useValue: {} },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -380,6 +388,7 @@ describe('OrganizationsService.listActiveOrganizations', () => {
           useValue: {},
         },
         { provide: UsersService, useValue: { findByEmail: jest.fn() } },
+        { provide: getConnectionToken(), useValue: {} },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -656,6 +665,7 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
           useValue: invitationModel,
         },
         { provide: UsersService, useValue: usersService },
+        { provide: getConnectionToken(), useValue: {} },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -778,6 +788,25 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
       expect(invitationModel.create).toHaveBeenCalledTimes(1);
     });
 
+    // 1-6B.2 : course concurrente sur l'index unique partiel — le pré-check
+    // `findOne` ne protège pas contre 2 émissions simultanées.
+    it('E11000 concurrent sur `create` → 409 INVITATION_ALREADY_PENDING (jamais 500)', async () => {
+      await build();
+      const duplicateError = Object.assign(new Error('E11000 duplicate key'), {
+        code: 11000,
+      });
+      invitationModel.create.mockRejectedValue(duplicateError);
+
+      const error: unknown = await service
+        .createInvitation(ORG_OBJECT_ID, OWNER_ID, VALID_DTO, NOW)
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getResponse()).toMatchObject({
+        code: 'INVITATION_ALREADY_PENDING',
+      });
+    });
+
     it('permissions omises → [] par défaut', async () => {
       await build();
       await service.createInvitation(ORG_OBJECT_ID, OWNER_ID, VALID_DTO, NOW);
@@ -843,5 +872,358 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
         (missing as NotFoundException).getStatus(),
       );
     });
+  });
+});
+
+// =============================================================================
+// acceptInvitation (phase 1-6B.2) — acceptation atomique
+// =============================================================================
+describe('OrganizationsService.acceptInvitation (1-6B.2)', () => {
+  const ORG_ID = '778899001122334455667788';
+  const USER_ID = '889900112233445566778899';
+  const MEMBERSHIP_ID = '990011223344556677889900';
+  const INVITER_ID = 'aa0011223344556677889900';
+  const NOW = new Date('2026-01-01T00:00:00.000Z');
+  const RAW_TOKEN = 'raw-token-value';
+
+  let service: OrganizationsService;
+  let invitationModel: { findOneAndUpdate: jest.Mock };
+  let organizationModel: { findById: jest.Mock };
+  let membershipModel: {
+    findOne: jest.Mock;
+    create: jest.Mock;
+    countDocuments: jest.Mock;
+  };
+  let usersService: { findByEmail: jest.Mock; create: jest.Mock };
+  let connectionFixture: {
+    session: { withTransaction: jest.Mock; endSession: jest.Mock };
+    connection: { startSession: jest.Mock };
+    endSession: jest.Mock;
+  };
+
+  function invitationDoc(overrides: Record<string, unknown> = {}) {
+    return {
+      _id: new Types.ObjectId(INVITATION_ID_FOR_ACCEPT),
+      organizationId: new Types.ObjectId(ORG_ID),
+      email: 'invitee@example.com',
+      role: OrganizationRole.ADMIN,
+      permissions: ['analytics.read'] as DelegablePermission[],
+      invitedById: new Types.ObjectId(INVITER_ID),
+      status: InvitationStatus.PENDING,
+      expiresAt: new Date('2026-01-04T00:00:00.000Z'),
+      ...overrides,
+    };
+  }
+  const INVITATION_ID_FOR_ACCEPT = 'bb0011223344556677889900';
+
+  function organizationDoc(overrides: Record<string, unknown> = {}) {
+    return {
+      _id: new Types.ObjectId(ORG_ID),
+      name: 'Acme',
+      slug: 'acme-1234',
+      status: OrganizationStatus.ACTIVE,
+      ...overrides,
+    };
+  }
+
+  function makeConnectionFixture() {
+    const endSession = jest.fn().mockResolvedValue(true);
+    const withTransaction = jest.fn(
+      async (cb: (s: unknown) => Promise<unknown>) => cb(sessionRef),
+    );
+    const sessionRef = { withTransaction, endSession };
+    const connection = {
+      startSession: jest.fn(() => Promise.resolve(sessionRef)),
+    };
+    return { session: sessionRef, connection, endSession };
+  }
+
+  async function build() {
+    invitationModel = {
+      findOneAndUpdate: jest.fn(() => ({
+        exec: () => Promise.resolve(invitationDoc()),
+      })),
+    };
+    organizationModel = {
+      findById: jest.fn(() => ({
+        session: () => ({ exec: () => Promise.resolve(organizationDoc()) }),
+      })),
+    };
+    membershipModel = {
+      findOne: jest.fn(() => ({
+        session: () => ({ exec: () => Promise.resolve(null) }),
+      })),
+      create: jest.fn((docs: Record<string, unknown>[]) =>
+        Promise.resolve([
+          {
+            _id: new Types.ObjectId(MEMBERSHIP_ID),
+            organizationId: docs[0].organizationId,
+            userId: docs[0].userId,
+            role: docs[0].role,
+            permissions: docs[0].permissions,
+            invitedById: docs[0].invitedById,
+            status: MembershipStatus.ACTIVE,
+          },
+        ]),
+      ),
+      countDocuments: jest.fn().mockResolvedValue(1),
+    };
+    usersService = {
+      findByEmail: jest.fn().mockResolvedValue(null),
+      create: jest.fn((data: Record<string, unknown>) =>
+        Promise.resolve({
+          _id: new Types.ObjectId(USER_ID),
+          name: data.name,
+          email: data.email,
+          password: data.password,
+          role: data.role,
+        }),
+      ),
+    };
+    connectionFixture = makeConnectionFixture();
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrganizationsService,
+        {
+          provide: getModelToken(Organization.name),
+          useValue: organizationModel,
+        },
+        {
+          provide: getModelToken(OrganizationMembership.name),
+          useValue: membershipModel,
+        },
+        {
+          provide: getModelToken(OrganizationInvitation.name),
+          useValue: invitationModel,
+        },
+        { provide: UsersService, useValue: usersService },
+        {
+          provide: getConnectionToken(),
+          useValue: connectionFixture.connection,
+        },
+      ],
+    }).compile();
+    service = module.get(OrganizationsService);
+  }
+
+  const VALID_DTO = {
+    token: RAW_TOKEN,
+    name: 'Ada',
+    password: 'secret-123',
+  };
+
+  it('user absent : crée le triplet atomique, password hashé, User.role = seller', async () => {
+    await build();
+    const result = await service.acceptInvitation(VALID_DTO, NOW);
+
+    expect(usersService.create).toHaveBeenCalledTimes(1);
+    const created = usersService.create.mock.calls[0][0] as {
+      password: string;
+      role: string;
+    };
+    expect(created.role).toBe(UserRole.SELLER);
+    expect(created.password).not.toBe('secret-123');
+    await expect(bcrypt.compare('secret-123', created.password)).resolves.toBe(
+      true,
+    );
+    expect(membershipModel.create).toHaveBeenCalledTimes(1);
+    expect(result.user.email).toBe('invitee@example.com');
+    expect(connectionFixture.session.endSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("une invitation `role: admin` NE promeut JAMAIS User.role à admin (pas d'escalade globale)", async () => {
+    await build();
+    await service.acceptInvitation(VALID_DTO, NOW); // invitation par défaut : role admin
+    const created = usersService.create.mock.calls[0][0] as { role: string };
+    expect(created.role).toBe(UserRole.SELLER);
+    expect(created.role).not.toBe(UserRole.ADMIN);
+  });
+
+  it('user existant : aucune modification (create jamais appelé, membership reçoit son userId)', async () => {
+    await build();
+    const existing = {
+      _id: new Types.ObjectId(USER_ID),
+      name: 'Existing',
+      email: 'invitee@example.com',
+      password: 'already-hashed',
+      role: UserRole.SELLER,
+    };
+    usersService.findByEmail.mockResolvedValue(existing);
+
+    const result = await service.acceptInvitation({ token: RAW_TOKEN }, NOW);
+
+    expect(usersService.create).not.toHaveBeenCalled();
+    expect(result.user.name).toBe('Existing');
+    const createdMembership = membershipModel.create.mock.calls[0][0][0] as {
+      userId: unknown;
+    };
+    expect(createdMembership.userId).toBe(existing._id);
+  });
+
+  it('rôle/permissions/invitedById copiés EXACTEMENT depuis l’invitation', async () => {
+    await build();
+    await service.acceptInvitation(VALID_DTO, NOW);
+    const created = membershipModel.create.mock.calls[0][0][0] as {
+      role: string;
+      permissions: string[];
+      invitedById: unknown;
+      organizationId: unknown;
+    };
+    expect(created.role).toBe(OrganizationRole.ADMIN);
+    expect(created.permissions).toEqual(['analytics.read']);
+    expect(created.invitedById?.toString()).toBe(INVITER_ID);
+    expect(created.organizationId?.toString()).toBe(ORG_ID);
+  });
+
+  it('hash SHA-256 exact du token utilisé dans le filtre de réclamation', async () => {
+    await build();
+    await service.acceptInvitation(VALID_DTO, NOW);
+    const expectedHash = createHash('sha256').update(RAW_TOKEN).digest('hex');
+    const filter = invitationModel.findOneAndUpdate.mock.calls[0][0] as {
+      tokenHash: string;
+      status: string;
+      expiresAt: { $gt: Date };
+    };
+    expect(filter.tokenHash).toBe(expectedHash);
+    expect(filter.status).toBe(InvitationStatus.PENDING);
+    expect(filter.expiresAt.$gt).toBe(NOW);
+  });
+
+  it.each([['inconnu (aucun match)', null]])(
+    'token %s → 400 INVITATION_INVALID_OR_EXPIRED, zéro écriture',
+    async (_label, resolved) => {
+      await build();
+      invitationModel.findOneAndUpdate.mockReturnValue({
+        exec: () => Promise.resolve(resolved),
+      });
+
+      const error: unknown = await service
+        .acceptInvitation(VALID_DTO, NOW)
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as BadRequestException).getResponse()).toMatchObject({
+        code: INVITATION_INVALID_OR_EXPIRED,
+      });
+      expect(usersService.create).not.toHaveBeenCalled();
+      expect(membershipModel.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('organisation absente → même 400 générique (aucune écriture Membership)', async () => {
+    await build();
+    organizationModel.findById.mockReturnValue({
+      session: () => ({ exec: () => Promise.resolve(null) }),
+    });
+
+    const error: unknown = await service
+      .acceptInvitation(VALID_DTO, NOW)
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect((error as BadRequestException).getResponse()).toMatchObject({
+      code: INVITATION_INVALID_OR_EXPIRED,
+    });
+    expect(membershipModel.create).not.toHaveBeenCalled();
+  });
+
+  it('organisation suspendue → même 400 générique', async () => {
+    await build();
+    organizationModel.findById.mockReturnValue({
+      session: () => ({
+        exec: () =>
+          Promise.resolve(
+            organizationDoc({ status: OrganizationStatus.SUSPENDED }),
+          ),
+      }),
+    });
+
+    const error: unknown = await service
+      .acceptInvitation(VALID_DTO, NOW)
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect((error as BadRequestException).getResponse()).toMatchObject({
+      code: INVITATION_INVALID_OR_EXPIRED,
+    });
+  });
+
+  it('name/password manquants pour un user absent → 400 ACCOUNT_DETAILS_REQUIRED', async () => {
+    await build();
+    const error: unknown = await service
+      .acceptInvitation({ token: RAW_TOKEN }, NOW)
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect((error as BadRequestException).getResponse()).toMatchObject({
+      code: 'ACCOUNT_DETAILS_REQUIRED',
+    });
+    expect(membershipModel.create).not.toHaveBeenCalled();
+  });
+
+  it('membership déjà existante (même inactive) → 409 stable, AUCUNE réactivation', async () => {
+    await build();
+    const existingUser = {
+      _id: new Types.ObjectId(USER_ID),
+      name: 'X',
+      email: 'invitee@example.com',
+    };
+    usersService.findByEmail.mockResolvedValue(existingUser);
+    membershipModel.findOne.mockReturnValue({
+      session: () => ({
+        exec: () => Promise.resolve({ status: MembershipStatus.REVOKED }),
+      }),
+    });
+
+    const error: unknown = await service
+      .acceptInvitation({ token: RAW_TOKEN }, NOW)
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toMatchObject({
+      code: 'MEMBERSHIP_ALREADY_EXISTS',
+    });
+    expect(membershipModel.create).not.toHaveBeenCalled();
+  });
+
+  it('réponse exacte : user/organization/membership minimaux, aucune donnée sensible', async () => {
+    await build();
+    const result = await service.acceptInvitation(VALID_DTO, NOW);
+    expect(Object.keys(result).sort()).toEqual([
+      'membership',
+      'organization',
+      'user',
+    ]);
+    expect(Object.keys(result.user).sort()).toEqual(['_id', 'email', 'name']);
+    expect(Object.keys(result.organization).sort()).toEqual([
+      '_id',
+      'name',
+      'slug',
+    ]);
+    expect(Object.keys(result.membership).sort()).toEqual(['role', 'status']);
+    const flat = JSON.stringify(result);
+    expect(flat).not.toContain('password');
+    expect(flat).not.toContain('access_token');
+    expect(flat).not.toContain('tokenHash');
+    expect(flat).not.toContain('invitedById');
+  });
+
+  it('garde défensive finale (invariant membership) → rollback, session fermée', async () => {
+    await build();
+    membershipModel.countDocuments.mockResolvedValue(2);
+
+    await expect(service.acceptInvitation(VALID_DTO, NOW)).rejects.toThrow();
+    expect(connectionFixture.session.endSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('endSession() appelé même en échec (finally)', async () => {
+    await build();
+    invitationModel.findOneAndUpdate.mockReturnValue({
+      exec: () => Promise.resolve(null),
+    });
+
+    await service.acceptInvitation(VALID_DTO, NOW).catch(() => undefined);
+    expect(connectionFixture.session.endSession).toHaveBeenCalledTimes(1);
   });
 });
