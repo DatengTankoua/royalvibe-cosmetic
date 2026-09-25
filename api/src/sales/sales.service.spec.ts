@@ -99,7 +99,7 @@ const thrown = async <T>(promise: Promise<unknown>): Promise<T> => {
 
 describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', () => {
   let service: SalesService;
-  let saleModel: { create: jest.Mock; findById: jest.Mock };
+  let saleModel: { create: jest.Mock; find: jest.Mock; findOne: jest.Mock };
   let products: {
     decrementStock: jest.Mock;
     adjustStock: jest.Mock;
@@ -117,7 +117,8 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
     // `create([doc], { session })` (overload tableau) résout un TABLEAU :
     saleModel = {
       create: jest.fn().mockResolvedValue([saleEntity]),
-      findById: jest.fn(),
+      find: jest.fn(),
+      findOne: jest.fn(),
     };
     products = {
       // par défaut : décrémentation validée, renvoie le produit.
@@ -298,19 +299,48 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
     });
   });
 
-  describe('update — stock adjusté hors transaction (comportement actuel)', () => {
-    it('baisser la quantity restaure le stock (delta) et audite SALE_UPDATED avec l’org de la vente', async () => {
+  describe('isolation et transactions des autres opérations (1-4C.2)', () => {
+    it('findAll filtre exactement par organisation et produit', async () => {
+      const chain = {
+        populate: jest.fn().mockReturnThis(),
+        sort: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue([]),
+      };
+      saleModel.find.mockReturnValue(chain);
+
+      await service.findAll(ORG_A, PRODUCT_OBJECT_ID);
+
+      expect(saleModel.find).toHaveBeenCalledWith({
+        organizationId: new Types.ObjectId(ORG_A),
+        productId: new Types.ObjectId(PRODUCT_OBJECT_ID),
+      });
+    });
+
+    it('update filtre la vente par tenant et transmet la même session aux trois écritures', async () => {
       const entity = makeSaleEntity();
       entity.save = jest.fn(() => Promise.resolve(entity));
-      saleModel.findById.mockReturnValue({
+      saleModel.findOne.mockReturnValue({
         exec: jest.fn().mockResolvedValue(entity),
       });
 
-      await service.update(SALE_OBJECT_ID, { quantity: 2 }, 'actor-1');
+      await service.update(ORG_A, SALE_OBJECT_ID, { quantity: 2 }, 'actor-1');
 
-      expect(products.adjustStock).toHaveBeenCalledWith(PRODUCT_OBJECT_ID, 2);
+      expect(saleModel.findOne).toHaveBeenCalledWith(
+        {
+          _id: new Types.ObjectId(SALE_OBJECT_ID),
+          organizationId: new Types.ObjectId(ORG_A),
+        },
+        null,
+        { session: fixture.session },
+      );
+      expect(products.adjustStock).toHaveBeenCalledWith(
+        ORG_A,
+        PRODUCT_OBJECT_ID,
+        2,
+        fixture.session,
+      );
+      expect(entity.save).toHaveBeenCalledWith({ session: fixture.session });
       expect(entity.quantity).toBe(2);
-      // 1-4C.1 : l'audit reçoit l'org de la VENTE (jamais celle du corps).
       expect(audit.log).toHaveBeenCalledWith(
         ORG_A,
         PRODUCT_OBJECT_ID,
@@ -320,29 +350,81 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
           saleId: SALE_OBJECT_ID,
           quantity: { from: 4, to: 2 },
         }),
+        fixture.session,
       );
+      expect(entity.$session).toHaveBeenCalledWith(null);
+      expect(fixture.endSession).toHaveBeenCalledTimes(1);
     });
-  });
 
-  describe('remove — stock restauré hors transaction (comportement actuel)', () => {
-    it('restaure le stock et audite SALE_CANCELLED avec l’org de la vente', async () => {
+    it('update étranger est indistinguable de l’absent et ne produit aucune écriture', async () => {
+      saleModel.findOne.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(null),
+      });
+
+      await expect(
+        service.update(ORG_A, SALE_OBJECT_ID, { quantity: 2 }, 'actor-1'),
+      ).rejects.toThrow(`Sale ${SALE_OBJECT_ID} not found`);
+      expect(products.adjustStock).not.toHaveBeenCalled();
+      expect(audit.log).not.toHaveBeenCalled();
+      expect(fixture.endSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('update propage l’échec audit avant tout effet post-commit', async () => {
+      const entity = makeSaleEntity();
+      entity.save = jest.fn(() => Promise.resolve(entity));
+      saleModel.findOne.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(entity),
+      });
+      audit.log.mockRejectedValue(new Error('update audit failure'));
+
+      await expect(
+        service.update(ORG_A, SALE_OBJECT_ID, { quantity: 2 }, 'actor-1'),
+      ).rejects.toThrow('update audit failure');
+      expect(entity.populate).not.toHaveBeenCalled();
+      expect(fixture.endSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('remove restaure le stock, supprime et audite avec la même session et la même org', async () => {
       const entity = makeSaleEntity({ quantity: 3, salePrice: 500 });
       entity.deleteOne = jest.fn(() => Promise.resolve(entity));
-      saleModel.findById.mockReturnValue({
+      saleModel.findOne.mockReturnValue({
         exec: jest.fn().mockResolvedValue(entity),
       });
 
-      await service.remove(SALE_OBJECT_ID, 'actor-1');
+      await service.remove(ORG_A, SALE_OBJECT_ID, 'actor-1');
 
-      expect(products.adjustStock).toHaveBeenCalledWith(PRODUCT_OBJECT_ID, 3);
-      expect(entity.deleteOne).toHaveBeenCalled();
+      expect(products.adjustStock).toHaveBeenCalledWith(
+        ORG_A,
+        PRODUCT_OBJECT_ID,
+        3,
+        fixture.session,
+      );
+      expect(entity.deleteOne).toHaveBeenCalledWith({
+        session: fixture.session,
+      });
       expect(audit.log).toHaveBeenCalledWith(
         ORG_A,
         PRODUCT_OBJECT_ID,
         AuditAction.SALE_CANCELLED,
         'actor-1',
         expect.objectContaining({ saleId: SALE_OBJECT_ID, quantity: 3 }),
+        fixture.session,
       );
+      expect(fixture.endSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('remove propage l’échec audit dans la transaction', async () => {
+      const entity = makeSaleEntity({ quantity: 3 });
+      entity.deleteOne = jest.fn(() => Promise.resolve(entity));
+      saleModel.findOne.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(entity),
+      });
+      audit.log.mockRejectedValue(new Error('remove audit failure'));
+
+      await expect(
+        service.remove(ORG_A, SALE_OBJECT_ID, 'actor-1'),
+      ).rejects.toThrow('remove audit failure');
+      expect(fixture.endSession).toHaveBeenCalledTimes(1);
     });
   });
 });

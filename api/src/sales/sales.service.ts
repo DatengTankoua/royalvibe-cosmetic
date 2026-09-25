@@ -128,10 +128,14 @@ export class SalesService {
     return populated;
   }
 
-  async findAll(productId?: string): Promise<SaleDocument[]> {
-    const filter = productId
-      ? { productId: new Types.ObjectId(productId) }
-      : {};
+  async findAll(
+    organizationId: string,
+    productId?: string,
+  ): Promise<SaleDocument[]> {
+    const filter: Record<string, Types.ObjectId> = {
+      organizationId: new Types.ObjectId(organizationId),
+    };
+    if (productId) filter.productId = new Types.ObjectId(productId);
     return this.saleModel
       .find(filter)
       .populate('sellerId', 'name email')
@@ -141,70 +145,105 @@ export class SalesService {
   }
 
   async update(
+    organizationId: string,
     id: string,
     dto: UpdateSaleDto,
     actorId: string,
   ): Promise<SaleDocument> {
-    const sale = await this.saleModel.findById(id).exec();
-    if (!sale) throw new NotFoundException(`Sale ${id} not found`);
-
-    const changes: Record<string, unknown> = {};
-
-    if (dto.quantity !== undefined && dto.quantity !== sale.quantity) {
-      // positive delta restores stock, negative consumes more
-      const delta = sale.quantity - dto.quantity;
-      await this.productsService.adjustStock(sale.productId.toString(), delta);
-      changes.quantity = { from: sale.quantity, to: dto.quantity };
-      sale.quantity = dto.quantity;
-    }
-
-    if (dto.salePrice !== undefined && dto.salePrice !== sale.salePrice) {
-      changes.salePrice = { from: sale.salePrice, to: dto.salePrice };
-      sale.salePrice = dto.salePrice;
-    }
-
-    const saved = await sale.save();
+    const session = await this.connection.startSession();
+    let saved: SaleDocument | undefined;
     try {
-      // 1-4C.1 : l'org provient du document de la VENTE (1-1B) et non de
-      // n'importe quelle valeur de requête — hors périmètre de la phase 1-4C.1
-      // mais le chemin doit compiler : la signature d'`AuditService.log`
-      // exige désormais un 1er argument `organizationId`.
-      await this.auditService.log(
-        sale.organizationId?.toString() ?? '',
-        sale.productId.toString(),
-        AuditAction.SALE_UPDATED,
-        actorId,
-        { saleId: id, ...changes },
-      );
-    } catch {
-      // non-critical: do not fail the request if audit logging fails
+      await session.withTransaction(async () => {
+        const sale = await this.saleModel
+          .findOne(
+            {
+              _id: new Types.ObjectId(id),
+              organizationId: new Types.ObjectId(organizationId),
+            },
+            null,
+            { session },
+          )
+          .exec();
+        if (!sale) throw new NotFoundException(`Sale ${id} not found`);
+
+        const changes: Record<string, unknown> = {};
+        if (dto.quantity !== undefined && dto.quantity !== sale.quantity) {
+          const delta = sale.quantity - dto.quantity;
+          await this.productsService.adjustStock(
+            organizationId,
+            sale.productId.toString(),
+            delta,
+            session,
+          );
+          changes.quantity = { from: sale.quantity, to: dto.quantity };
+          sale.quantity = dto.quantity;
+        }
+        if (dto.salePrice !== undefined && dto.salePrice !== sale.salePrice) {
+          changes.salePrice = { from: sale.salePrice, to: dto.salePrice };
+          sale.salePrice = dto.salePrice;
+        }
+
+        saved = await sale.save({ session });
+        await this.auditService.log(
+          organizationId,
+          sale.productId.toString(),
+          AuditAction.SALE_UPDATED,
+          actorId,
+          { saleId: id, ...changes },
+          session,
+        );
+      });
+    } finally {
+      await session.endSession();
     }
+
+    if (!saved) {
+      throw new Error('Sale transaction completed without updating a sale');
+    }
+    saved.$session(null);
     return saved.populate('sellerId', 'name email');
   }
 
-  async remove(id: string, actorId: string): Promise<void> {
-    const sale = await this.saleModel.findById(id).exec();
-    if (!sale) throw new NotFoundException(`Sale ${id} not found`);
-
-    const productId = sale.productId.toString();
-    const { quantity, salePrice } = sale;
-
-    await this.productsService.adjustStock(productId, quantity);
-    await sale.deleteOne();
-
+  async remove(
+    organizationId: string,
+    id: string,
+    actorId: string,
+  ): Promise<void> {
+    const session = await this.connection.startSession();
     try {
-      // 1-4C.1 : l'org provient du document de la VENTE (1-1B). Même
-      // justification que le `SALE_UPDATED` ci-dessus — hors périmètre direct
-      // mais compilable sans fallback : le 1er argument est obligatoire.
-      await this.auditService.log(
-        sale.organizationId?.toString() ?? '',
-        productId,
-        AuditAction.SALE_CANCELLED,
-        actorId,
-        { saleId: id, quantity, salePrice },
-      );
-    } catch {
-      // non-critical: do not fail the request if audit logging fails
+      await session.withTransaction(async () => {
+        const sale = await this.saleModel
+          .findOne(
+            {
+              _id: new Types.ObjectId(id),
+              organizationId: new Types.ObjectId(organizationId),
+            },
+            null,
+            { session },
+          )
+          .exec();
+        if (!sale) throw new NotFoundException(`Sale ${id} not found`);
+
+        const productId = sale.productId.toString();
+        const { quantity, salePrice } = sale;
+        await this.productsService.adjustStock(
+          organizationId,
+          productId,
+          quantity,
+          session,
+        );
+        await sale.deleteOne({ session });
+        await this.auditService.log(
+          organizationId,
+          productId,
+          AuditAction.SALE_CANCELLED,
+          actorId,
+          { saleId: id, quantity, salePrice },
+          session,
+        );
+      });
+    } finally {
+      await session.endSession();
     }
   }
 }

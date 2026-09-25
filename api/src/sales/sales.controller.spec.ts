@@ -126,17 +126,25 @@ describe('SalesController — transmission du tenant à la création (1-4C.1)', 
     expect(serviceStub.create.mock.calls[0][0]).toBe(ORG_A);
   });
 
-  it('routes non-modifiées : update/remove n’ont PAS gagné d’argument org (1-4C.1 n’y touche pas)', async () => {
-    const patchDto = { quantity: 1 };
-    await controller.update(VALID_OBJECT_ID, patchDto, seller);
-    // le `update` existant n'a PAS l'org (deferred à 1-4C.2) :
+  it('findAll/update/remove transmettent l’org du contexte en premier argument', async () => {
+    const patchDto = { quantity: 1, organizationId: ORG_B };
+
+    await controller.findAll(VALID_OBJECT_ID, ctxA);
+    expect(serviceStub.findAll).toHaveBeenCalledWith(ORG_A, VALID_OBJECT_ID);
+
+    await controller.update(VALID_OBJECT_ID, patchDto, seller, ctxA);
     expect(serviceStub.update).toHaveBeenCalledWith(
+      ORG_A,
       VALID_OBJECT_ID,
       patchDto,
       SELLER_ID,
     );
 
-    await controller.remove(VALID_OBJECT_ID, seller);
-    expect(serviceStub.remove).toHaveBeenCalledWith(VALID_OBJECT_ID, SELLER_ID);
+    await controller.remove(VALID_OBJECT_ID, seller, ctxA);
+    expect(serviceStub.remove).toHaveBeenCalledWith(
+      ORG_A,
+      VALID_OBJECT_ID,
+      SELLER_ID,
+    );
   });
 });

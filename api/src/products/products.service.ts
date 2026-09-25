@@ -379,8 +379,22 @@ export class ProductsService {
   }
 
   /** Adjusts remainingQuantity by delta (positive = restore, negative = consume) */
-  async adjustStock(productId: string, delta: number): Promise<void> {
-    const product = await this.productModel.findById(productId).exec();
+  async adjustStock(
+    organizationId: string,
+    productId: string,
+    delta: number,
+    session?: MongooseSession,
+  ): Promise<void> {
+    const product = await this.productModel
+      .findOne(
+        {
+          _id: new Types.ObjectId(productId),
+          organizationId: new Types.ObjectId(organizationId),
+        },
+        null,
+        { session: session ?? null },
+      )
+      .exec();
     if (!product) return; // product may have been permanently deleted
     if (product.remainingQuantity + delta < 0) {
       throw new BadRequestException(
@@ -388,7 +402,7 @@ export class ProductsService {
       );
     }
     product.remainingQuantity += delta;
-    await product.save();
+    await product.save({ session: session ?? null });
   }
 
   /**

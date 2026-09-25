@@ -720,3 +720,70 @@ describe('ProductsService — appelants AuditService.log portent la tenant (1-4C
     expect(orgArg).toBe(ORG_A);
   });
 });
+
+describe('ProductsService.adjustStock — tenant et session (1-4C.2)', () => {
+  let service: ProductsService;
+  let productModel: { findOne: jest.Mock };
+  let findChain: { exec: jest.Mock };
+
+  beforeEach(async () => {
+    findChain = { exec: jest.fn() };
+    productModel = { findOne: jest.fn(() => findChain) };
+    const module = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: getModelToken(Product.name), useValue: productModel },
+        { provide: getModelToken(Sale.name), useValue: {} },
+        { provide: getModelToken(Section.name), useValue: {} },
+        { provide: S3Service, useValue: {} },
+        { provide: EventsGateway, useValue: {} },
+        { provide: AuditService, useValue: {} },
+      ],
+    }).compile();
+    service = module.get(ProductsService);
+  });
+
+  it('filtre par produit + tenant et utilise la même session pour lire et sauvegarder', async () => {
+    const session = makeSession();
+    const product = {
+      remainingQuantity: 4,
+      deletedAt: new Date(),
+      save: jest.fn().mockResolvedValue(undefined),
+    };
+    findChain.exec.mockResolvedValue(product);
+
+    await service.adjustStock(TRADE_ORG_A, PRODUCT_OBJECT_ID, 2, session);
+
+    expect(productModel.findOne).toHaveBeenCalledWith(
+      {
+        _id: new Types.ObjectId(PRODUCT_OBJECT_ID),
+        organizationId: new Types.ObjectId(TRADE_ORG_A),
+      },
+      null,
+      { session },
+    );
+    expect(product.remainingQuantity).toBe(6);
+    expect(product.save).toHaveBeenCalledWith({ session });
+  });
+
+  it('produit absent ou étranger retourne sans écriture comme avant', async () => {
+    findChain.exec.mockResolvedValue(null);
+
+    await expect(
+      service.adjustStock(TRADE_ORG_A, UNKNOWN_PRODUCT_ID, 2),
+    ).resolves.toBeUndefined();
+  });
+
+  it('stock négatif conserve le message exact et ne sauvegarde pas', async () => {
+    const product = {
+      remainingQuantity: 1,
+      save: jest.fn().mockResolvedValue(undefined),
+    };
+    findChain.exec.mockResolvedValue(product);
+
+    await expect(
+      service.adjustStock(TRADE_ORG_A, PRODUCT_OBJECT_ID, -2),
+    ).rejects.toThrow('Insufficient stock. Available: 1');
+    expect(product.save).not.toHaveBeenCalled();
+  });
+});

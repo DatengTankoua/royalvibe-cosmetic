@@ -115,6 +115,26 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       .set('Authorization', `Bearer ${token}`)
       .send({ productId, quantity, salePrice: 400, buyerName: 'Client E2E' });
 
+  const listSales = (token: string) =>
+    request(app.getHttpServer())
+      .get('/sales')
+      .set('Authorization', `Bearer ${token}`);
+
+  const updateSale = (
+    saleId: string,
+    body: Record<string, unknown>,
+    token: string,
+  ) =>
+    request(app.getHttpServer())
+      .patch(`/sales/${saleId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(body);
+
+  const removeSale = (saleId: string, token: string) =>
+    request(app.getHttpServer())
+      .delete(`/sales/${saleId}`)
+      .set('Authorization', `Bearer ${token}`);
+
   /** 1-4C.1 : compteurs tenant — ventes + audits `sold` d'une org précise. */
   const salesOfOrg = async (org: string) =>
     saleModel.countDocuments({ organizationId: new Types.ObjectId(org) });
@@ -678,6 +698,233 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       expect(saleCreated).toBe(1);
 
       gateway.emit = realEmit;
+    });
+  });
+
+  describe('7. Isolation et atomicité des autres opérations Sales (1-4C.2)', () => {
+    it('GET retourne deux listes disjointes, chacune limitée à son organisation', async () => {
+      const aProduct = await seedProduct(
+        'ListA-' + Date.now(),
+        3,
+        TRADE_ORG_ID,
+        sectionId,
+      );
+      const bProduct = await seedProduct(
+        'ListB-' + Date.now(),
+        3,
+        ORG_B_ID,
+        sectionIdB,
+      );
+      const aCreated = await createSale(aProduct.id, 1, adminToken);
+      const bCreated = await createSale(bProduct.id, 1, adminBToken);
+      expect(aCreated.status).toBe(201);
+      expect(bCreated.status).toBe(201);
+
+      const [aList, bList] = await Promise.all([
+        listSales(adminToken),
+        listSales(adminBToken),
+      ]);
+      expect(aList.status).toBe(200);
+      expect(bList.status).toBe(200);
+      const aIds = (aList.body as Array<{ _id: string }>).map((s) => s._id);
+      const bIds = (bList.body as Array<{ _id: string }>).map((s) => s._id);
+      expect(aIds).toContain(aCreated.body._id as string);
+      expect(aIds).not.toContain(bCreated.body._id as string);
+      expect(bIds).toContain(bCreated.body._id as string);
+      expect(bIds).not.toContain(aCreated.body._id as string);
+      expect(aIds.filter((id) => bIds.includes(id))).toEqual([]);
+    });
+
+    it('A ne peut PATCH ni DELETE une vente B : 404 et aucun état B/audit ne change', async () => {
+      const product = await seedProduct(
+        'ForeignB-' + Date.now(),
+        5,
+        ORG_B_ID,
+        sectionIdB,
+      );
+      const created = await createSale(product.id, 2, adminBToken);
+      const saleId = created.body._id as string;
+      const auditBefore = await auditModel.countDocuments();
+
+      const patched = await updateSale(saleId, { quantity: 1 }, adminToken);
+      expect(patched.status).toBe(404);
+      expect(messageOf(patched.body)).toBe(`Sale ${saleId} not found`);
+      const removed = await removeSale(saleId, adminToken);
+      expect(removed.status).toBe(404);
+      expect(messageOf(removed.body)).toBe(`Sale ${saleId} not found`);
+
+      expect((await saleModel.findById(saleId))!.quantity).toBe(2);
+      expect(await remainingOf(product.id)).toBe(3);
+      expect(await auditModel.countDocuments()).toBe(auditBefore);
+    });
+
+    it('update A ajuste uniquement le stock A et écrit l’audit A', async () => {
+      const aProduct = await seedProduct(
+        'UpdateA-' + Date.now(),
+        8,
+        TRADE_ORG_ID,
+        sectionId,
+      );
+      const bProduct = await seedProduct(
+        'UpdateB-' + Date.now(),
+        8,
+        ORG_B_ID,
+        sectionIdB,
+      );
+      const created = await createSale(aProduct.id, 3, adminToken);
+      const aAuditBefore = await auditModel.countDocuments({
+        organizationId: new Types.ObjectId(TRADE_ORG_ID),
+        action: 'sale_updated',
+      });
+      const bAuditBefore = await auditModel.countDocuments({
+        organizationId: new Types.ObjectId(ORG_B_ID),
+        action: 'sale_updated',
+      });
+
+      const patched = await updateSale(
+        created.body._id as string,
+        { quantity: 1 },
+        adminToken,
+      );
+      expect(patched.status).toBe(200);
+      expect(await remainingOf(aProduct.id)).toBe(7);
+      expect(await remainingOf(bProduct.id)).toBe(8);
+      expect(
+        await auditModel.countDocuments({
+          organizationId: new Types.ObjectId(TRADE_ORG_ID),
+          action: 'sale_updated',
+        }),
+      ).toBe(aAuditBefore + 1);
+      expect(
+        await auditModel.countDocuments({
+          organizationId: new Types.ObjectId(ORG_B_ID),
+          action: 'sale_updated',
+        }),
+      ).toBe(bAuditBefore);
+    });
+
+    it('delete A restaure uniquement le stock A et écrit l’audit A', async () => {
+      const aProduct = await seedProduct(
+        'DeleteA-' + Date.now(),
+        6,
+        TRADE_ORG_ID,
+        sectionId,
+      );
+      const bProduct = await seedProduct(
+        'DeleteB-' + Date.now(),
+        6,
+        ORG_B_ID,
+        sectionIdB,
+      );
+      const created = await createSale(aProduct.id, 2, adminToken);
+      const auditBefore = await auditModel.countDocuments({
+        organizationId: new Types.ObjectId(TRADE_ORG_ID),
+        action: 'sale_cancelled',
+      });
+
+      const removed = await removeSale(created.body._id as string, adminToken);
+      expect(removed.status).toBe(204);
+      expect(await remainingOf(aProduct.id)).toBe(6);
+      expect(await remainingOf(bProduct.id)).toBe(6);
+      expect(
+        await auditModel.countDocuments({
+          organizationId: new Types.ObjectId(TRADE_ORG_ID),
+          action: 'sale_cancelled',
+        }),
+      ).toBe(auditBefore + 1);
+    });
+
+    it('échec audit update : rollback de la vente, du stock et de l’audit', async () => {
+      const product = await seedProduct(
+        'RollbackUpdate-' + Date.now(),
+        5,
+        TRADE_ORG_ID,
+        sectionId,
+      );
+      const created = await createSale(product.id, 2, adminToken);
+      const saleId = created.body._id as string;
+      const auditBefore = await auditModel.countDocuments();
+      const originalCreate = auditModel.create.bind(auditModel) as (
+        docs: unknown,
+        opts?: { session?: unknown },
+      ) => Promise<unknown>;
+      auditModel.create = ((docs: unknown, opts?: { session?: unknown }) =>
+        opts?.session
+          ? Promise.reject(new Error('forced update audit rollback'))
+          : originalCreate(docs, opts)) as unknown as typeof auditModel.create;
+
+      let response: request.Response;
+      try {
+        response = await updateSale(saleId, { quantity: 1 }, adminToken);
+      } finally {
+        auditModel.create =
+          originalCreate as unknown as typeof auditModel.create;
+      }
+      expect(response.status).toBeGreaterThanOrEqual(500);
+      expect((await saleModel.findById(saleId))!.quantity).toBe(2);
+      expect(await remainingOf(product.id)).toBe(3);
+      expect(await auditModel.countDocuments()).toBe(auditBefore);
+    });
+
+    it('échec audit remove : rollback de la vente, du stock et de l’audit', async () => {
+      const product = await seedProduct(
+        'RollbackRemove-' + Date.now(),
+        5,
+        TRADE_ORG_ID,
+        sectionId,
+      );
+      const created = await createSale(product.id, 2, adminToken);
+      const saleId = created.body._id as string;
+      const auditBefore = await auditModel.countDocuments();
+      const originalCreate = auditModel.create.bind(auditModel) as (
+        docs: unknown,
+        opts?: { session?: unknown },
+      ) => Promise<unknown>;
+      auditModel.create = ((docs: unknown, opts?: { session?: unknown }) =>
+        opts?.session
+          ? Promise.reject(new Error('forced remove audit rollback'))
+          : originalCreate(docs, opts)) as unknown as typeof auditModel.create;
+
+      let response: request.Response;
+      try {
+        response = await removeSale(saleId, adminToken);
+      } finally {
+        auditModel.create =
+          originalCreate as unknown as typeof auditModel.create;
+      }
+      expect(response.status).toBeGreaterThanOrEqual(500);
+      expect(await saleModel.findById(saleId)).not.toBeNull();
+      expect(await remainingOf(product.id)).toBe(3);
+      expect(await auditModel.countDocuments()).toBe(auditBefore);
+    });
+
+    it('organizationId falsifié dans body/query/header ne change jamais le tenant', async () => {
+      const product = await seedProduct(
+        'Forgery-' + Date.now(),
+        5,
+        TRADE_ORG_ID,
+        sectionId,
+      );
+      const created = await createSale(product.id, 2, adminToken);
+      const saleId = created.body._id as string;
+
+      const rejected = await updateSale(
+        saleId,
+        { salePrice: 123, organizationId: ORG_B_ID },
+        adminToken,
+      );
+      expect(rejected.status).toBe(400);
+      expect((await saleModel.findById(saleId))!.salePrice).toBe(400);
+
+      const accepted = await request(app.getHttpServer())
+        .patch(`/sales/${saleId}?organizationId=${ORG_B_ID}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Organization-Id', ORG_B_ID)
+        .send({ salePrice: 250 });
+      expect(accepted.status).toBe(200);
+      const persisted = await saleModel.findById(saleId);
+      expect(persisted!.salePrice).toBe(250);
+      expect(persisted!.organizationId.toString()).toBe(TRADE_ORG_ID);
     });
   });
 });

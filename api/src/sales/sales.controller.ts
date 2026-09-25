@@ -21,12 +21,6 @@ import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
 import { User, UserRole } from '../users/schemas/user.schema';
 import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
 
-/**
- * 1-4C.1 — la CRÉATION de vente seule porte `@CurrentOrganization()` :
- * le tenant (branché par `OrganizationGuard`, jamais fourni par la requête)
- * est le 1er argument du service. Les autres routes (lecture, update,
- * remove) attendent 1-4C.2 et restent inchangées.
- */
 @Controller('sales')
 export class SalesController {
   constructor(private readonly salesService: SalesService) {}
@@ -45,8 +39,14 @@ export class SalesController {
   }
 
   @Get()
-  findAll(@Query('productId') productId?: string) {
-    return this.salesService.findAll(productId);
+  findAll(
+    @Query('productId') productId: string | undefined,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+  ) {
+    return this.salesService.findAll(
+      organizationContext.organizationId,
+      productId,
+    );
   }
 
   @Patch(':id')
@@ -56,8 +56,14 @@ export class SalesController {
     @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: UpdateSaleDto,
     @CurrentUser() user: User,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.salesService.update(id, dto, user._id.toString());
+    return this.salesService.update(
+      organizationContext.organizationId,
+      id,
+      dto,
+      user._id.toString(),
+    );
   }
 
   @Delete(':id')
@@ -67,7 +73,12 @@ export class SalesController {
   remove(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentUser() user: User,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.salesService.remove(id, user._id.toString());
+    return this.salesService.remove(
+      organizationContext.organizationId,
+      id,
+      user._id.toString(),
+    );
   }
 }
