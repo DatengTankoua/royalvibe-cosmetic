@@ -21,6 +21,7 @@ import {
 } from '../../organizations/organizations.service';
 import { AuthenticatedPrincipal } from '../strategies/jwt.strategy';
 import { OrganizationGuard } from './organization.guard';
+import { PermissionGuard } from './permission.guard';
 
 const USER_ID = '112233445566778899001122';
 const ORG_A_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -244,7 +245,7 @@ describe('OrganizationGuard (1-3B.2)', () => {
     expect(extractOrganizationContext(ctx)).toBe(organizationContext);
   });
 
-  it('10 — l’ordre des gardes globales dans AuthModule : Jwt → Organization → Roles', () => {
+  it('10 — l’ordre des gardes globales dans AuthModule : Jwt → Organization → Permission → Roles', () => {
     // `@Module` stocke la config de providers sous la métadonnée `'providers'`
     // (valeur publique constatée des clés NestJS). On ne dépend d'aucun
     // chemin interne `node_modules`.
@@ -257,9 +258,10 @@ describe('OrganizationGuard (1-3B.2)', () => {
         Boolean(p && p.provide === APP_GUARD),
       )
       .map((p) => p.useClass);
-    expect(globalGuards).toHaveLength(3);
+    expect(globalGuards).toHaveLength(4);
     expect(globalGuards[0]).toBe(JwtAuthGuard);
     expect(globalGuards[1]).toBe(OrganizationGuard);
-    expect(globalGuards[2]).toBe(RolesGuard);
+    expect(globalGuards[2]).toBe(PermissionGuard);
+    expect(globalGuards[3]).toBe(RolesGuard);
   });
 });

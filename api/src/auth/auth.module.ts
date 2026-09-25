@@ -13,6 +13,7 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { OrganizationGuard } from './guards/organization.guard';
+import { PermissionGuard } from './guards/permission.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { UsersModule } from '../users/users.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
@@ -49,10 +50,14 @@ import { OrganizationsModule } from '../organizations/organizations.module';
     // 2. OrganizationGuard → 403 uniforme si membership/organisation inactive
     //    ; brancher `request.organizationContext` (jamais de mutation sur
     //    `request.user`).
-    // 3. RolesGuard → contrôle du rôle `User.role` du document chargé.
+    // 3. PermissionGuard (1-7A) → 403 `PERMISSION_DENIED` si les permissions
+    //    effectives (rôle ∪ `context.permissions`) ou l'exclusivité owner
+    //    ne sont pas satisfaites ; lit UNIQUEMENT `organizationContext`.
+    // 4. RolesGuard → contrôle du rôle `User.role` du document chargé.
     // L'ordre est contractuel : les tests E2E / unitaires l'assertent.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: OrganizationGuard },
+    { provide: APP_GUARD, useClass: PermissionGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
   controllers: [AuthController],
