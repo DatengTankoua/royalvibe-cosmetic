@@ -25,6 +25,14 @@ export enum OrganizationStatus {
   SUSPENDED = 'suspended',
 }
 
+/** Cycle de vie d'une invitation (1-6B.1) — jamais de suppression physique. */
+export enum InvitationStatus {
+  PENDING = 'pending',
+  ACCEPTED = 'accepted',
+  REVOKED = 'revoked',
+  EXPIRED = 'expired',
+}
+
 /** Devises initiales. `XAF` (CFA franc, Cameroun) est la valeur par défaut. */
 export enum OrganizationCurrency {
   XAF = 'XAF',

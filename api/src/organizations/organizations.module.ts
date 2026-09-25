@@ -8,18 +8,30 @@ import {
   OrganizationMembership,
   OrganizationMembershipSchema,
 } from './schemas/membership.schema';
+import {
+  OrganizationInvitation,
+  OrganizationInvitationSchema,
+} from './schemas/invitation.schema';
 import { OrganizationsService } from './organizations.service';
+import { OrganizationsController } from './organizations.controller';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
+    UsersModule,
     MongooseModule.forFeature([
       { name: Organization.name, schema: OrganizationSchema },
       {
         name: OrganizationMembership.name,
         schema: OrganizationMembershipSchema,
       },
+      {
+        name: OrganizationInvitation.name,
+        schema: OrganizationInvitationSchema,
+      },
     ]),
   ],
+  controllers: [OrganizationsController],
   providers: [OrganizationsService],
   exports: [OrganizationsService],
 })

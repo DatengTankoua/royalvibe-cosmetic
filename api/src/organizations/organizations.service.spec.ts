@@ -1,12 +1,19 @@
-import { ForbiddenException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { OrganizationsService } from './organizations.service';
 import { Organization } from './schemas/organization.schema';
 import { OrganizationMembership } from './schemas/membership.schema';
+import { OrganizationInvitation } from './schemas/invitation.schema';
+import { UsersService } from '../users/users.service';
 import {
   DelegablePermission,
+  InvitationStatus,
   MembershipStatus,
   OrganizationRole,
   OrganizationStatus,
@@ -42,6 +49,11 @@ describe('OrganizationsService.resolveActiveContext', () => {
           provide: getModelToken(OrganizationMembership.name),
           useValue: membershipModel,
         },
+        {
+          provide: getModelToken(OrganizationInvitation.name),
+          useValue: {},
+        },
+        { provide: UsersService, useValue: { findByEmail: jest.fn() } },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -363,6 +375,11 @@ describe('OrganizationsService.listActiveOrganizations', () => {
           provide: getModelToken(OrganizationMembership.name),
           useValue: membershipModel,
         },
+        {
+          provide: getModelToken(OrganizationInvitation.name),
+          useValue: {},
+        },
+        { provide: UsersService, useValue: { findByEmail: jest.fn() } },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -575,5 +592,256 @@ describe('OrganizationsService.listActiveOrganizations', () => {
     expect(result).toEqual([]);
     // Le filtre actif de la base exclut la membership : aucune recherche org.
     expect(organizationModel.findById).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// Invitations (phase 1-6B.1) — émission, liste, révocation
+// =============================================================================
+describe('OrganizationsService — invitations (1-6B.1)', () => {
+  const OWNER_ID = '445566778899001122334455';
+  const INVITATION_ID = '556677889900112233445566';
+  const OTHER_ORG_ID = '667788990011223344556677';
+  const crypto = jest.requireActual<typeof import('crypto')>('crypto');
+
+  let service: OrganizationsService;
+  let invitationModel: {
+    findOne: jest.Mock;
+    create: jest.Mock;
+    find: jest.Mock;
+    findOneAndUpdate: jest.Mock;
+  };
+  let membershipModel: { findOne: jest.Mock };
+  let usersService: { findByEmail: jest.Mock };
+
+  function invitationDoc(overrides: Record<string, unknown> = {}) {
+    return {
+      _id: new Types.ObjectId(INVITATION_ID),
+      email: 'invite@example.com',
+      role: OrganizationRole.ADMIN,
+      permissions: [] as DelegablePermission[],
+      status: 'pending',
+      expiresAt: new Date('2026-01-04T00:00:00.000Z'),
+      save: jest.fn().mockResolvedValue(undefined),
+      ...overrides,
+    };
+  }
+
+  async function build() {
+    invitationModel = {
+      findOne: jest.fn(() => ({ exec: () => Promise.resolve(null) })),
+      create: jest.fn((doc: Record<string, unknown>) =>
+        Promise.resolve(invitationDoc(doc)),
+      ),
+      find: jest.fn(() => ({
+        sort: () => ({ exec: () => Promise.resolve([]) }),
+      })),
+      findOneAndUpdate: jest.fn(() => ({ exec: () => Promise.resolve(null) })),
+    };
+    membershipModel = {
+      findOne: jest.fn(() => ({ exec: () => Promise.resolve(null) })),
+    };
+    usersService = { findByEmail: jest.fn().mockResolvedValue(null) };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrganizationsService,
+        { provide: getModelToken(Organization.name), useValue: {} },
+        {
+          provide: getModelToken(OrganizationMembership.name),
+          useValue: membershipModel,
+        },
+        {
+          provide: getModelToken(OrganizationInvitation.name),
+          useValue: invitationModel,
+        },
+        { provide: UsersService, useValue: usersService },
+      ],
+    }).compile();
+    service = module.get(OrganizationsService);
+  }
+
+  const NOW = new Date('2026-01-01T00:00:00.000Z');
+  const VALID_DTO = {
+    email: 'Invite@Example.com',
+    role: OrganizationRole.ADMIN,
+  };
+
+  describe('createInvitation', () => {
+    it('normalise l’email (lowercase/trim) et renvoie un token ≠ au hash stocké', async () => {
+      await build();
+      const result = await service.createInvitation(
+        ORG_OBJECT_ID,
+        OWNER_ID,
+        VALID_DTO,
+        NOW,
+      );
+
+      const created = invitationModel.create.mock.calls[0][0] as {
+        email: string;
+        tokenHash: string;
+      };
+      expect(created.email).toBe('invite@example.com');
+      expect(result.token).not.toBe(created.tokenHash);
+      // Hash EXACT SHA-256 du token brut renvoyé :
+      const expectedHash = crypto
+        .createHash('sha256')
+        .update(result.token)
+        .digest('hex');
+      expect(created.tokenHash).toBe(expectedHash);
+      expect(created.tokenHash).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it('expiration calculée serveur : exactement +72h de `now`', async () => {
+      await build();
+      await service.createInvitation(ORG_OBJECT_ID, OWNER_ID, VALID_DTO, NOW);
+      const created = invitationModel.create.mock.calls[0][0] as {
+        expiresAt: Date;
+      };
+      expect(created.expiresAt.getTime() - NOW.getTime()).toBe(
+        72 * 60 * 60 * 1000,
+      );
+    });
+
+    it('réponse : { invitation, token } — jamais tokenHash/invitedById', async () => {
+      await build();
+      const result = await service.createInvitation(
+        ORG_OBJECT_ID,
+        OWNER_ID,
+        VALID_DTO,
+        NOW,
+      );
+      expect(Object.keys(result).sort()).toEqual(['invitation', 'token']);
+      expect(Object.keys(result.invitation).sort()).toEqual([
+        '_id',
+        'email',
+        'expiresAt',
+        'permissions',
+        'role',
+        'status',
+      ]);
+    });
+
+    it('email avec membership active existante dans CETTE org → 409 MEMBER_ALREADY_ACTIVE', async () => {
+      await build();
+      usersService.findByEmail.mockResolvedValue({
+        _id: new Types.ObjectId(OWNER_ID),
+      });
+      membershipModel.findOne.mockReturnValue({
+        exec: () => Promise.resolve({ status: MembershipStatus.ACTIVE }),
+      });
+
+      const error: unknown = await service
+        .createInvitation(ORG_OBJECT_ID, OWNER_ID, VALID_DTO, NOW)
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getResponse()).toMatchObject({
+        code: 'MEMBER_ALREADY_ACTIVE',
+      });
+      expect(invitationModel.create).not.toHaveBeenCalled();
+    });
+
+    it('invitation `pending` non expirée pour le même email → 409 INVITATION_ALREADY_PENDING', async () => {
+      await build();
+      invitationModel.findOne.mockReturnValue({
+        exec: () =>
+          Promise.resolve(
+            invitationDoc({ expiresAt: new Date('2099-01-01T00:00:00.000Z') }),
+          ),
+      });
+
+      const error: unknown = await service
+        .createInvitation(ORG_OBJECT_ID, OWNER_ID, VALID_DTO, NOW)
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getResponse()).toMatchObject({
+        code: 'INVITATION_ALREADY_PENDING',
+      });
+      expect(invitationModel.create).not.toHaveBeenCalled();
+    });
+
+    it('invitation `pending` EXPIRÉE → marquée `expired` puis une nouvelle est émise', async () => {
+      await build();
+      const expired = invitationDoc({
+        expiresAt: new Date('2020-01-01T00:00:00.000Z'),
+      });
+      invitationModel.findOne.mockReturnValue({
+        exec: () => Promise.resolve(expired),
+      });
+
+      await service.createInvitation(ORG_OBJECT_ID, OWNER_ID, VALID_DTO, NOW);
+
+      expect(expired.status).toBe(InvitationStatus.EXPIRED);
+      expect(expired.save).toHaveBeenCalledTimes(1);
+      expect(invitationModel.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('permissions omises → [] par défaut', async () => {
+      await build();
+      await service.createInvitation(ORG_OBJECT_ID, OWNER_ID, VALID_DTO, NOW);
+      const created = invitationModel.create.mock.calls[0][0] as {
+        permissions: unknown[];
+      };
+      expect(created.permissions).toEqual([]);
+    });
+  });
+
+  describe('listInvitations', () => {
+    it('filtre par organizationId uniquement, tri createdAt desc, jamais tokenHash', async () => {
+      await build();
+      const sortSpy = jest.fn(() => ({
+        exec: () => Promise.resolve([invitationDoc()]),
+      }));
+      invitationModel.find.mockReturnValue({ sort: sortSpy });
+
+      const result = await service.listInvitations(ORG_OBJECT_ID);
+
+      expect(invitationModel.find).toHaveBeenCalledWith({
+        organizationId: new Types.ObjectId(ORG_OBJECT_ID),
+      });
+      expect(sortSpy).toHaveBeenCalledWith({ createdAt: -1 });
+      expect(result).toHaveLength(1);
+      expect(JSON.stringify(result)).not.toContain('tokenHash');
+    });
+  });
+
+  describe('revokeInvitation', () => {
+    it('filtre exact { _id, organizationId, status: pending }', async () => {
+      await build();
+      invitationModel.findOneAndUpdate.mockReturnValue({
+        exec: () => Promise.resolve(invitationDoc()),
+      });
+
+      await service.revokeInvitation(ORG_OBJECT_ID, INVITATION_ID);
+
+      expect(invitationModel.findOneAndUpdate).toHaveBeenCalledWith(
+        {
+          _id: new Types.ObjectId(INVITATION_ID),
+          organizationId: new Types.ObjectId(ORG_OBJECT_ID),
+          status: InvitationStatus.PENDING,
+        },
+        { status: InvitationStatus.REVOKED },
+        { new: true },
+      );
+    });
+
+    it('invitation étrangère (autre org) ou absente → même 404', async () => {
+      await build(); // findOneAndUpdate résout null par défaut
+
+      const foreign: unknown = await service
+        .revokeInvitation(OTHER_ORG_ID, INVITATION_ID)
+        .catch((e: unknown) => e);
+      const missing: unknown = await service
+        .revokeInvitation(ORG_OBJECT_ID, INVITATION_ID)
+        .catch((e: unknown) => e);
+
+      expect(foreign).toBeInstanceOf(NotFoundException);
+      expect(missing).toBeInstanceOf(NotFoundException);
+      expect((foreign as NotFoundException).getStatus()).toBe(
+        (missing as NotFoundException).getStatus(),
+      );
+    });
   });
 });
