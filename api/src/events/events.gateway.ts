@@ -2,8 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
 import { JwtService } from '@nestjs/jwt';
 import type { IncomingHttpHeaders, IncomingMessage } from 'http';
-import type { Server } from 'socket.io';
+import type { Server, Socket } from 'socket.io';
 import { UsersService } from '../users/users.service';
+import { OrganizationsService } from '../organizations/organizations.service';
 import {
   buildOriginAllowlist,
   parseCORSOrigin,
@@ -120,6 +121,9 @@ const allowRequestForSocket: (
   }
 };
 
+export const organizationRoom = (organizationId: string): string =>
+  `organization:${organizationId}`;
+
 @Injectable()
 @WebSocketGateway({
   // Options transmises au constructeur Socket.IO (voir
@@ -138,6 +142,7 @@ export class EventsGateway {
   constructor(
     private readonly jwtService: JwtService,
     private readonly usersService: UsersService,
+    private readonly organizationsService: OrganizationsService,
   ) {}
 
   /**
@@ -159,20 +164,26 @@ export class EventsGateway {
     installSocketAuthMiddleware(server, {
       jwtService: this.jwtService,
       usersService: this.usersService,
+      organizationsService: this.organizationsService,
       logger: new Logger(EventsGateway.name),
     });
   }
 
-  emit(event: string, payload: unknown): void {
-    this.server.emit(event, payload);
+  handleConnection(client: Socket): void {
+    const organizationId = client.data.organizationContext?.organizationId as
+      string | undefined;
+    if (!organizationId) {
+      client.disconnect(true);
+      return;
+    }
+    void client.join(organizationRoom(organizationId));
   }
 
-  // Legacy helpers kept for backward compatibility
-  emitObjectCreated(object: unknown) {
-    this.server.emit('object:created', object);
-  }
-
-  emitObjectDeleted(id: string) {
-    this.server.emit('object:deleted', id);
+  emitToOrganization(
+    organizationId: string,
+    event: string,
+    payload: unknown,
+  ): void {
+    this.server.to(organizationRoom(organizationId)).emit(event, payload);
   }
 }

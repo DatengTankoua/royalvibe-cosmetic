@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { EventsGateway } from './events.gateway';
 import { UsersService } from '../users/users.service';
+import { OrganizationsService } from '../organizations/organizations.service';
 
 /**
  * Tests unitaires du `EventsGateway` (phase 0B.3).
@@ -59,6 +60,10 @@ describe('EventsGateway (unité)', () => {
         {
           provide: UsersService,
           useValue: { findById: jest.fn() },
+        },
+        {
+          provide: OrganizationsService,
+          useValue: { resolveActiveContext: jest.fn() },
         },
       ],
     }).compile();
@@ -179,6 +184,57 @@ describe('EventsGateway (unité)', () => {
         process.env.CORS_ORIGIN = previous;
         process.env.NODE_ENV = previousNodeEnv;
       }
+    });
+  });
+
+  describe('rooms organisationnelles', () => {
+    beforeEach(async () => {
+      await compileGateway();
+    });
+
+    it('joint exactement la room issue du contexte résolu', () => {
+      const client = {
+        data: {
+          organizationContext: {
+            organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+          },
+        },
+        join: jest.fn(),
+        disconnect: jest.fn(),
+      };
+
+      gateway.handleConnection(client as never);
+
+      expect(client.join).toHaveBeenCalledWith(
+        'organization:aaaaaaaaaaaaaaaaaaaaaaaa',
+      );
+      expect(client.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('déconnecte défensivement un socket sans contexte et ne joint aucune room', () => {
+      const client = {
+        data: {},
+        join: jest.fn(),
+        disconnect: jest.fn(),
+      };
+
+      gateway.handleConnection(client as never);
+
+      expect(client.join).not.toHaveBeenCalled();
+      expect(client.disconnect).toHaveBeenCalledWith(true);
+    });
+
+    it('émet uniquement via server.to(room).emit', () => {
+      const emit = jest.fn();
+      const to = jest.fn(() => ({ emit }));
+      gateway.server = { to } as never;
+
+      gateway.emitToOrganization('aaaaaaaaaaaaaaaaaaaaaaaa', 'sale:created', {
+        id: 'sale-a',
+      });
+
+      expect(to).toHaveBeenCalledWith('organization:aaaaaaaaaaaaaaaaaaaaaaaa');
+      expect(emit).toHaveBeenCalledWith('sale:created', { id: 'sale-a' });
     });
   });
 });

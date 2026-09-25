@@ -39,6 +39,7 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
   interface Deps {
     jwtService: { verifyAsync: jest.Mock };
     usersService: { findById: jest.Mock };
+    organizationsService: { resolveActiveContext: jest.Mock };
     logger: { warn: jest.Mock; error: jest.Mock };
   }
 
@@ -64,6 +65,7 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
     installSocketAuthMiddleware({ use } as never, {
       jwtService: deps.jwtService,
       usersService: deps.usersService,
+      organizationsService: deps.organizationsService,
       logger: deps.logger,
     });
     const middleware = use.mock.calls[0][0] as (
@@ -113,6 +115,15 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
     deps = {
       jwtService: { verifyAsync: jest.fn() },
       usersService: { findById: jest.fn() },
+      organizationsService: {
+        resolveActiveContext: jest.fn().mockResolvedValue({
+          userId: USER_ID,
+          organizationId: ORG_ID,
+          membershipId: '0123456789abcdef01234569',
+          role: 'seller',
+          permissions: [],
+        }),
+      },
       logger: { warn: jest.fn(), error: jest.fn() },
     };
   });
@@ -139,6 +150,16 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
       email: USER_EMAIL,
       role: USER_ROLE,
     });
+    expect(
+      deps.organizationsService.resolveActiveContext,
+    ).toHaveBeenCalledTimes(1);
+    expect(deps.organizationsService.resolveActiveContext).toHaveBeenCalledWith(
+      USER_ID,
+      ORG_ID,
+    );
+    expect(socket.data.organizationContext).toEqual(
+      expect.objectContaining({ organizationId: ORG_ID }),
+    );
     // Le principal ne contient ni password, ni token, ni _id.
     expect(socket.data.user).not.toHaveProperty('password');
     expect(socket.data.user).not.toHaveProperty('token');
@@ -336,6 +357,37 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
     expect(String(deps.logger.warn.mock.calls.flat().join(' '))).not.toContain(
       USER_ID,
     );
+  });
+
+  it.each([
+    'membership absente',
+    'membership suspendue',
+    'membership révoquée',
+    'organisation absente',
+    'organisation suspendue',
+  ])('%s → refus uniforme, aucun contexte ni timer', async () => {
+    deps.jwtService.verifyAsync.mockResolvedValue(validPayload());
+    deps.usersService.findById.mockResolvedValue(validUser());
+    deps.organizationsService.resolveActiveContext.mockRejectedValue(
+      new Error('organization access denied'),
+    );
+    const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
+
+    const { next } = await run(socket);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect((next.mock.calls[0][0] as Error).message).toBe('unauthorized');
+    expect(
+      deps.organizationsService.resolveActiveContext,
+    ).toHaveBeenCalledTimes(1);
+    expect(deps.organizationsService.resolveActiveContext).toHaveBeenCalledWith(
+      USER_ID,
+      ORG_ID,
+    );
+    expect(socket.data.user).toBeUndefined();
+    expect(socket.data.organizationContext).toBeUndefined();
+    expect(socket.once).not.toHaveBeenCalled();
+    expect(socket.disconnect).not.toHaveBeenCalled();
   });
 
   it('réutilise le MÊME JwtService / UsersService (pas de re-implémentation JWT)', async () => {

@@ -3,6 +3,10 @@ import { JwtService } from '@nestjs/jwt';
 import type { IncomingMessage } from 'http';
 import type { Server, Socket } from 'socket.io';
 import { UsersService } from '../users/users.service';
+import {
+  OrganizationsService,
+  type ResolvedOrganizationContext,
+} from '../organizations/organizations.service';
 import { OriginAllowlist } from './origin.helpers';
 
 /**
@@ -75,6 +79,7 @@ export interface SocketPrincipal {
 export interface SocketAuthDependencies {
   jwtService: JwtService;
   usersService: UsersService;
+  organizationsService: OrganizationsService;
   logger?: Logger;
 }
 
@@ -112,7 +117,7 @@ export function installSocketAuthMiddleware(
   server: Server,
   deps: SocketAuthDependencies,
 ): (socket: Socket, next: SocketMiddlewareNext) => void {
-  const { jwtService, usersService } = deps;
+  const { jwtService, usersService, organizationsService } = deps;
   const logger = deps.logger ?? new Logger('EventsGateway');
 
   const middleware = (socket: Socket, next: SocketMiddlewareNext): void => {
@@ -192,16 +197,21 @@ export function installSocketAuthMiddleware(
           return;
         }
 
+        const organizationContext =
+          await organizationsService.resolveActiveContext(sub, orgId);
+
         // 5 + 6. Principal dans `socket.data.user` — JAMAIS de `password`,
         //    du token ou du document Mongoose complet. `email`/`role` sont
         //    lus du document User (base) JAMAIS du token ; `orgId` vient du
         //    JWT vérifié (future isolation par rooms `organization:{id}`).
         socket.data.user = {
           sub: user._id.toString(),
-          orgId,
+          orgId: organizationContext.organizationId,
           email: user.email,
           role: user.role,
         } satisfies SocketPrincipal;
+        socket.data.organizationContext =
+          organizationContext satisfies ResolvedOrganizationContext;
 
         // 7. `next()` appelé EXACTEMENT UNE FOIS, sans erreur.
         finish();

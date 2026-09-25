@@ -43,7 +43,7 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
 
   const baseOpts = {
     s3Service: { uploadFile: jest.fn(), deleteFile: jest.fn() },
-    eventsGateway: { emit: jest.fn() },
+    eventsGateway: { emitToOrganization: jest.fn() },
     auditService: { log: jest.fn(), findByProduct: jest.fn() },
     saleModel: {},
     sectionModel: {},
@@ -213,7 +213,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
   let saleModel: { find: jest.Mock };
   let s3Service: { deleteFile: jest.Mock; uploadFile: jest.Mock };
   let auditService: { log: jest.Mock; findByProduct: jest.Mock };
-  let eventsGateway: { emit: jest.Mock };
+  let eventsGateway: { emitToOrganization: jest.Mock };
   let findChain: { sort: jest.Mock; exec: jest.Mock };
   let updateChain: { exec: jest.Mock };
   let deleteChain: { exec: jest.Mock };
@@ -295,7 +295,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     s3Service = { deleteFile: jest.fn(), uploadFile: jest.fn() };
     auditService = { log: jest.fn(), findByProduct: jest.fn() };
     auditService.findByProduct.mockResolvedValue([]);
-    eventsGateway = { emit: jest.fn() };
+    eventsGateway = { emitToOrganization: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -331,6 +331,11 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     >;
     expect(String(written.organizationId)).toBe(ORG_A); // jamais B
     expect(String(written.imageUrl)).toBe('http://s3/x.png');
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
+      ORG_A,
+      'product:created',
+      expect.any(Object),
+    );
 
     // section validée par filtre composite tenant :
     expect(sectionModel.findOne).toHaveBeenCalledWith({
@@ -473,6 +478,11 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     expect(doc.organizationId).toEqual(new Types.ObjectId(ORG_A)); // inchangée
     expect(auditService.log).toHaveBeenCalled();
     expect(res.product.name).toBe('Nouveau');
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
+      ORG_A,
+      'product:updated',
+      expect.any(Object),
+    );
   });
 
   it('update : mouvement vers une section étrangère → 404 `Section`, rien sauvegardé', async () => {
@@ -512,6 +522,11 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     await build();
     updateChain.exec.mockResolvedValue(productDoc());
     await service.remove(ORG_A, PRODUCT_ID, 'actor');
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
+      ORG_A,
+      'product:deleted',
+      PRODUCT_ID,
+    );
     expect(productModel.findOneAndUpdate).toHaveBeenCalledWith(
       { _id: PRODUCT_ID, organizationId: new Types.ObjectId(ORG_A) },
       { $set: { deletedAt: expect.any(Date) } },
@@ -529,6 +544,11 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     await build();
     updateChain.exec.mockResolvedValue(productDoc());
     await service.restore(ORG_A, PRODUCT_ID);
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
+      ORG_A,
+      'product:created',
+      expect.any(Object),
+    );
     expect(productModel.findOneAndUpdate).toHaveBeenCalledWith(
       { _id: PRODUCT_ID, organizationId: new Types.ObjectId(ORG_A) },
       { $set: { deletedAt: null } },
@@ -665,7 +685,10 @@ describe('ProductsService — appelants AuditService.log portent la tenant (1-4C
           provide: S3Service,
           useValue: { deleteFile: jest.fn(), uploadFile: jest.fn() },
         },
-        { provide: EventsGateway, useValue: { emit: jest.fn() } },
+        {
+          provide: EventsGateway,
+          useValue: { emitToOrganization: jest.fn() },
+        },
         { provide: AuditService, useValue: auditService },
       ],
     }).compile();

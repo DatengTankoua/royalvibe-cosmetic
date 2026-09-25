@@ -18,6 +18,8 @@ import { Organization } from './../src/organizations/schemas/organization.schema
 import type { OrganizationDocument } from './../src/organizations/schemas/organization.schema';
 import { OrganizationMembership } from './../src/organizations/schemas/membership.schema';
 import type { OrganizationMembershipDocument } from './../src/organizations/schemas/membership.schema';
+import { ProductDocument } from './../src/products/schemas/product.schema';
+import { SectionDocument } from './../src/sections/schemas/section.schema';
 import {
   startEphemeralMongo,
   stopEphemeralMongoSafe,
@@ -93,6 +95,7 @@ const DELETED_PW = 'deleted-e2e-pw-!1x';
 // login renvoie 403 ORGANIZATION_ACCESS_DENIED. Fixtures générales, sans
 // données RoyalVibe.
 const SOCKET_ORG_ID = 'cccccccccccccccccccccccc';
+const SOCKET_ORG_B_ID = 'dddddddddddddddddddddddd';
 
 /** Port éphémère réel de l'HTTP serveur (et du Socket.IO attaché). */
 let port: number;
@@ -111,20 +114,51 @@ function connectedSockets(ioSrv: IoServer): number {
   return nsp.sockets.size;
 }
 
+function waitForSocketCount(
+  ioSrv: IoServer,
+  expected: number,
+  timeoutMs = 4_000,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs;
+    const check = (): void => {
+      if (connectedSockets(ioSrv) === expected) {
+        resolve();
+        return;
+      }
+      if (Date.now() >= deadline) {
+        reject(new Error(`Socket count did not reach ${expected}`));
+        return;
+      }
+      setImmediate(check);
+    };
+    check();
+  });
+}
+
 describe('Socket.IO (e2e — authentification du handshake + contrôle des origines)', () => {
   let moduleFixture: TestingModule;
   let app: INestApplication<App>;
   let ioServer: IoServer;
   let jwtService: JwtService;
+  let userModel: Model<UserDocument>;
+  let organizationModel: Model<OrganizationDocument>;
+  let membershipModel: Model<OrganizationMembershipDocument>;
+  let productModel: Model<ProductDocument>;
+  let sectionModel: Model<SectionDocument>;
 
   // Tokens de chaque scénario.
   let validSellerToken = '';
   let validAdminToken = '';
+  let validAdminTokenB = '';
   let expiredToken = '';
   let forgedToken = '';
   let deletedUserToken = '';
   /** `sub` du seller (pour forger le token court du § 7). */
   let sellerSub = '';
+  let adminSub = '';
+  let productAId = '';
+  let productBId = '';
 
   /** Clients ouverts (tous fermés en `afterAll`). */
   const openSockets: Socket[] = [];
@@ -301,9 +335,7 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
 
       // Élévation admin sur la base éphémère (périmètre : PAS de politique
       // d'inscription modifiée — écriture directe de test uniquement).
-      const userModel = moduleFixture.get<Model<UserDocument>>(
-        getModelToken('User'),
-      );
+      userModel = moduleFixture.get<Model<UserDocument>>(getModelToken('User'));
       const adminDoc = await userModel.findOne({ email: ADMIN_EMAIL });
       expect(adminDoc).toBeTruthy();
       adminDoc!.role = UserRole.ADMIN;
@@ -313,17 +345,30 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
       // Organisation unique : memberships actives pour chaque test user.
       // Un login sans `organizationId` auto-sélectionne cette org
       // (cas B du login).
-      const organizationModel = moduleFixture.get<Model<OrganizationDocument>>(
+      organizationModel = moduleFixture.get<Model<OrganizationDocument>>(
         getModelToken(Organization.name),
       );
-      const membershipModel = moduleFixture.get<
+      membershipModel = moduleFixture.get<
         Model<OrganizationMembershipDocument>
       >(getModelToken(OrganizationMembership.name));
-      await organizationModel.create({
-        _id: new Types.ObjectId(SOCKET_ORG_ID),
-        slug: 'socket-e2e-org',
-        name: 'Socket E2E Org',
-      });
+      productModel = moduleFixture.get<Model<ProductDocument>>(
+        getModelToken('Product'),
+      );
+      sectionModel = moduleFixture.get<Model<SectionDocument>>(
+        getModelToken('Section'),
+      );
+      await organizationModel.create([
+        {
+          _id: new Types.ObjectId(SOCKET_ORG_ID),
+          slug: 'socket-e2e-org',
+          name: 'Socket E2E Org',
+        },
+        {
+          _id: new Types.ObjectId(SOCKET_ORG_B_ID),
+          slug: 'socket-e2e-org-b',
+          name: 'Socket E2E Org B',
+        },
+      ]);
       // ADMIN + SELLER existent déjà (registrés plus haut). Le user DELETED
       // est enregistré PLUS BAS (scénario « supprimé ») : sa membership est
       // créée juste après son register (ci-dessous), jamais ici.
@@ -343,6 +388,17 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
       const adminLogin = await login(ADMIN_EMAIL, ADMIN_PW, SOCKET_ORG_ID);
       expect(adminLogin.status).toBe(201);
       validAdminToken = adminLogin.body.access_token as string;
+      adminSub = adminLogin.body.user._id as string;
+
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(SOCKET_ORG_B_ID),
+        userId: new Types.ObjectId(adminSub),
+        role: 'owner',
+        status: 'active',
+      });
+      const adminLoginB = await login(ADMIN_EMAIL, ADMIN_PW, SOCKET_ORG_B_ID);
+      expect(adminLoginB.status).toBe(201);
+      validAdminTokenB = adminLoginB.body.access_token as string;
 
       const sellerLogin = await login(SELLER_EMAIL, SELLER_PW, SOCKET_ORG_ID);
       expect(sellerLogin.status).toBe(201);
@@ -382,6 +438,47 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
         expiresIn: '1h',
         secret: WRONG_SECRET,
       });
+
+      const sections = await sectionModel.create([
+        {
+          organizationId: new Types.ObjectId(SOCKET_ORG_ID),
+          name: 'Socket Section A',
+          description: '',
+          deletedAt: null,
+          parentId: null,
+        },
+        {
+          organizationId: new Types.ObjectId(SOCKET_ORG_B_ID),
+          name: 'Socket Section B',
+          description: '',
+          deletedAt: null,
+          parentId: null,
+        },
+      ]);
+      const products = await productModel.create([
+        {
+          organizationId: new Types.ObjectId(SOCKET_ORG_ID),
+          sectionId: sections[0]._id,
+          name: 'Socket Product A',
+          imageUrl: 'https://e2e.local/a.png',
+          purchasePrice: 10,
+          salePrice: 20,
+          initialQuantity: 5,
+          remainingQuantity: 5,
+        },
+        {
+          organizationId: new Types.ObjectId(SOCKET_ORG_B_ID),
+          sectionId: sections[1]._id,
+          name: 'Socket Product B',
+          imageUrl: 'https://e2e.local/b.png',
+          purchasePrice: 10,
+          salePrice: 20,
+          initialQuantity: 5,
+          remainingQuantity: 5,
+        },
+      ]);
+      productAId = products[0]._id.toString();
+      productBId = products[1]._id.toString();
     } catch (err) {
       if (moduleFixture) await moduleFixture.close().catch(() => undefined);
       if (app) await app.close().catch(() => undefined);
@@ -649,5 +746,112 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
       await settle(100);
       expect(connectedSockets(ioServer)).toBe(before);
     });
+  });
+
+  describe('8. Rooms organisationnelles', () => {
+    it('8.1 mutations A/B reçues uniquement par la socket de leur organisation', async () => {
+      const socketA = connect(ALLOWED_ORIGIN, validAdminToken);
+      const socketB = connect(ALLOWED_ORIGIN, validAdminTokenB);
+      expect((await expectAttempt(socketA)).connected).toBe(true);
+      expect((await expectAttempt(socketB)).connected).toBe(true);
+
+      const receivedA: string[] = [];
+      const receivedB: string[] = [];
+      socketA.on('product:updated', (payload: { product: { name: string } }) =>
+        receivedA.push(payload.product.name),
+      );
+      socketB.on('product:updated', (payload: { product: { name: string } }) =>
+        receivedB.push(payload.product.name),
+      );
+
+      const eventA = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('product:updated A not received')),
+          4_000,
+        );
+        socketA.once('product:updated', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      const updateA = await request(app.getHttpServer())
+        .patch(`/products/${productAId}`)
+        .set('Authorization', `Bearer ${validAdminToken}`)
+        .send({ name: 'Socket Product A Updated' });
+      expect(updateA.status).toBe(200);
+      await eventA;
+
+      const eventB = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('product:updated B not received')),
+          4_000,
+        );
+        socketB.once('product:updated', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      const updateB = await request(app.getHttpServer())
+        .patch(`/products/${productBId}`)
+        .set('Authorization', `Bearer ${validAdminTokenB}`)
+        .send({ name: 'Socket Product B Updated' });
+      expect(updateB.status).toBe(200);
+      await eventB;
+
+      expect(receivedA).toEqual(['Socket Product A Updated']);
+      expect(receivedB).toEqual(['Socket Product B Updated']);
+      closeSocket(socketA);
+      closeSocket(socketB);
+      await waitForSocketCount(ioServer, 0);
+    });
+
+    it.each([
+      ['membership suspendue', 'membership', 'suspended'],
+      ['membership révoquée', 'membership', 'revoked'],
+      ['organisation suspendue', 'organization', 'suspended'],
+    ] as const)(
+      '8.2 %s → connect_error unauthorized, aucune socket',
+      async (_label, target, status) => {
+        const before = connectedSockets(ioServer);
+        try {
+          if (target === 'membership') {
+            await membershipModel.updateOne(
+              {
+                userId: new Types.ObjectId(adminSub),
+                organizationId: new Types.ObjectId(SOCKET_ORG_B_ID),
+              },
+              { $set: { status } },
+            );
+          } else {
+            await organizationModel.updateOne(
+              { _id: new Types.ObjectId(SOCKET_ORG_B_ID) },
+              { $set: { status } },
+            );
+          }
+
+          const socket = connect(ALLOWED_ORIGIN, validAdminTokenB);
+          const attempt = await expectAttempt(socket);
+          expect(attempt.connected).toBe(false);
+          expect(attempt.errMsg).toBe('unauthorized');
+          expect(connectedSockets(ioServer)).toBe(before);
+          closeSocket(socket);
+        } finally {
+          if (target === 'membership') {
+            await membershipModel.updateOne(
+              {
+                userId: new Types.ObjectId(adminSub),
+                organizationId: new Types.ObjectId(SOCKET_ORG_B_ID),
+              },
+              { $set: { status: 'active' } },
+            );
+          } else {
+            await organizationModel.updateOne(
+              { _id: new Types.ObjectId(SOCKET_ORG_B_ID) },
+              { $set: { status: 'active' } },
+            );
+          }
+        }
+      },
+    );
   });
 });

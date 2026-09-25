@@ -424,45 +424,44 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
 
       // espion : aucune émission de `sale:created` ne doit avoir lieu :
       const gateway = moduleFixture.get(EventsGateway);
-      const realEmit = gateway.emit.bind(gateway);
-      let saleCreated = 0;
-      gateway.emit = (event: string, payload: unknown) => {
-        if (event === 'sale:created') saleCreated += 1;
-        return realEmit(event, payload);
-      };
+      const emitSpy = jest.spyOn(gateway, 'emitToOrganization');
 
-      const res = await createSale(id, 1);
-      expect(res.status).toBe(404);
-      expect(messageOf(res.body)).toBe(`Product ${id} not found`);
+      try {
+        const res = await createSale(id, 1);
+        expect(res.status).toBe(404);
+        expect(messageOf(res.body)).toBe(`Product ${id} not found`);
 
-      expect(await saleModel.countDocuments()).toBe(salesBefore);
-      expect(await auditModel.countDocuments({ action: 'sold' })).toBe(
-        soldBefore,
-      );
-      // le stock n'a pas été décrémenté :
-      expect(await remainingOf(id)).toBe(3);
-      // aucun événement post-commit :
-      expect(saleCreated).toBe(0);
-
-      gateway.emit = realEmit;
+        expect(await saleModel.countDocuments()).toBe(salesBefore);
+        expect(await auditModel.countDocuments({ action: 'sold' })).toBe(
+          soldBefore,
+        );
+        expect(await remainingOf(id)).toBe(3);
+        expect(emitSpy).not.toHaveBeenCalled();
+      } finally {
+        emitSpy.mockRestore();
+      }
     });
   });
 
   describe('5. Socket.IO : événement uniquement après le commit', () => {
     it('un appel après succès, zéro appel supplémentaire après rollback', async () => {
       const gateway = moduleFixture.get(EventsGateway);
-      const realEmit = gateway.emit.bind(gateway);
-      let saleCreated = 0;
-      gateway.emit = (event: string, payload: unknown) => {
-        if (event === 'sale:created') saleCreated += 1;
-        return realEmit(event, payload);
-      };
+      const emitSpy = jest.spyOn(gateway, 'emitToOrganization');
 
       // succès → 1 émission :
       const { id } = await seedProduct(`Emit-${Date.now()}`, 5);
       const ok = await createSale(id, 2);
       expect(ok.status).toBe(201);
-      expect(saleCreated).toBe(1);
+      expect(emitSpy).toHaveBeenCalledTimes(1);
+      expect(emitSpy).toHaveBeenCalledWith(
+        TRADE_ORG_ID,
+        'sale:created',
+        expect.objectContaining({
+          _id: expect.anything(),
+          organizationId: expect.anything(),
+        }),
+      );
+      emitSpy.mockClear();
 
       // rollback (audit en panne, AVEC session) → aucune émission
       // supplémentaire : l'emit ne part que post-commit.
@@ -483,10 +482,8 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
         auditModel.create =
           originalCreate as unknown as typeof auditModel.create;
       }
-      expect(saleCreated).toBe(1);
-
-      // restauration de l'émition réelle :
-      gateway.emit = realEmit;
+      expect(emitSpy).not.toHaveBeenCalled();
+      emitSpy.mockRestore();
     });
   });
   /**
@@ -550,32 +547,26 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       );
 
       const gateway = moduleFixture.get(EventsGateway);
-      const realEmit = gateway.emit.bind(gateway);
-      let saleCreated = 0;
-      gateway.emit = (event: string, _payload: unknown) => {
-        if (event === 'sale:created') saleCreated += 1;
-        return realEmit(event, _payload);
-      };
+      const emitSpy = jest.spyOn(gateway, 'emitToOrganization');
 
       let res: request.Response;
       try {
         res = await createSale(id, 1, adminToken);
+        expect(res.status).toBe(404);
+        expect(messageOf(res.body)).toBe(`Product ${id} not found`);
+        // zéro écriture dans les DEUX tenants :
+        expect(await salesOfOrg(TRADE_ORG_ID)).toBe(aSales);
+        expect(await salesOfOrg(ORG_B_ID)).toBe(bSales);
+        expect(await soldAuditsOfOrg(TRADE_ORG_ID)).toBe(aSold);
+        expect(await soldAuditsOfOrg(ORG_B_ID)).toBe(0);
+        // stocks intacts des deux côtés (ni décompte, ni fuite) :
+        expect(await remainingOf(id)).toBe(4);
+        expect(await remainingOf(aStockBefore.id)).toBe(3);
+        // zéro événement post-commit :
+        expect(emitSpy).not.toHaveBeenCalled();
       } finally {
-        gateway.emit = realEmit;
+        emitSpy.mockRestore();
       }
-
-      expect(res.status).toBe(404);
-      expect(messageOf(res.body)).toBe(`Product ${id} not found`);
-      // zéro écriture dans les DEUX tenants :
-      expect(await salesOfOrg(TRADE_ORG_ID)).toBe(aSales);
-      expect(await salesOfOrg(ORG_B_ID)).toBe(bSales);
-      expect(await soldAuditsOfOrg(TRADE_ORG_ID)).toBe(aSold);
-      expect(await soldAuditsOfOrg(ORG_B_ID)).toBe(0);
-      // stocks intacts des deux côtés (ni décompte, ni fuite) :
-      expect(await remainingOf(id)).toBe(4);
-      expect(await remainingOf(aStockBefore.id)).toBe(3);
-      // zéro événement post-commit :
-      expect(saleCreated).toBe(0);
     });
 
     it('concurrence : deux ventes A du dernier article (stock=1) — une 201, une 400, stock final 0, exactement une vente A + un audit A', async () => {
@@ -649,20 +640,7 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
 
     it('sale:created uniquement après commit pour B : 1 émission sur succès B, zéro supplémentaire après rollback', async () => {
       const gateway = moduleFixture.get(EventsGateway);
-      const realEmit = gateway.emit.bind(gateway);
-      let saleCreated = 0;
-      let lastOrg: string | undefined;
-      gateway.emit = (event: string, payload: unknown) => {
-        if (event === 'sale:created') {
-          saleCreated += 1;
-          lastOrg = String(
-            (
-              payload as { organizationId?: { toString(): string } }
-            ).organizationId?.toString() ?? '',
-          );
-        }
-        return realEmit(event, payload);
-      };
+      const emitSpy = jest.spyOn(gateway, 'emitToOrganization');
 
       const { id } = await seedProduct(
         'IsoEmit-' + Date.now(),
@@ -674,8 +652,16 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       // succès B → 1 émission, avec le tenant B dans le payload :
       const ok = await createSale(id, 1, adminBToken);
       expect(ok.status).toBe(201);
-      expect(saleCreated).toBe(1);
-      expect(lastOrg).toBe(ORG_B_ID);
+      expect(emitSpy).toHaveBeenCalledTimes(1);
+      expect(emitSpy).toHaveBeenCalledWith(
+        ORG_B_ID,
+        'sale:created',
+        expect.objectContaining({
+          _id: expect.anything(),
+          organizationId: expect.anything(),
+        }),
+      );
+      emitSpy.mockClear();
 
       // rollback (audit en panne, AVEC session) → zéro émission suppl. :
       const originalCreate = auditModel.create.bind(auditModel) as (
@@ -695,9 +681,8 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
         auditModel.create =
           originalCreate as unknown as typeof auditModel.create;
       }
-      expect(saleCreated).toBe(1);
-
-      gateway.emit = realEmit;
+      expect(emitSpy).not.toHaveBeenCalled();
+      emitSpy.mockRestore();
     });
   });
 

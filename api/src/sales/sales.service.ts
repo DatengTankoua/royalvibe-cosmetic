@@ -124,7 +124,11 @@ export class SalesService {
     // à la session close.
     created.$session(null);
     const populated = await created.populate('sellerId', 'name email');
-    this.eventsGateway.emit('sale:created', populated);
+    this.eventsGateway.emitToOrganization(
+      organizationId,
+      'sale:created',
+      populated,
+    );
     return populated;
   }
 

@@ -106,7 +106,7 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
     findOne: jest.Mock;
   };
   let audit: { log: jest.Mock };
-  let events: { emit: jest.Mock };
+  let events: { emitToOrganization: jest.Mock };
   let fixture: ReturnType<typeof makeSessionFixture>;
   let saleEntity: SaleEntityRecord;
 
@@ -127,7 +127,7 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
       findOne: jest.fn(),
     };
     audit = { log: jest.fn().mockResolvedValue(undefined) };
-    events = { emit: jest.fn() };
+    events = { emitToOrganization: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -210,7 +210,7 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
       expect(err.message).toBe(`Product ${PRODUCT_OBJECT_ID} not found`);
       expect(saleModel.create).not.toHaveBeenCalled();
       expect(audit.log).not.toHaveBeenCalled();
-      expect(events.emit).not.toHaveBeenCalled();
+      expect(events.emitToOrganization).not.toHaveBeenCalled();
       expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
     });
 
@@ -225,7 +225,7 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
       expect(err.message).toContain('Not enough stock. Available: 2');
       expect(saleModel.create).not.toHaveBeenCalled();
       expect(audit.log).not.toHaveBeenCalled();
-      expect(events.emit).not.toHaveBeenCalled();
+      expect(events.emitToOrganization).not.toHaveBeenCalled();
     });
   });
 
@@ -258,8 +258,9 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
       expect(detachOrder).toBeDefined();
       expect(populateOrder).toBeDefined();
       expect(detachOrder).toBeLessThan(populateOrder);
-      expect(events.emit).toHaveBeenCalledTimes(1);
-      expect(events.emit).toHaveBeenCalledWith(
+      expect(events.emitToOrganization).toHaveBeenCalledTimes(1);
+      expect(events.emitToOrganization).toHaveBeenCalledWith(
+        ORG_A,
         'sale:created',
         expect.objectContaining({ _id: saleEntity._id }),
       );
@@ -274,7 +275,7 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
 
       expect(saleEntity.populate).not.toHaveBeenCalled();
       expect(saleEntity.$session).not.toHaveBeenCalled();
-      expect(events.emit).not.toHaveBeenCalled();
+      expect(events.emitToOrganization).not.toHaveBeenCalled();
       expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
     });
   });
@@ -440,7 +441,7 @@ describe('SalesService — vente tenant (1-4C.1)', () => {
   let saleModel: { create: jest.Mock };
   let products: { decrementStock: jest.Mock; adjustStock: jest.Mock };
   let audit: { log: jest.Mock };
-  let events: { emit: jest.Mock };
+  let events: { emitToOrganization: jest.Mock };
   let fixture: ReturnType<typeof makeSessionFixture>;
   let saleEntity: SaleEntityRecord;
 
@@ -460,7 +461,7 @@ describe('SalesService — vente tenant (1-4C.1)', () => {
       adjustStock: jest.fn().mockResolvedValue(undefined),
     };
     audit = { log: jest.fn().mockResolvedValue(undefined) };
-    events = { emit: jest.fn() };
+    events = { emitToOrganization: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -544,7 +545,7 @@ describe('SalesService — vente tenant (1-4C.1)', () => {
     expect(err.message).toBe('Not enough stock. Available: 1');
     expect(saleModel.create).not.toHaveBeenCalled();
     expect(audit.log).not.toHaveBeenCalled();
-    expect(events.emit).not.toHaveBeenCalled();
+    expect(events.emitToOrganization).not.toHaveBeenCalled();
     expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
   });
 
@@ -556,6 +557,6 @@ describe('SalesService — vente tenant (1-4C.1)', () => {
     ).rejects.toThrow('org-a audit failure');
     expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
     expect(saleEntity.populate).not.toHaveBeenCalled();
-    expect(events.emit).not.toHaveBeenCalled();
+    expect(events.emitToOrganization).not.toHaveBeenCalled();
   });
 });

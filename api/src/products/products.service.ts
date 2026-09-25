@@ -142,7 +142,11 @@ export class ProductsService {
         initialQuantity: dto.initialQuantity,
       },
     );
-    this.eventsGateway.emit('product:created', product);
+    this.eventsGateway.emitToOrganization(
+      organizationId,
+      'product:created',
+      product,
+    );
     return product;
   }
 
@@ -297,7 +301,11 @@ export class ProductsService {
     // `save()` ne porte que les champs mutés ci-dessus.
     const saved = await product.save();
     const enriched = this.withMetrics(saved);
-    this.eventsGateway.emit('product:updated', enriched);
+    this.eventsGateway.emitToOrganization(
+      organizationId,
+      'product:updated',
+      enriched,
+    );
     return enriched;
   }
 
@@ -326,7 +334,11 @@ export class ProductsService {
         name: product.name,
       },
     );
-    this.eventsGateway.emit('product:deleted', id);
+    this.eventsGateway.emitToOrganization(
+      organizationId,
+      'product:deleted',
+      id,
+    );
     return product;
   }
 
@@ -352,7 +364,11 @@ export class ProductsService {
       )
       .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
-    this.eventsGateway.emit('product:created', product);
+    this.eventsGateway.emitToOrganization(
+      organizationId,
+      'product:created',
+      product,
+    );
     return product;
   }
 

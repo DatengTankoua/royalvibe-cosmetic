@@ -83,6 +83,7 @@ describe('Phase 1-4E — portail transversal d’isolation multi-tenant', () => 
   let trashedProductB = '';
   let saleA = '';
   let saleB = '';
+  let emitToOrganizationSpy: jest.SpyInstance;
 
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -303,7 +304,7 @@ describe('Phase 1-4E — portail transversal d’isolation multi-tenant', () => 
       );
 
       const gateway = moduleFixture.get(EventsGateway);
-      jest.spyOn(gateway, 'emit').mockImplementation(() => undefined);
+      emitToOrganizationSpy = jest.spyOn(gateway, 'emitToOrganization');
       const [createdA, createdB] = await Promise.all([
         createSale(tokenA, productA, 2),
         createSale(tokenB, productB, 3),
@@ -320,6 +321,7 @@ describe('Phase 1-4E — portail transversal d’isolation multi-tenant', () => 
   }, 180_000);
 
   afterAll(async () => {
+    emitToOrganizationSpy?.mockRestore();
     if (app) await app.close().catch(() => undefined);
     await stopEphemeralMongoSafe();
   }, 60_000);
@@ -421,8 +423,7 @@ describe('Phase 1-4E — portail transversal d’isolation multi-tenant', () => 
     const stockBefore = (await productSnapshot(productB))!.remainingQuantity;
     const salesBefore = await saleModel.countDocuments();
     const auditsBefore = await auditModel.countDocuments();
-    const gateway = moduleFixture.get(EventsGateway);
-    const emitsBefore = (gateway.emit as jest.Mock).mock.calls.length;
+    emitToOrganizationSpy.mockClear();
     const response = await createSale(tokenA, productB, 1);
     expect(response.status).toBe(404);
     expect(messageOf(response.body)).toBe(`Product ${productB} not found`);
@@ -431,7 +432,7 @@ describe('Phase 1-4E — portail transversal d’isolation multi-tenant', () => 
     );
     expect(await saleModel.countDocuments()).toBe(salesBefore);
     expect(await auditModel.countDocuments()).toBe(auditsBefore);
-    expect((gateway.emit as jest.Mock).mock.calls.length).toBe(emitsBefore);
+    expect(emitToOrganizationSpy).not.toHaveBeenCalled();
   });
 
   it('6. PATCH/DELETE vente B avec token A sont des 404 absents sans mutation', async () => {
