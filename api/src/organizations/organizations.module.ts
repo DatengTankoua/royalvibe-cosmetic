@@ -15,12 +15,15 @@ import {
 import { OrganizationsService } from './organizations.service';
 import { OrganizationsController } from './organizations.controller';
 import { OrganizationMembersController } from './organization-members.controller';
+import { OrganizationBrandingController } from './organization-branding.controller';
 import { SocketRegistryService } from './socket-registry.service';
 import { UsersModule } from '../users/users.module';
+import { S3Module } from '../s3/s3.module';
 
 @Module({
   imports: [
     UsersModule,
+    S3Module,
     MongooseModule.forFeature([
       { name: Organization.name, schema: OrganizationSchema },
       {
@@ -33,7 +36,11 @@ import { UsersModule } from '../users/users.module';
       },
     ]),
   ],
-  controllers: [OrganizationsController, OrganizationMembersController],
+  controllers: [
+    OrganizationsController,
+    OrganizationMembersController,
+    OrganizationBrandingController,
+  ],
   providers: [OrganizationsService, SocketRegistryService],
   exports: [OrganizationsService, SocketRegistryService],
 })

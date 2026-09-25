@@ -73,12 +73,14 @@ const slugIndexesOf = (schema: typeof OrganizationSchema): unknown[][] =>
     .map(([key, options]) => [key, options] as unknown[]);
 
 describe('OrganizationSchema', () => {
-  it('applique les valeurs par défaut sûres (XAF, active, #b8960c, logoKey null)', () => {
+  it('applique les valeurs par défaut sûres (XAF, active, #FF6A00, logoKey null)', () => {
     const o = org();
     expect(o.currency).toBe('XAF');
     expect(o.currency).not.toBe('XOF');
     expect(o.status).toBe('active');
-    expect(o.brandColor).toBe('#b8960c');
+    expect(o.brandColor).toBe('#FF6A00');
+    // 1-8A : l'ancien défaut RoyalVibe n'est jamais réintroduit.
+    expect(o.brandColor).not.toBe('#b8960c');
     expect(o.logoKey).toBeNull();
   });
 

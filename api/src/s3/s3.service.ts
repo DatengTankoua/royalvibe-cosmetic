@@ -57,6 +57,19 @@ export class S3Service {
     file: Express.Multer.File,
     keyPrefix: string,
   ): Promise<string> {
+    const { url } = await this.uploadStoredFile(file, keyPrefix);
+    return url;
+  }
+
+  /**
+   * Variante de `uploadFile` (1-8A) retournant `{key,url}` : utile quand
+   * l'appelant doit PERSISTER la clé elle-même (ex. `Organization.logoKey`)
+   * plutôt que seulement l'URL publique dérivée.
+   */
+  async uploadStoredFile(
+    file: Express.Multer.File,
+    keyPrefix: string,
+  ): Promise<{ key: string; url: string }> {
     const key = `${keyPrefix}/${randomUUID()}-${this.sanitizeFilename(file.originalname)}`;
 
     await this.s3Client.send(
@@ -68,6 +81,11 @@ export class S3Service {
       }),
     );
 
+    return { key, url: this.publicUrlForKey(key) };
+  }
+
+  /** URL publique déterministe pour une clé déjà connue (jamais recalculée depuis une entrée cliente). */
+  publicUrlForKey(key: string): string {
     return `${this.publicUrlBase}/${key}`;
   }
 
@@ -78,8 +96,23 @@ export class S3Service {
    * l'URL ni un secret journalisés.
    */
   async deleteFile(imageUrl: string, allowedPrefix: string): Promise<void> {
-    const key = this.extractTenantKey(imageUrl, allowedPrefix);
+    const key = this.extractTenantKey(imageUrl);
     if (!key) return;
+    await this.deleteStoredKey(key, allowedPrefix);
+  }
+
+  /**
+   * Suppression par CLÉ déjà connue (1-8A, jamais une URL cliente) : utile
+   * quand seule la clé est persistée (ex. `Organization.logoKey`). `key`
+   * doit débuter EXACTEMENT par `allowedPrefix + '/'` (jamais un
+   * `startsWith` nu sans séparateur, sinon un préfixe voisin — organisation
+   * B, ou un dossier "legacy"/frère — serait accepté à tort).
+   */
+  async deleteStoredKey(key: string, allowedPrefix: string): Promise<void> {
+    const boundedPrefix = allowedPrefix.endsWith('/')
+      ? allowedPrefix
+      : `${allowedPrefix}/`;
+    if (!key.startsWith(boundedPrefix)) return;
 
     await this.s3Client.send(
       new DeleteObjectCommand({
@@ -94,15 +127,13 @@ export class S3Service {
    * ET chemin de base doivent correspondre EXACTEMENT à la configuration
    * réellement utilisée pour produire les URLs (`publicUrlBase`), sinon une
    * origine étrangère portant le même nom de bucket dans son chemin
-   * (`https://evil.example/<bucket>/...`) serait acceptée à tort. Ensuite
-   * seulement, la clé décodée doit porter `allowedPrefix + '/'` (jamais un
-   * `startsWith` nu). Toute anomalie (credentials, origine/chemin voisin,
+   * (`https://evil.example/<bucket>/...`) serait acceptée à tort. La
+   * frontière de préfixe tenant est vérifiée séparément par
+   * `deleteStoredKey` (partagée avec les clés déjà connues, jamais issues
+   * d'une URL). Toute anomalie (credentials, origine/chemin voisin,
    * encodage invalide, clé plate) → `undefined`.
    */
-  private extractTenantKey(
-    imageUrl: string,
-    allowedPrefix: string,
-  ): string | undefined {
+  private extractTenantKey(imageUrl: string): string | undefined {
     if (!this.publicUrlOrigin || !this.publicUrlBasePath) return undefined;
 
     let parsed: URL;
@@ -124,11 +155,6 @@ export class S3Service {
       return undefined;
     }
     if (!key) return undefined;
-
-    const boundedPrefix = allowedPrefix.endsWith('/')
-      ? allowedPrefix
-      : `${allowedPrefix}/`;
-    if (!key.startsWith(boundedPrefix)) return undefined;
 
     return key;
   }

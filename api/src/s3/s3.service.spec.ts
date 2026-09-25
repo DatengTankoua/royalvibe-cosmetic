@@ -233,4 +233,72 @@ describe('S3Service', () => {
       });
     });
   });
+
+  const BRANDING_A = 'organizations/aaaaaaaaaaaaaaaaaaaaaaaa/branding';
+  const BRANDING_B = 'organizations/bbbbbbbbbbbbbbbbbbbbbbbb/branding';
+
+  describe('uploadStoredFile — {key,url} (1-8A)', () => {
+    it('retourne une clé sous le préfixe fourni et une URL cohérente avec cette clé', async () => {
+      const service = createService();
+      const { key, url } = await service.uploadStoredFile(
+        file('logo.png'),
+        BRANDING_A,
+      );
+      expect(key.startsWith(`${BRANDING_A}/`)).toBe(true);
+      expect(key.endsWith('logo.png')).toBe(true);
+      expect(url).toBe(`http://localhost:9000/heyama-objects/${key}`);
+    });
+
+    it('appelle PutObjectCommand exactement comme uploadFile (même mécanisme)', async () => {
+      const service = createService();
+      await service.uploadStoredFile(file('logo.png'), BRANDING_A);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      const [command] = mockSend.mock.calls[0] as [{ input: unknown }];
+      expect(
+        (command.input as { Key: string }).Key.startsWith(`${BRANDING_A}/`),
+      ).toBe(true);
+    });
+  });
+
+  describe('publicUrlForKey (1-8A)', () => {
+    it('déduit l’URL publique d’une clé déjà connue, sans appel réseau', () => {
+      const service = createService();
+      expect(service.publicUrlForKey(`${BRANDING_A}/logo.png`)).toBe(
+        `http://localhost:9000/heyama-objects/${BRANDING_A}/logo.png`,
+      );
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteStoredKey — suppression par clé déjà connue (1-8A)', () => {
+    it('supprime une clé appartenant exactement au préfixe autorisé', async () => {
+      const service = createService();
+      await service.deleteStoredKey(`${BRANDING_A}/old.png`, BRANDING_A);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      const [command] = mockSend.mock.calls[0] as [DeleteObjectCommand];
+      expect(command.input).toEqual({
+        Bucket: 'heyama-objects',
+        Key: `${BRANDING_A}/old.png`,
+      });
+    });
+
+    it('refuse une clé de l’organisation B avec le préfixe A : jamais appelé', async () => {
+      const service = createService();
+      await service.deleteStoredKey(`${BRANDING_B}/old.png`, BRANDING_A);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('refuse un préfixe voisin sans séparateur (jamais un startsWith nu)', async () => {
+      const service = createService();
+      const neighbour = 'organizations/aaaaaaaaaaaaaaaaaaaaaaaaXX/branding';
+      await service.deleteStoredKey(`${neighbour}/old.png`, BRANDING_A);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('refuse une clé plate (legacy, sans préfixe)', async () => {
+      const service = createService();
+      await service.deleteStoredKey('legacy-logo.png', BRANDING_A);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+  });
 });

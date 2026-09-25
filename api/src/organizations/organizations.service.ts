@@ -27,6 +27,7 @@ import {
   InvitationStatus,
   isPermissionSubset,
   MembershipStatus,
+  OrganizationCurrency,
   OrganizationRole,
   OrganizationStatus,
   PERMISSION_DENIED_RESPONSE,
@@ -35,8 +36,10 @@ import { UsersService } from '../users/users.service';
 import { UserRole } from '../users/schemas/user.schema';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { UpdateMembershipDto } from './dto/update-membership.dto';
+import { UpdateBrandingDto } from './dto/update-branding.dto';
 import { AcceptInvitationDto } from '../auth/dto/accept-invitation.dto';
 import { SocketRegistryService } from './socket-registry.service';
+import { S3Service } from '../s3/s3.service';
 import * as bcrypt from 'bcryptjs';
 
 // Session transactionnelle Mongoose (`mongodb.ClientSession`) : même
@@ -144,6 +147,26 @@ export interface TransferOwnershipResult {
   newOwner: MemberView;
 }
 
+/**
+ * Vue `GET /organizations/current` (1-8A) : jamais `logoKey` (donnée de
+ * stockage interne), `logoUrl` est DÉRIVÉE de `logoKey` (`null` sans logo).
+ */
+export interface OrganizationCurrentView {
+  _id: string;
+  name: string;
+  slug: string;
+  brandColor: string;
+  currency: OrganizationCurrency;
+  status: OrganizationStatus;
+  logoUrl: string | null;
+}
+
+/** Résultat d'une mutation de branding (1-8A) : l'ancien `logoKey` permet au contrôleur de nettoyer S3 APRÈS ce commit. */
+export interface BrandingMutationResult {
+  organization: OrganizationCurrentView;
+  previousLogoKey: string | null;
+}
+
 @Injectable()
 export class OrganizationsService {
   constructor(
@@ -156,6 +179,7 @@ export class OrganizationsService {
     private usersService: UsersService,
     @InjectConnection() private connection: Connection,
     private socketRegistry: SocketRegistryService,
+    private s3Service: S3Service,
   ) {}
 
   /**
@@ -794,6 +818,109 @@ export class OrganizationsService {
     this.socketRegistry.disconnectMember(organizationId, previousOwnerUserId);
     this.socketRegistry.disconnectMember(organizationId, newOwnerUserId);
     return result;
+  }
+
+  /** `GET /organizations/current` (1-8A) — accessible à tout membre actif. */
+  async getCurrent(organizationId: string): Promise<OrganizationCurrentView> {
+    const organization = await this.organizationModel
+      .findOne({ _id: new Types.ObjectId(organizationId) })
+      .exec();
+    // Défensif : `OrganizationGuard` a déjà vérifié l'org active pour
+    // cette requête ; une absence ici ne peut survenir que via un appel
+    // direct au service (jamais atteint par les routes HTTP réelles).
+    if (!organization) throw this.accessDenied();
+    return this.toCurrentView(organization);
+  }
+
+  /**
+   * Mutation du branding (1-8A) — `branding.manage`. Filtre EXACT
+   * `{_id: organizationId}` (l'Organization EST le tenant, aucun champ
+   * `organizationId` séparé) ; champs mis à jour EXPLICITEMENT, jamais un
+   * spread du DTO. `newLogoKey` (déjà uploadé par le contrôleur AVANT cet
+   * appel, jamais ici) n'est appliqué QUE s'il est fourni ; l'ancien
+   * `logoKey` est retourné pour que le contrôleur supprime l'ancien objet
+   * S3 APRÈS ce commit, jamais avant.
+   */
+  async updateBranding(
+    organizationId: string,
+    dto: UpdateBrandingDto,
+    newLogoKey?: string,
+  ): Promise<BrandingMutationResult> {
+    if (
+      dto.name === undefined &&
+      dto.brandColor === undefined &&
+      newLogoKey === undefined
+    ) {
+      throw new BadRequestException({
+        code: 'EMPTY_BRANDING_UPDATE',
+        message: 'Au moins un champ (name, brandColor, logo) est requis.',
+      });
+    }
+
+    const organization = await this.organizationModel
+      .findOne({ _id: new Types.ObjectId(organizationId) })
+      .exec();
+    if (!organization) throw this.accessDenied();
+
+    const previousLogoKey = organization.logoKey;
+
+    if (dto.name !== undefined) {
+      const trimmed = dto.name.trim();
+      if (!trimmed) {
+        throw new BadRequestException({
+          code: 'INVALID_BRANDING_NAME',
+          message: 'name ne peut pas être vide.',
+        });
+      }
+      organization.name = trimmed;
+    }
+    if (dto.brandColor !== undefined) organization.brandColor = dto.brandColor;
+    if (newLogoKey !== undefined) organization.logoKey = newLogoKey;
+
+    await organization.save();
+
+    return {
+      organization: this.toCurrentView(organization),
+      // Rien à nettoyer côté contrôleur si AUCUN nouveau logo n'a été
+      // uploadé (les champs name/brandColor seuls ne touchent jamais S3).
+      previousLogoKey: newLogoKey !== undefined ? previousLogoKey : null,
+    };
+  }
+
+  /**
+   * Suppression du logo (1-8A) — `branding.manage`. DB mise à `null` AVANT
+   * le nettoyage S3 (le contrôleur supprime l'ancien objet APRÈS ce
+   * commit) ; no-op DB si déjà `null` (l'ancien `logoKey`, éventuellement
+   * résiduel, est tout de même retourné pour un nettoyage idempotent).
+   */
+  async removeLogo(organizationId: string): Promise<BrandingMutationResult> {
+    const organization = await this.organizationModel
+      .findOne({ _id: new Types.ObjectId(organizationId) })
+      .exec();
+    if (!organization) throw this.accessDenied();
+
+    const previousLogoKey = organization.logoKey;
+    if (previousLogoKey !== null) {
+      organization.logoKey = null;
+      await organization.save();
+    }
+    return { organization: this.toCurrentView(organization), previousLogoKey };
+  }
+
+  private toCurrentView(
+    organization: OrganizationDocument,
+  ): OrganizationCurrentView {
+    return {
+      _id: organization._id.toString(),
+      name: organization.name,
+      slug: organization.slug,
+      brandColor: organization.brandColor,
+      currency: organization.currency,
+      status: organization.status,
+      logoUrl: organization.logoKey
+        ? this.s3Service.publicUrlForKey(organization.logoKey)
+        : null,
+    };
   }
 
   private invitationInvalidOrExpired(): BadRequestException {

@@ -31,8 +31,12 @@ export class Organization {
   @Prop({ type: String, default: null })
   logoKey: string | null;
 
-  /** Couleur de marque `#RRGGBB` ; une seule couleur (décision D7). */
-  @Prop({ type: String, default: '#b8960c', match: /^#[0-9a-fA-F]{6}$/ })
+  /**
+   * Couleur d'accent `#RRGGBB` ; une seule couleur (décision D7).
+   * Défaut `#FF6A00` (1-8A, palette Stock Master) — l'ancien défaut
+   * RoyalVibe `#b8960c` n'est PAS migré (aucune organisation en production).
+   */
+  @Prop({ type: String, default: '#FF6A00', match: /^#[0-9a-fA-F]{6}$/ })
   brandColor: string;
 
   /** Devise de l'organisation ; défaut `XAF` (jamais `XOF`). */

@@ -19,6 +19,14 @@ import { OrganizationInvitation } from './schemas/invitation.schema';
 import { UsersService } from '../users/users.service';
 import { UserRole } from '../users/schemas/user.schema';
 import { SocketRegistryService } from './socket-registry.service';
+import { S3Service } from '../s3/s3.service';
+
+// Stub partagé (1-8A) : aucun test de ce fichier n'exerce `getCurrent`/
+// `updateBranding`/`removeLogo` (couverts par leur propre describe) — seule
+// la résolution DI du nouveau constructeur importe ici.
+const s3ServiceStub = {
+  publicUrlForKey: jest.fn((key: string) => `http://s3/${key}`),
+};
 import {
   DelegablePermission,
   InvitationStatus,
@@ -67,6 +75,7 @@ describe('OrganizationsService.resolveActiveContext', () => {
           provide: SocketRegistryService,
           useValue: { disconnectMember: jest.fn() },
         },
+        { provide: S3Service, useValue: s3ServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -398,6 +407,7 @@ describe('OrganizationsService.listActiveOrganizations', () => {
           provide: SocketRegistryService,
           useValue: { disconnectMember: jest.fn() },
         },
+        { provide: S3Service, useValue: s3ServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -679,6 +689,7 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
           provide: SocketRegistryService,
           useValue: { disconnectMember: jest.fn() },
         },
+        { provide: S3Service, useValue: s3ServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1019,6 +1030,7 @@ describe('OrganizationsService.acceptInvitation (1-6B.2)', () => {
           provide: SocketRegistryService,
           useValue: { disconnectMember: jest.fn() },
         },
+        { provide: S3Service, useValue: s3ServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1321,6 +1333,7 @@ describe('OrganizationsService.listMembers (1-7C)', () => {
           provide: SocketRegistryService,
           useValue: { disconnectMember: jest.fn() },
         },
+        { provide: S3Service, useValue: s3ServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1375,6 +1388,7 @@ describe('OrganizationsService.updateMembership (1-7C)', () => {
         { provide: UsersService, useValue: {} },
         { provide: getConnectionToken(), useValue: fixture.connection },
         { provide: SocketRegistryService, useValue: socketRegistry },
+        { provide: S3Service, useValue: s3ServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1597,6 +1611,7 @@ describe('OrganizationsService.transferOwnership (1-7C)', () => {
         { provide: UsersService, useValue: {} },
         { provide: getConnectionToken(), useValue: fixture.connection },
         { provide: SocketRegistryService, useValue: socketRegistry },
+        { provide: S3Service, useValue: s3ServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1713,6 +1728,200 @@ describe('OrganizationsService.transferOwnership (1-7C)', () => {
     expect(error).toBeInstanceOf(ForbiddenException);
     expect((error as ForbiddenException).getResponse()).toMatchObject({
       code: ACCESS_DENIED_CODE,
+    });
+  });
+});
+
+// =============================================================================
+// Branding (1-8A) — getCurrent / updateBranding / removeLogo
+// =============================================================================
+describe('OrganizationsService — branding (1-8A)', () => {
+  const ORG_ID_18A = '778899001122334455667788';
+
+  let service: OrganizationsService;
+  let organizationModel: { findOne: jest.Mock };
+  let s3Service: { publicUrlForKey: jest.Mock };
+
+  function orgDoc(overrides: Record<string, unknown> = {}) {
+    const doc = {
+      _id: new Types.ObjectId(ORG_ID_18A),
+      name: 'Org 18A',
+      slug: 'org-18a',
+      brandColor: '#FF6A00',
+      currency: 'XAF',
+      status: OrganizationStatus.ACTIVE,
+      logoKey: null as string | null,
+      save: jest.fn().mockResolvedValue(undefined),
+      ...overrides,
+    };
+    return doc;
+  }
+
+  async function build(organization: unknown) {
+    organizationModel = {
+      findOne: jest.fn(() => ({ exec: () => Promise.resolve(organization) })),
+    };
+    s3Service = {
+      publicUrlForKey: jest.fn((key: string) => `http://s3/${key}`),
+    };
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrganizationsService,
+        {
+          provide: getModelToken(Organization.name),
+          useValue: organizationModel,
+        },
+        { provide: getModelToken(OrganizationMembership.name), useValue: {} },
+        { provide: getModelToken(OrganizationInvitation.name), useValue: {} },
+        { provide: UsersService, useValue: {} },
+        { provide: getConnectionToken(), useValue: {} },
+        {
+          provide: SocketRegistryService,
+          useValue: { disconnectMember: jest.fn() },
+        },
+        { provide: S3Service, useValue: s3Service },
+      ],
+    }).compile();
+    service = module.get(OrganizationsService);
+  }
+
+  describe('getCurrent', () => {
+    it('vue minimale, logoUrl null sans logoKey', async () => {
+      await build(orgDoc());
+      const view = await service.getCurrent(ORG_ID_18A);
+      expect(view).toEqual({
+        _id: ORG_ID_18A,
+        name: 'Org 18A',
+        slug: 'org-18a',
+        brandColor: '#FF6A00',
+        currency: 'XAF',
+        status: OrganizationStatus.ACTIVE,
+        logoUrl: null,
+      });
+      expect(organizationModel.findOne).toHaveBeenCalledWith({
+        _id: new Types.ObjectId(ORG_ID_18A),
+      });
+    });
+
+    it('logoUrl dérivée de logoKey via S3Service.publicUrlForKey, jamais logoKey exposée', async () => {
+      await build(
+        orgDoc({ logoKey: `organizations/${ORG_ID_18A}/branding/abc.png` }),
+      );
+      const view = await service.getCurrent(ORG_ID_18A);
+      expect(view.logoUrl).toBe(
+        `http://s3/organizations/${ORG_ID_18A}/branding/abc.png`,
+      );
+      expect(Object.keys(view)).not.toContain('logoKey');
+    });
+
+    it('organisation absente → refus uniforme (défensif)', async () => {
+      await build(null);
+      const error = await service
+        .getCurrent(ORG_ID_18A)
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ForbiddenException);
+      expect((error as ForbiddenException).getResponse()).toMatchObject({
+        code: ACCESS_DENIED_CODE,
+      });
+    });
+  });
+
+  describe('updateBranding', () => {
+    it('body vide (aucun champ, aucun logo) → 400 EMPTY_BRANDING_UPDATE', async () => {
+      await build(orgDoc());
+      const error = await service
+        .updateBranding(ORG_ID_18A, {})
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as BadRequestException).getResponse()).toMatchObject({
+        code: 'EMPTY_BRANDING_UPDATE',
+      });
+    });
+
+    it('name vide après trim → 400 INVALID_BRANDING_NAME, aucune sauvegarde', async () => {
+      const doc = orgDoc();
+      await build(doc);
+      const error = await service
+        .updateBranding(ORG_ID_18A, { name: '   ' })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as BadRequestException).getResponse()).toMatchObject({
+        code: 'INVALID_BRANDING_NAME',
+      });
+      expect(doc.save).not.toHaveBeenCalled();
+    });
+
+    it('name/brandColor : champs mis à jour explicitement, name trimmé, aucun appel S3 (pas de nouveau logo)', async () => {
+      const doc = orgDoc({ name: 'Ancien nom' });
+      await build(doc);
+      const result = await service.updateBranding(ORG_ID_18A, {
+        name: '  Nouveau nom  ',
+        brandColor: '#062B5C',
+      });
+      expect(doc.name).toBe('Nouveau nom');
+      expect(doc.brandColor).toBe('#062B5C');
+      expect(doc.save).toHaveBeenCalledTimes(1);
+      expect(result.previousLogoKey).toBeNull();
+    });
+
+    it('nouveau logo fourni : logoKey appliqué, ancien logoKey retourné pour nettoyage APRÈS ce commit', async () => {
+      const doc = orgDoc({
+        logoKey: `organizations/${ORG_ID_18A}/branding/old.png`,
+      });
+      await build(doc);
+      const newKey = `organizations/${ORG_ID_18A}/branding/new.png`;
+      const result = await service.updateBranding(ORG_ID_18A, {}, newKey);
+      expect(doc.logoKey).toBe(newKey);
+      expect(result.previousLogoKey).toBe(
+        `organizations/${ORG_ID_18A}/branding/old.png`,
+      );
+    });
+
+    it('nouveau logo fourni sans logo préexistant : previousLogoKey null (rien à nettoyer)', async () => {
+      await build(orgDoc());
+      const newKey = `organizations/${ORG_ID_18A}/branding/new.png`;
+      const result = await service.updateBranding(ORG_ID_18A, {}, newKey);
+      expect(result.previousLogoKey).toBeNull();
+    });
+
+    it('organisation absente → refus uniforme, aucune sauvegarde tentée', async () => {
+      await build(null);
+      const error = await service
+        .updateBranding(ORG_ID_18A, { name: 'X' })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ForbiddenException);
+    });
+  });
+
+  describe('removeLogo', () => {
+    it('logoKey → null, ancien logoKey retourné', async () => {
+      const doc = orgDoc({
+        logoKey: `organizations/${ORG_ID_18A}/branding/old.png`,
+      });
+      await build(doc);
+      const result = await service.removeLogo(ORG_ID_18A);
+      expect(doc.logoKey).toBeNull();
+      expect(doc.save).toHaveBeenCalledTimes(1);
+      expect(result.previousLogoKey).toBe(
+        `organizations/${ORG_ID_18A}/branding/old.png`,
+      );
+      expect(result.organization.logoUrl).toBeNull();
+    });
+
+    it('déjà sans logo : no-op DB (aucune sauvegarde), previousLogoKey null', async () => {
+      const doc = orgDoc();
+      await build(doc);
+      const result = await service.removeLogo(ORG_ID_18A);
+      expect(doc.save).not.toHaveBeenCalled();
+      expect(result.previousLogoKey).toBeNull();
+    });
+
+    it('organisation absente → refus uniforme', async () => {
+      await build(null);
+      const error = await service
+        .removeLogo(ORG_ID_18A)
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ForbiddenException);
     });
   });
 });
