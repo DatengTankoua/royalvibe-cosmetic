@@ -18,6 +18,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { SocketProvider } from "@/contexts/socket-context";
 import { OrganizationShellContext } from "@/contexts/organization-shell-context";
 import { Wordmark } from "@/components/brand/wordmark";
+import { OnlineStatusIndicator } from "@/components/layout/online-status-indicator";
 import { CurrencyConverter } from "@/components/currency/currency-converter";
 import {
   Dialog,
@@ -223,8 +224,13 @@ export default function AppShellLayout({
       >
         <div className="flex min-h-full flex-1 flex-col">
           <header className="sticky top-0 z-40 border-b bg-background">
-            <div className="mx-auto flex h-14 max-w-4xl items-center gap-3 px-4 sm:px-6">
-              <Wordmark className="text-base font-bold" />
+            <div className="mx-auto flex h-16 max-w-4xl items-center gap-3 px-4 sm:px-6">
+              <span className="hidden sm:inline-flex">
+                <Wordmark size="medium" />
+              </span>
+              <span className="inline-flex sm:hidden">
+                <Wordmark variant="icon" size="medium" />
+              </span>
               <span
                 className="hidden h-5 w-1 shrink-0 rounded-full sm:inline-block"
                 style={{
@@ -240,6 +246,7 @@ export default function AppShellLayout({
               </span>
 
               <div className="ml-auto flex items-center gap-2">
+                <OnlineStatusIndicator />
                 <button
                   type="button"
                   onClick={() => setConverterOpen(true)}

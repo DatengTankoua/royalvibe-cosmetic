@@ -115,7 +115,7 @@ export default function LandingPage() {
     <div className="flex flex-1 flex-col">
       <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur-sm">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
-          <Wordmark className="text-lg font-bold" />
+          <Wordmark size="medium" priority />
           <div className="flex flex-wrap items-center gap-4">
             <a
               href="#fonctionnalites"
@@ -232,7 +232,7 @@ export default function LandingPage() {
 
       <footer className="border-t border-border">
         <div className="mx-auto max-w-6xl px-4 py-8 text-center text-sm text-muted-foreground">
-          <Wordmark className="mx-auto text-base font-semibold" />
+          <Wordmark className="mx-auto" size="small" />
           <p className="mt-2">
             <Link href="/auth/login" className="hover:text-foreground">
               Connexion

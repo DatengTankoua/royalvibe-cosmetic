@@ -73,7 +73,7 @@ export default function AcceptInvitationPage() {
   return (
     <div className="flex flex-1 items-center justify-center px-4 py-12 pb-[max(3rem,env(safe-area-inset-bottom))]">
       <div className="w-full max-w-sm space-y-6 text-center">
-        <Wordmark className="mx-auto text-2xl font-bold" />
+        <Wordmark className="mx-auto" size="large" />
 
         {step === "loading" && (
           <p className="text-sm text-muted-foreground">

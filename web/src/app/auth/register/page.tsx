@@ -26,7 +26,7 @@ export default function RegisterPage() {
     return (
       <div className="flex flex-1 items-center justify-center px-4 py-12">
         <div className="w-full max-w-sm space-y-4 text-center">
-          <Wordmark className="mx-auto text-xl font-bold" />
+          <Wordmark className="mx-auto" size="large" />
           <h1 className="text-xl font-bold">Inscription désactivée</h1>
           <p className="text-sm text-muted-foreground">
             L&apos;inscription en ligne est momentanément indisponible. Si tu as
@@ -47,7 +47,7 @@ export default function RegisterPage() {
     return (
       <div className="flex flex-1 items-center justify-center px-4 py-12">
         <div className="w-full max-w-sm space-y-4 text-center">
-          <Wordmark className="mx-auto text-xl font-bold" />
+          <Wordmark className="mx-auto" size="large" />
           <h1 className="text-xl font-bold">Compte créé</h1>
           <p className="text-sm text-muted-foreground">
             Ton entreprise et ton compte propriétaire ont été créés.
@@ -88,7 +88,7 @@ export default function RegisterPage() {
     <div className="flex flex-1 items-center justify-center px-4 py-12 pb-[max(3rem,env(safe-area-inset-bottom))]">
       <div className="w-full max-w-sm space-y-6">
         <div className="space-y-3 text-center">
-          <Wordmark className="mx-auto text-2xl font-bold" />
+          <Wordmark className="mx-auto" size="large" />
           <div>
             <h1 className="text-lg font-semibold">Créer ton entreprise</h1>
             <p className="text-sm text-muted-foreground mt-1">

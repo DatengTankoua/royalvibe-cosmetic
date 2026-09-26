@@ -61,7 +61,7 @@ export default function LoginPage() {
       <div className="flex flex-1 items-center justify-center px-4 py-12 pb-[max(3rem,env(safe-area-inset-bottom))]">
         <div className="w-full max-w-sm space-y-6">
           <div className="space-y-3 text-center">
-            <Wordmark className="text-xl font-bold" />
+            <Wordmark className="mx-auto" size="large" />
             <p className="text-sm text-muted-foreground">
               Choisis l&apos;organisation à laquelle te connecter
             </p>
@@ -103,7 +103,7 @@ export default function LoginPage() {
     <div className="flex flex-1 items-center justify-center px-4 py-12 pb-[max(3rem,env(safe-area-inset-bottom))]">
       <div className="w-full max-w-sm space-y-6">
         <div className="space-y-3 text-center">
-          <Wordmark className="text-2xl font-bold" />
+          <Wordmark className="mx-auto" size="large" />
           <p className="text-sm text-muted-foreground">
             Connexion à ton espace de gestion
           </p>
