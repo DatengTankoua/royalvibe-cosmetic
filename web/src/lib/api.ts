@@ -616,6 +616,13 @@ export async function fetchMonthlyTrend(): Promise<MonthlyTrend[]> {
 
 // ─── Error helper ────────────────────────────────────────────────────────────
 
+// 1-11B : distingue une véritable panne réseau (aucune réponse reçue) d'une
+// réponse HTTP (401/403/404/5xx…) — seule la première autorise un repli
+// hors ligne vers le catalogue en cache (jamais sur une réponse serveur).
+export function isNetworkError(error: unknown): boolean {
+  return axios.isAxiosError(error) && !error.response;
+}
+
 export function getApiErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
     if (!error.response) {

@@ -21,6 +21,7 @@ import {
   getApiErrorMessage,
   type SelectableOrganization,
 } from "@/lib/api";
+import { purgeAllOfflineData } from "@/lib/offline-purge";
 
 export type LoginOutcome =
   | { status: "success" }
@@ -41,7 +42,7 @@ interface AuthContextValue {
     organizationId?: string,
   ) => Promise<LoginOutcome>;
   switchOrganization: (organizationId: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -104,7 +105,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const logout = useCallback(() => {
+  // 1-11B : purge du catalogue hors ligne AVANT de terminer la déconnexion —
+  // un échec (déjà journalisé en générique par le module) ne bloque jamais
+  // le logout lui-même.
+  const logout = useCallback(async () => {
+    await purgeAllOfflineData();
     clearAuth();
     setUser(null);
   }, []);

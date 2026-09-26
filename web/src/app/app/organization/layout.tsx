@@ -16,6 +16,7 @@ const TABS = [
     label: "Invitations",
     permission: "members.invite" as const,
   },
+  { href: "/app/organization/offline-data", label: "Hors connexion" },
 ];
 
 // Sous-shell de la section « Organisation » (1-9C) : onglets filtrés par

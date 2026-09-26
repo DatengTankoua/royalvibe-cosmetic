@@ -1,10 +1,18 @@
-// Service worker Stock Master (1-11A) — precache minimal + deny-by-default :
-// seules les routes publiques listées et les assets statiques versionnés
+// Service worker Stock Master (1-11A/1-11B) — precache minimal + deny-by-
+// default : seules les routes publiques listées, l'unique document d'app
+// shell générique (/app/catalog) et les assets statiques versionnés
 // bénéficient d'une stratégie de cache. Voir
-// docs/architecture/phase-1-11a-pwa-foundation.md pour le détail exact.
-const CACHE_VERSION = "v2";
+// docs/architecture/phase-1-11b-offline-catalog.md pour le détail exact.
+const CACHE_VERSION = "v3";
 const CACHE_NAME = `stockmaster-${CACHE_VERSION}`;
 const OFFLINE_URL = "/offline";
+// Document statique générique (aucune donnée personnalisée : page
+// entièrement "use client", zéro fetch serveur) — seul point d'entrée
+// hors ligne pour le catalogue après une visite en ligne. Les chunks
+// /_next/static/* qu'il référence doivent déjà avoir été mis en cache par
+// cette visite (cache-first ci-dessous) : un premier accès JAMAIS visité
+// en ligne reste impossible (aucun SW installé, aucun chunk en cache).
+const APP_SHELL_URL = "/app/catalog";
 
 // Chemins stables (sans hash de build) uniquement : les chunks
 // /_next/static/* sont mis en cache à la volée (cache-first) lors de leur
@@ -13,6 +21,7 @@ const OFFLINE_URL = "/offline";
 const PRECACHE_URLS = [
   "/",
   OFFLINE_URL,
+  APP_SHELL_URL,
   "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
@@ -95,6 +104,19 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return; // jamais cross-origin
   if (isInvitationAcceptPath(url.pathname)) return; // token en query : jamais de cache, réseau natif
+
+  // Exception UNIQUE et étroite (1-11B) : uniquement la navigation exacte
+  // vers /app/catalog, SANS aucune query string (clé précachée invariante,
+  // jamais devinable/paramétrable). Jamais de cache.put d'une réponse
+  // live/personnalisée ici — seul le document précaché à l'install sert de
+  // secours. Aucun autre chemin /app/* n'est concerné (exclusion normale
+  // ci-dessous inchangée pour tout le reste, y compris /app/catalog/[id]
+  // et /app/catalog/products/[id]).
+  if (request.mode === "navigate" && url.pathname === APP_SHELL_URL && url.search === "") {
+    event.respondWith(appShellFallback(request));
+    return;
+  }
+
   if (isAppOrApiPath(url.pathname)) return; // jamais /app, /api, /socket.io
 
   if (request.mode === "navigate") {
@@ -108,6 +130,18 @@ self.addEventListener("fetch", (event) => {
   }
   // Tout le reste : laissé au réseau natif, sans interception ni cache.
 });
+
+// Réseau d'abord ; en cas d'échec uniquement, repli vers le document générique
+// précaché à l'install — jamais un cache.put ici (la réponse live n'est
+// JAMAIS écrite, qu'elle réussisse ou échoue).
+async function appShellFallback(request) {
+  try {
+    return await fetch(request);
+  } catch {
+    const cached = await caches.match(APP_SHELL_URL);
+    return cached ?? Response.error();
+  }
+}
 
 async function networkFirstPublicNavigation(request) {
   try {

@@ -12,12 +12,17 @@ interface OrganizationShellValue {
   // Force un rechargement du branding/liste/contexte (ex. après édition du
   // branding) sans recharger toute la page.
   refreshShell: () => void;
+  // 1-11B : identité vérifiée localement (fingerprint du token courant),
+  // renseignée par AppShellLayout UNIQUEMENT sur une vraie panne réseau du
+  // GET /auth/context — jamais sur un 401/403 (fail-closed dans ce cas).
+  offlineIdentity: { userId: string; organizationId: string } | null;
 }
 
 export const OrganizationShellContext = createContext<OrganizationShellValue>({
   organization: null,
   authContext: null,
   refreshShell: () => {},
+  offlineIdentity: null,
 });
 
 export function useOrganizationShell(): OrganizationShellValue {

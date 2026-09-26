@@ -7,6 +7,7 @@ import {
   updateProduct,
   deleteProduct,
   getApiErrorMessage,
+  isNetworkError,
   type ApiProduct,
 } from "@/lib/api";
 import { useSocket } from "@/contexts/socket-context";
@@ -15,6 +16,9 @@ export function useProducts(sectionId?: string) {
   const [products, setProducts] = useState<ApiProduct[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // 1-11B : vraie panne réseau (aucune réponse) uniquement — jamais une
+  // réponse HTTP (401/403/404/5xx) — seule éligible au repli hors ligne.
+  const [isOffline, setIsOffline] = useState(false);
   const socket = useSocket();
 
   const load = useCallback(async () => {
@@ -22,8 +26,11 @@ export function useProducts(sectionId?: string) {
     try {
       const data = await fetchProducts(sectionId);
       setProducts(data);
+      setError(null);
+      setIsOffline(false);
     } catch (err) {
       setError(getApiErrorMessage(err));
+      setIsOffline(isNetworkError(err));
     } finally {
       setIsLoading(false);
     }
@@ -109,5 +116,13 @@ export function useProducts(sectionId?: string) {
     setProducts((prev) => prev.filter((x) => x._id !== id));
   }, []);
 
-  return { products, isLoading, error, addProduct, editProduct, removeProduct };
+  return {
+    products,
+    isLoading,
+    error,
+    isOffline,
+    addProduct,
+    editProduct,
+    removeProduct,
+  };
 }

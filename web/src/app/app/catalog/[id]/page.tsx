@@ -22,15 +22,32 @@ import {
   type ApiProduct,
 } from "@/lib/api";
 import { useProducts } from "@/hooks/use-products";
+import { useOfflineCatalog } from "@/hooks/use-offline-catalog";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
 import { hasPermission } from "@/lib/organization-permissions";
+import type { OfflineCatalogSection } from "@/lib/offline-catalog-db";
 
 type ContentMode = "loading" | "subsections" | "products" | "empty";
+
+function toOfflineSection(s: ApiSection): OfflineCatalogSection {
+  return {
+    _id: s._id,
+    name: s.name,
+    description: s.description,
+    parentId: s.parentId ?? null,
+  };
+}
 
 // /app/catalog/[id] (1-9D, ex "/sections/[id]") : sections → `catalog.manage`,
 // produits (créer/soft-delete) → `products.manage`, modifier (prix/stock ou
 // nom) → `products.manage` OU `stock.adjust` (le backend arbitre par champ
 // réellement touché). Jamais `User.role`.
+//
+// Hors ligne (1-11B, correction) : cette route N'EST JAMAIS utilisée pour
+// lire le catalogue hors ligne (dépendrait d'un document Next indisponible
+// sans réseau) — seule `/app/catalog` (OfflineCatalogBrowser) le fait. Cette
+// page continue en revanche d'ALIMENTER le cache (scope section) après
+// chaque chargement en ligne complet et réussi.
 export default function CatalogSectionPage() {
   const params = useParams<{ id: string }>();
   const { authContext } = useOrganizationShell();
@@ -54,6 +71,7 @@ export default function CatalogSectionPage() {
     editProduct,
     removeProduct,
   } = useProducts(params.id);
+  const { writeSectionScope } = useOfflineCatalog();
 
   const loadSubSections = useCallback(async () => {
     setSubSectionsLoading(true);
@@ -68,6 +86,28 @@ export default function CatalogSectionPage() {
   }, [params.id]);
 
   const isLoading = subSectionsLoading || productsLoading;
+
+  // N'écrit qu'après un chargement COMPLET et réussi des deux appels
+  // (sous-sections + produits) — remplace intégralement les deux scopes de
+  // cette section en une seule transaction (jamais un simple merge).
+  useEffect(() => {
+    if (!isLoading && !error) {
+      writeSectionScope(
+        params.id,
+        subSections.map(toOfflineSection),
+        products.map((p) => ({
+          _id: p._id,
+          sectionId: p.sectionId,
+          name: p.name,
+          purchasePrice: p.purchasePrice,
+          salePrice: p.salePrice,
+          initialQuantity: p.initialQuantity,
+          remainingQuantity: p.remainingQuantity,
+          status: p.status,
+        })),
+      );
+    }
+  }, [isLoading, error, params.id, subSections, products, writeSectionScope]);
 
   const mode: ContentMode = isLoading
     ? "loading"

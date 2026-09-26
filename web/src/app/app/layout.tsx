@@ -27,11 +27,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { hasPermission } from "@/lib/organization-permissions";
+import { purgeAllOfflineData } from "@/lib/offline-purge";
+import {
+  writeIdentityPointer,
+  readVerifiedIdentity,
+} from "@/lib/offline-identity-db";
+import { getToken } from "@/lib/auth";
 import {
   fetchActiveOrganizations,
   fetchAuthContext,
   fetchCurrentOrganization,
   getApiErrorMessage,
+  isNetworkError,
   type ApiAuthContext,
   type ApiOrganizationCurrent,
   type SelectableOrganization,
@@ -110,6 +117,13 @@ export default function AppShellLayout({
   // simplement la section « Organisation » (fail-closed), le backend
   // reste l'autorité finale sur chaque route.
   const [authContext, setAuthContext] = useState<ApiAuthContext | null>(null);
+  // 1-11B : identité vérifiée localement, renseignée UNIQUEMENT sur une
+  // vraie panne réseau du GET /auth/context (jamais sur 401/403 — voir
+  // effet ci-dessous) — permet au catalogue de lire IndexedDB sans réseau.
+  const [offlineIdentity, setOfflineIdentity] = useState<{
+    userId: string;
+    organizationId: string;
+  } | null>(null);
   const [loadingOrg, setLoadingOrg] = useState(true);
   // Indépendantes : l'échec de l'une ne doit jamais écraser le résultat
   // valide de l'autre (branding vs liste des organisations).
@@ -167,11 +181,31 @@ export default function AppShellLayout({
       } else {
         setListError(getApiErrorMessage(listResult.reason));
       }
-      setAuthContext(
-        authContextResult.status === "fulfilled"
-          ? authContextResult.value
-          : null,
-      );
+      if (authContextResult.status === "fulfilled") {
+        setAuthContext(authContextResult.value);
+        setOfflineIdentity(null);
+        const token = getToken();
+        if (token) {
+          void writeIdentityPointer({
+            userId: authContextResult.value.userId,
+            organizationId: authContextResult.value.organizationId,
+            token,
+          });
+        }
+      } else {
+        setAuthContext(null);
+        // Distinction stricte : une vraie panne réseau peut retomber sur
+        // l'identité vérifiée localement ; une réponse HTTP (401/403/autre)
+        // est une révocation/refus serveur — JAMAIS transformée en mode
+        // hors ligne, fail-closed.
+        if (isNetworkError(authContextResult.reason)) {
+          void readVerifiedIdentity({ token: getToken() }).then((identity) => {
+            if (!cancelled) setOfflineIdentity(identity);
+          });
+        } else {
+          setOfflineIdentity(null);
+        }
+      }
       setLoadingOrg(false);
     });
     return () => {
@@ -193,6 +227,9 @@ export default function AppShellLayout({
     setSwitching(true);
     try {
       await switchOrganization(organizationId);
+      // Switch réussi uniquement : jamais purgé sur un switch échoué (catch
+      // ci-dessous, avant même d'atteindre cette ligne).
+      await purgeAllOfflineData();
       // Repart d'un état propre : contexte, branding, données métier et
       // socket sont tous rechargés avec le nouveau JWT en un seul geste.
       window.location.assign("/app");
@@ -208,8 +245,10 @@ export default function AppShellLayout({
   };
 
   const handleLogout = () => {
-    logout();
-    router.push("/auth/login");
+    void (async () => {
+      await logout();
+      router.push("/auth/login");
+    })();
   };
 
   if (isLoading || !user) return null;
@@ -220,7 +259,7 @@ export default function AppShellLayout({
   return (
     <SocketProvider>
       <OrganizationShellContext.Provider
-        value={{ organization, authContext, refreshShell }}
+        value={{ organization, authContext, refreshShell, offlineIdentity }}
       >
         <div className="flex min-h-full flex-1 flex-col">
           <header className="sticky top-0 z-40 border-b bg-background">
@@ -322,6 +361,15 @@ export default function AppShellLayout({
             </div>
           </header>
 
+          {!authContext && offlineIdentity && (
+            <p
+              role="status"
+              className="mx-auto w-full max-w-4xl px-4 pt-3 text-sm text-muted-foreground sm:px-6"
+            >
+              Mode hors connexion : identité vérifiée localement, données mises
+              en cache uniquement.
+            </p>
+          )}
           {brandingError && (
             <p
               role="alert"

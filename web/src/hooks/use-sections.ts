@@ -7,6 +7,7 @@ import {
   deleteSection,
   updateSection,
   getApiErrorMessage,
+  isNetworkError,
   type ApiSection,
 } from "@/lib/api";
 import { useSocket } from "@/contexts/socket-context";
@@ -15,14 +16,20 @@ export function useSections(parentId?: string) {
   const [sections, setSections] = useState<ApiSection[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // 1-11B : vraie panne réseau (aucune réponse) uniquement — jamais une
+  // réponse HTTP (401/403/404/5xx) — seule éligible au repli hors ligne.
+  const [isOffline, setIsOffline] = useState(false);
   const socket = useSocket();
 
   const load = useCallback(async () => {
     try {
       const data = await fetchSections(parentId);
       setSections(data);
+      setError(null);
+      setIsOffline(false);
     } catch (err) {
       setError(getApiErrorMessage(err));
+      setIsOffline(isNetworkError(err));
     } finally {
       setIsLoading(false);
     }
@@ -79,6 +86,7 @@ export function useSections(parentId?: string) {
     sections,
     isLoading,
     error,
+    isOffline,
     reload: load,
     addSection,
     removeSection,
