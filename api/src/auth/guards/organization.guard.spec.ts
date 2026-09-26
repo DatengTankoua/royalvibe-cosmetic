@@ -14,6 +14,8 @@ import { AuthModule } from '../auth.module';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { RolesGuard } from './roles.guard';
 import { extractOrganizationContext } from '../decorators/current-organization.decorator';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { SKIP_ORGANIZATION_CONTEXT_KEY } from '../decorators/skip-organization-context.decorator';
 import {
   ORGANIZATION_ACCESS_DENIED,
   OrganizationsService,
@@ -60,9 +62,16 @@ interface Fx {
   resolveActiveContext: jest.Mock;
 }
 
-function buildFx(isPublic = false): Fx {
+function buildFx(
+  opts: { isPublic?: boolean; skipOrganizationContext?: boolean } = {},
+): Fx {
+  const { isPublic = false, skipOrganizationContext = false } = opts;
   const reflector: { getAllAndOverride: jest.Mock } = {
-    getAllAndOverride: jest.fn(() => isPublic),
+    getAllAndOverride: jest.fn((key: string) => {
+      if (key === IS_PUBLIC_KEY) return isPublic;
+      if (key === SKIP_ORGANIZATION_CONTEXT_KEY) return skipOrganizationContext;
+      return false;
+    }),
   };
   const resolveActiveContext: jest.Mock = jest.fn(
     (): Promise<ResolvedOrganizationContext> => Promise.resolve(CONTEXT_A),
@@ -127,13 +136,46 @@ describe('OrganizationGuard (1-3B.2)', () => {
   });
 
   it('2 — une route @Public() passe SANS résolution (même clé IS_PUBLIC_KEY)', async () => {
-    const fx = buildFx(true);
+    const fx = buildFx({ isPublic: true });
     // Route publique : pas de principal, pas de resolution d'organisation.
     const { context, request } = makeHttp({});
     const ok = await fx.guard.canActivate(context);
     expect(ok).toBe(true);
     expect(fx.resolveActiveContext).not.toHaveBeenCalled();
     expect(request.organizationContext).toBeUndefined();
+  });
+
+  it('2b — @SkipOrganizationContext() passe SANS résolution, mais exige un principal authentifié', async () => {
+    const fx = buildFx({ skipOrganizationContext: true });
+    // Toujours authentifiée (JwtAuthGuard) : un principal est présent ici.
+    const { context, request } = makeHttp({ principal: makePrincipal() });
+    const ok = await fx.guard.canActivate(context);
+    expect(ok).toBe(true);
+    expect(fx.resolveActiveContext).not.toHaveBeenCalled();
+    expect(request.organizationContext).toBeUndefined();
+  });
+
+  it('2c — @Public() et @SkipOrganizationContext() sont des clés DISTINCTES (l’une n’active pas l’autre)', async () => {
+    const fxPublicOnly = buildFx({
+      isPublic: true,
+      skipOrganizationContext: false,
+    });
+    // Une route publique passe déjà par le early-return @Public — vérifie
+    // seulement que le mock reflète bien deux clés indépendantes.
+    const fxSkipOnly = buildFx({
+      isPublic: false,
+      skipOrganizationContext: true,
+    });
+    const httpNoPrincipal = makeHttp({});
+    const httpWithPrincipal = makeHttp({ principal: makePrincipal() });
+    await expect(
+      fxPublicOnly.guard.canActivate(httpNoPrincipal.context),
+    ).resolves.toBe(true);
+    await expect(
+      fxSkipOnly.guard.canActivate(httpWithPrincipal.context),
+    ).resolves.toBe(true);
+    expect(fxPublicOnly.resolveActiveContext).not.toHaveBeenCalled();
+    expect(fxSkipOnly.resolveActiveContext).not.toHaveBeenCalled();
   });
 
   it('3 — principal valide : resolveActiveContext appelé EXACTEMENT UNE FOIS avec (sub, orgId) du principal — jamais de claim client', async () => {

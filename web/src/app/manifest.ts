@@ -2,28 +2,17 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "RoyalVibe Cosmétiques & Bijoux",
-    short_name: "RoyalVibe",
-    description:
-      "Application de gestion des ventes RoyalVibe Cosmétiques & Bijoux",
+    name: "Stock Master",
+    short_name: "Stock Master",
+    description: "Application de gestion des stocks et des ventes",
     start_url: "/",
     display: "standalone",
     orientation: "portrait",
     background_color: "#ffffff",
-    theme_color: "#b8960c",
+    theme_color: "#062B5C",
     categories: ["business", "shopping"],
-    icons: [
-      {
-        src: "/icon-192.png",
-        sizes: "192x192",
-        type: "image/png",
-        purpose: "maskable",
-      },
-      {
-        src: "/logo.jpg",
-        sizes: "any",
-        type: "image/jpeg",
-      },
-    ],
+    // Aucune icône Stock Master officielle (1-9B) : omise plutôt que de
+    // réutiliser l'ancien visuel RoyalVibe.
+    icons: [],
   };
 }

@@ -195,6 +195,45 @@ export async function fetchMe(): Promise<ApiUser> {
   return data;
 }
 
+// 1-9B : organisations actives de l'utilisateur courant (userId depuis le
+// JWT côté serveur) — alimente le sélecteur de switch d'organisation.
+export async function fetchActiveOrganizations(): Promise<
+  SelectableOrganization[]
+> {
+  const { data } = await apiClient.get<SelectableOrganization[]>(
+    "/auth/organizations",
+  );
+  return data;
+}
+
+export async function switchOrganization(
+  organizationId: string,
+): Promise<{ access_token: string }> {
+  const { data } = await apiClient.post<{ access_token: string }>(
+    "/auth/switch-organization",
+    { organizationId },
+  );
+  return data;
+}
+
+// Vue `GET /organizations/current` (1-8A) consommée par le shell /app.
+export interface ApiOrganizationCurrent {
+  _id: string;
+  name: string;
+  slug: string;
+  brandColor: string;
+  currency: string;
+  status: string;
+  logoUrl: string | null;
+}
+
+export async function fetchCurrentOrganization(): Promise<ApiOrganizationCurrent> {
+  const { data } = await apiClient.get<ApiOrganizationCurrent>(
+    "/organizations/current",
+  );
+  return data;
+}
+
 // ─── Sections ────────────────────────────────────────────────────────────────
 
 export async function fetchSections(parentId?: string): Promise<ApiSection[]> {

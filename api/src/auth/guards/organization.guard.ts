@@ -10,6 +10,8 @@
  * Invariants :
  * - Non-HTTP (Socket.IO gateway) : passe sans résolution.
  * - Routes `@Public()` : exclues (MÊME clé `IS_PUBLIC_KEY` que `JwtAuthGuard`).
+ * - Routes `@SkipOrganizationContext()` (1-9B) : toujours authentifiées,
+ *   mais aucune résolution d'organisation courante ici.
  * - `request.user` absent ou incomplet : 401 contrôlée, jamais d'exception 500.
  * - `resolveActiveContext` appelé UNE SEULE FOIS par requête.
  * - Le 403 UNIFORME de 1-3A (code `ORGANIZATION_ACCESS_DENIED`) remonte tel
@@ -26,6 +28,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { SKIP_ORGANIZATION_CONTEXT_KEY } from '../decorators/skip-organization-context.decorator';
 import { AuthenticatedPrincipal } from '../strategies/jwt.strategy';
 import {
   OrganizationsService,
@@ -53,6 +56,17 @@ export class OrganizationGuard implements CanActivate {
       context.getClass(),
     ]);
     if (isPublic) return true;
+
+    // Correction ciblée (1-9B) : route délibérément sans organisation
+    // "courante" (ex. lister ses organisations, switch vers une AUTRE
+    // organisation) — reste authentifiée (JwtAuthGuard déjà passé), mais
+    // aucune résolution ici. La route valide elle-même toute organisation
+    // ciblée si besoin.
+    const skipOrganizationContext = this.reflector.getAllAndOverride<boolean>(
+      SKIP_ORGANIZATION_CONTEXT_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    if (skipOrganizationContext) return true;
 
     const request = context
       .switchToHttp()

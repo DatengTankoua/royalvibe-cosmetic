@@ -1,12 +1,7 @@
-const CACHE = "royalvibe-v1";
+const CACHE = "stockmaster-v1";
 const OFFLINE_URL = "/";
 
-const STATIC_ASSETS = [
-  "/",
-  "/manifest.webmanifest",
-  "/logo.jpg",
-  "/icon-192.png",
-];
+const STATIC_ASSETS = ["/", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

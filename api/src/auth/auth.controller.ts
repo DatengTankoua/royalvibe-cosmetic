@@ -15,6 +15,7 @@ import { LoginDto } from './dto/login.dto';
 import { SwitchOrganizationDto } from './dto/switch-organization.dto';
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
 import { Public } from './decorators/public.decorator';
+import { SkipOrganizationContext } from './decorators/skip-organization-context.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { User } from '../users/schemas/user.schema';
 
@@ -76,7 +77,11 @@ export class AuthController {
   }
   // 200 explicite : le switch répond un nouveau JWT (le POST par défaut
   // NestJS répond 201 — le conserver ici serait trompeur).
+  // 1-9B : @SkipOrganizationContext — l'organisation COURANTE (JWT) peut
+  // être devenue inactive ; seule la cible (dto.organizationId) est
+  // validée, par AuthService.switchOrganization → resolveActiveContext.
   @HttpCode(200)
+  @SkipOrganizationContext()
   @Post('switch-organization')
   switchOrganization(
     @CurrentUser() user: User,
@@ -84,6 +89,18 @@ export class AuthController {
   ) {
     // Le sub provient de l'utilisateur authentifié (JWT) — jamais du body.
     return this.authService.switchOrganization(user._id.toString(), dto);
+  }
+
+  // 1-9B : organisations actives de l'utilisateur courant (userId
+  // exclusivement du JWT) — alimente le sélecteur de switch frontend.
+  // @SkipOrganizationContext : doit rester listable même si l'organisation
+  // COURANTE du JWT est devenue inactive.
+  @SkipOrganizationContext()
+  @Get('organizations')
+  organizations(@CurrentUser() user: User) {
+    return this.organizationsService.listActiveOrganizations(
+      user._id.toString(),
+    );
   }
 
   @Get('me')

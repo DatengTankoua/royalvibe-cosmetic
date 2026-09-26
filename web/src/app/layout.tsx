@@ -25,14 +25,11 @@ export const metadata: Metadata = {
     title: "Stock Master",
     statusBarStyle: "default",
   },
-  icons: {
-    icon: "/logo.jpg",
-    apple: "/logo.jpg",
-  },
+  // Aucune icône Stock Master officielle (1-9B) : pas d'icône invoquée
+  // plutôt que réutiliser l'ancien visuel RoyalVibe.
   openGraph: {
     title: "Stock Master",
     description: "Application de gestion des stocks et des ventes",
-    images: ["/logo.jpg"],
   },
 };
 

@@ -17,9 +17,12 @@ import { useAuth } from "@/contexts/auth-context";
 // identique (re-mount / refresh du provider), la connexion serait
 // inutilement coupée-et-rouverte. Le re-login d'un user DIFFÉRENT (autre
 // `_id`) ou le logout (`null`) restaure le redémarrage d'effet.
+// `sessionVersion` (1-9B) : incrémenté à chaque changement de JWT (switch
+// d'organisation compris) — même `userId`, mais le token a changé, donc la
+// connexion existante doit être coupée puis rouverte avec le nouveau token.
 export function useSocket(): Socket | null {
   const [socket, setSocket] = useState<Socket | null>(null);
-  const { user } = useAuth();
+  const { user, sessionVersion } = useAuth();
   // Identité primitive stable (string | null).
   const userId: string | null = user?._id ?? null;
 
@@ -39,7 +42,7 @@ export function useSocket(): Socket | null {
       instance.disconnect();
       setSocket(null);
     };
-  }, [userId]);
+  }, [userId, sessionVersion]);
 
   return socket;
 }

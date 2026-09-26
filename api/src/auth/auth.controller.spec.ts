@@ -21,6 +21,7 @@ describe('AuthController', () => {
   let loginMock: jest.Mock;
   let switchMock: jest.Mock;
   let acceptInvitationMock: jest.Mock;
+  let listActiveOrganizationsMock: jest.Mock;
 
   const VALID_REG: RegisterDto = {
     name: 'E2E User',
@@ -51,6 +52,7 @@ describe('AuthController', () => {
     loginMock = jest.fn();
     switchMock = jest.fn();
     acceptInvitationMock = jest.fn();
+    listActiveOrganizationsMock = jest.fn();
 
     const module: TestingModule = await Test.createTestingModule({
       // Garde 0B.6 : enregistrée pour que la DI du contrôleur se résolve
@@ -69,7 +71,10 @@ describe('AuthController', () => {
         },
         {
           provide: OrganizationsService,
-          useValue: { acceptInvitation: acceptInvitationMock },
+          useValue: {
+            acceptInvitation: acceptInvitationMock,
+            listActiveOrganizations: listActiveOrganizationsMock,
+          },
         },
         AuthThrottlerGuard,
       ],
@@ -189,5 +194,16 @@ describe('AuthController', () => {
     expect(acceptInvitationMock).toHaveBeenCalledTimes(1);
     expect(acceptInvitationMock).toHaveBeenCalledWith(dto);
     expect(out).toEqual(result);
+  });
+
+  // ---- organisations actives (1-9B) ----
+
+  it('organizations : délègue à listActiveOrganizations avec le sub du JWT, aucun autre paramètre', async () => {
+    const list = [{ organizationId: 'a', name: 'Org A' }];
+    listActiveOrganizationsMock.mockResolvedValue(list);
+    const out = await controller.organizations(AUTH_USER);
+    expect(listActiveOrganizationsMock).toHaveBeenCalledTimes(1);
+    expect(listActiveOrganizationsMock).toHaveBeenCalledWith(AUTH_USER._id);
+    expect(out).toEqual(list);
   });
 });

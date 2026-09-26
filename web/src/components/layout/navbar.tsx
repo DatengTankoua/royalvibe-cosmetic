@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import {
   BarChart3Icon,
@@ -14,6 +13,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 import { CurrencyConverter } from "@/components/currency/currency-converter";
+import { Wordmark } from "@/components/brand/wordmark";
 
 const navLink =
   "inline-flex items-center gap-2 rounded-md px-2.5 py-1 text-sm hover:bg-muted transition-colors";
@@ -24,8 +24,9 @@ export function Navbar() {
   const router = useRouter();
   const [converterOpen, setConverterOpen] = useState(false);
 
-  const isAuth = pathname.startsWith("/auth");
-  if (isAuth) return null;
+  // /auth/* et /app/* ont leur propre chrome (page d'auth sans nav ; shell
+  // dédié 1-9B) — cette barre reste celle des pages métier existantes.
+  if (pathname.startsWith("/auth") || pathname.startsWith("/app")) return null;
 
   const handleLogout = () => {
     logout();
@@ -51,21 +52,7 @@ export function Navbar() {
       <header className="border-b bg-background sticky top-0 z-40">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4 sm:px-6">
           <Link href="/" className="flex items-center gap-2 sm:mr-4">
-            <Image
-              src="/logo.jpg"
-              alt="RoyalVibe"
-              width={36}
-              height={36}
-              style={{ width: 36, height: 36 }}
-              className="rounded-full object-cover"
-            />
-            <span className="font-bold text-base leading-tight">
-              RoyalVibe
-              <br />
-              <span className="text-xs font-normal text-muted-foreground hidden sm:inline">
-                Cosmétiques & Bijoux
-              </span>
-            </span>
+            <Wordmark className="text-base font-bold leading-tight" />
           </Link>
 
           {/* Desktop nav */}
