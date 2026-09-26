@@ -19,6 +19,17 @@ export const DELEGABLE_PERMISSIONS = [
 
 export type DelegablePermission = (typeof DELEGABLE_PERMISSIONS)[number];
 
+// Structural type (pas d'import d'ApiAuthContext ici, éviterait un cycle
+// avec lib/api.ts) : toute décision UI passe par `effectivePermissions`,
+// jamais par `User.role`/`ApiUser.role` ni un décodage JWT (1-9D).
+export function hasPermission(
+  authContext:
+    { effectivePermissions: DelegablePermission[] } | null | undefined,
+  permission: DelegablePermission,
+): boolean {
+  return authContext?.effectivePermissions.includes(permission) ?? false;
+}
+
 export const PERMISSION_LABELS: Record<DelegablePermission, string> = {
   "catalog.manage": "Gérer le catalogue",
   "products.manage": "Gérer les produits",

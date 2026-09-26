@@ -9,7 +9,7 @@ import {
   getApiErrorMessage,
   type ApiProduct,
 } from "@/lib/api";
-import { useSocket } from "@/hooks/use-socket";
+import { useSocket } from "@/contexts/socket-context";
 
 export function useProducts(sectionId?: string) {
   const [products, setProducts] = useState<ApiProduct[]>([]);

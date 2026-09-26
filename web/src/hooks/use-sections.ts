@@ -9,7 +9,7 @@ import {
   getApiErrorMessage,
   type ApiSection,
 } from "@/lib/api";
-import { useSocket } from "@/hooks/use-socket";
+import { useSocket } from "@/contexts/socket-context";
 
 export function useSections(parentId?: string) {
   const [sections, setSections] = useState<ApiSection[]>([]);

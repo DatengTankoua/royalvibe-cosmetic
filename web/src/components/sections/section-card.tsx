@@ -40,14 +40,14 @@ import type { ApiSection } from "@/lib/api";
 
 interface SectionCardProps {
   section: ApiSection;
-  isAdmin: boolean;
+  canManage: boolean;
   onDelete: (id: string) => void;
   onRename?: (id: string, name: string, description: string) => Promise<void>;
 }
 
 export function SectionCard({
   section,
-  isAdmin,
+  canManage,
   onDelete,
   onRename,
 }: SectionCardProps) {
@@ -87,7 +87,7 @@ export function SectionCard({
   return (
     <>
       <Card className="hover:shadow-md transition-shadow">
-        <Link href={`/sections/${section._id}`} className="block">
+        <Link href={`/app/catalog/${section._id}`} className="block">
           <CardHeader>
             <div className="flex items-center gap-2">
               <FolderIcon className="h-5 w-5 shrink-0 text-muted-foreground" />
@@ -107,7 +107,7 @@ export function SectionCard({
             </p>
           </CardContent>
         </Link>
-        {isAdmin && (
+        {canManage && (
           <div className="px-6 pb-4 flex justify-end gap-1">
             <Button
               variant="ghost"

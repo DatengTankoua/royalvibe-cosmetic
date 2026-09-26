@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/contexts/auth-context";
-import { Navbar } from "@/components/layout/navbar";
 import { PwaRegister } from "@/components/layout/pwa-register";
 import "./globals.css";
 
@@ -52,8 +51,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <AuthProvider>
-          <Navbar />
-          <main className="flex-1 flex flex-col pb-16 md:pb-0">{children}</main>
+          <main className="flex-1 flex flex-col">{children}</main>
           <Toaster />
         </AuthProvider>
         <PwaRegister />

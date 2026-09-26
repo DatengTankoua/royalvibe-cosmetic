@@ -36,10 +36,10 @@ export function DuplicateWarningDialog({
   const label = type === "section" ? "catalogue" : "produit";
 
   const link = inTrash
-    ? "/corbeille"
+    ? "/app/trash"
     : type === "section"
-      ? `/sections/${item?._id}`
-      : `/products/${item?._id}`;
+      ? `/app/catalog/${item?._id}`
+      : `/app/catalog/products/${item?._id}`;
 
   const handleView = () => {
     onClose();

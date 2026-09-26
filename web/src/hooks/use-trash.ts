@@ -12,10 +12,12 @@ import {
   type ApiTrashedProduct,
 } from "@/lib/api";
 
-export function useTrash() {
+// `enabled` (1-9D) : la corbeille est gardée par `trash.manage` côté backend
+// — sans cette permission, ne JAMAIS déclencher `GET /trash` (403 inutile).
+export function useTrash(enabled = true) {
   const [sections, setSections] = useState<ApiTrashedSection[]>([]);
   const [products, setProducts] = useState<ApiTrashedProduct[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -32,8 +34,12 @@ export function useTrash() {
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      setIsLoading(false);
+      return;
+    }
     void load();
-  }, [load]);
+  }, [enabled, load]);
 
   const doRestoreSection = useCallback(async (id: string) => {
     await restoreSection(id);

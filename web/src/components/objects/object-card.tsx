@@ -12,7 +12,7 @@ export function ObjectCard({ object }: ObjectCardProps) {
   return (
     <Card>
       <Link
-        href={`/products/${object._id}`}
+        href={`/app/catalog/products/${object._id}`}
         className="relative block aspect-video w-full overflow-hidden bg-muted"
       >
         <Image
@@ -25,7 +25,10 @@ export function ObjectCard({ object }: ObjectCardProps) {
       </Link>
       <CardHeader>
         <CardTitle>
-          <Link href={`/products/${object._id}`} className="hover:underline">
+          <Link
+            href={`/app/catalog/products/${object._id}`}
+            className="hover:underline"
+          >
             {object.name}
           </Link>
         </CardTitle>

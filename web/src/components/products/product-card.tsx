@@ -48,7 +48,8 @@ const fmt = fmtXof;
 
 interface ProductCardProps {
   product: ApiProduct;
-  isAdmin: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
   priority?: boolean;
   onDelete: (id: string) => void;
   onEdit: (product: ApiProduct) => void;
@@ -56,7 +57,8 @@ interface ProductCardProps {
 
 export function ProductCard({
   product,
-  isAdmin,
+  canEdit,
+  canDelete,
   priority = false,
   onDelete,
   onEdit,
@@ -70,7 +72,7 @@ export function ProductCard({
     <>
       <Card className="overflow-hidden hover:shadow-md transition-shadow">
         <Link
-          href={`/products/${product._id}`}
+          href={`/app/catalog/products/${product._id}`}
           className="relative block aspect-video overflow-hidden bg-muted"
         >
           <Image
@@ -88,7 +90,7 @@ export function ProductCard({
           <div className="flex items-start justify-between gap-2">
             <CardTitle className="text-sm leading-tight">
               <Link
-                href={`/products/${product._id}`}
+                href={`/app/catalog/products/${product._id}`}
                 className="hover:underline"
               >
                 {product.name}
@@ -125,25 +127,29 @@ export function ProductCard({
             </span>
           </div>
 
-          {isAdmin && (
+          {(canEdit || canDelete) && (
             <div className="flex gap-2 pt-1">
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex-1"
-                onClick={() => setConfirmEdit(true)}
-              >
-                <PencilIcon className="h-3 w-3 mr-1" />
-                Modifier
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-destructive hover:text-destructive"
-                onClick={() => setConfirmDelete(true)}
-              >
-                <Trash2Icon className="h-4 w-4" />
-              </Button>
+              {canEdit && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => setConfirmEdit(true)}
+                >
+                  <PencilIcon className="h-3 w-3 mr-1" />
+                  Modifier
+                </Button>
+              )}
+              {canDelete && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive hover:text-destructive"
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  <Trash2Icon className="h-4 w-4" />
+                </Button>
+              )}
             </div>
           )}
         </CardContent>
