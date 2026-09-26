@@ -136,20 +136,57 @@ apiClient.interceptors.response.use(
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
-export async function authRegister(payload: {
+export interface SelectableOrganization {
+  organizationId: string;
   name: string;
-  email: string;
-  password: string;
-}): Promise<{ access_token: string; user: ApiUser }> {
-  const { data } = await apiClient.post("/auth/register", payload);
-  return data;
 }
+
+export type LoginResponse =
+  | { access_token: string; user: ApiUser }
+  | {
+      organizationSelectionRequired: true;
+      organizations: SelectableOrganization[];
+    };
 
 export async function authLogin(payload: {
   email: string;
   password: string;
-}): Promise<{ access_token: string; user: ApiUser }> {
+  organizationId?: string;
+}): Promise<LoginResponse> {
   const { data } = await apiClient.post("/auth/login", payload);
+  return data;
+}
+
+// 1-6A : inscription propriétaire — aucun token renvoyé (le compte doit
+// ensuite se connecter via /auth/login).
+export interface OwnerRegistrationResult {
+  user: { _id: string; name: string; email: string };
+  organization: { _id: string; name: string; slug: string };
+}
+
+export async function authRegister(payload: {
+  name: string;
+  email: string;
+  password: string;
+  organizationName: string;
+}): Promise<OwnerRegistrationResult> {
+  const { data } = await apiClient.post("/auth/register", payload);
+  return data;
+}
+
+// 1-6B.2 : acceptation d'invitation — aucun token renvoyé (redirection login).
+export interface AcceptInvitationResult {
+  user: { _id: string; name: string; email: string };
+  organization: { _id: string; name: string; slug: string };
+  membership: { role: string; status: string };
+}
+
+export async function acceptInvitation(payload: {
+  token: string;
+  name?: string;
+  password?: string;
+}): Promise<AcceptInvitationResult> {
+  const { data } = await apiClient.post("/auth/invitations/accept", payload);
   return data;
 }
 
@@ -417,6 +454,16 @@ export function getApiErrorMessage(error: unknown): string {
     return `Erreur ${status}.`;
   }
   return "Une erreur inattendue s'est produite.";
+}
+
+// Code d'erreur stable (ex. REGISTRATION_DISABLED, ACCOUNT_DETAILS_REQUIRED) —
+// jamais de détail technique, seulement le champ `code` déjà public de l'API.
+export function getApiErrorCode(error: unknown): string | undefined {
+  if (axios.isAxiosError(error)) {
+    const body = error.response?.data as { code?: string } | undefined;
+    return body?.code;
+  }
+  return undefined;
 }
 
 // Legacy re-exports so existing object components don't break immediately

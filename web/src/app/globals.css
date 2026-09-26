@@ -49,6 +49,12 @@
 }
 
 :root {
+  /* Stock Master (1-9A) : couleurs de marque centrales, utilis\u00e9es sur les
+     pages d'authentification et le wordmark \u2014 le thème shadcn --primary
+     global n'est pas modifié pour ne pas affecter les pages métier. */
+  --brand-navy: #062b5c;
+  --brand-orange: #ff6a00;
+  --brand-white: #ffffff;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);

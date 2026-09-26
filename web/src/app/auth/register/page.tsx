@@ -1,22 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useAuth } from "@/contexts/auth-context";
+import { authRegister, getApiErrorCode, getApiErrorMessage } from "@/lib/api";
+import { Wordmark } from "@/components/brand/wordmark";
 import Link from "next/link";
-import Image from "next/image";
 
 export default function RegisterPage() {
-  const { register } = useAuth();
-  const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [organizationName, setOrganizationName] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
   // 0B.5 : parcours d'inscription fermé — par défaut, un accès direct à la
   // route affiche un court message (affichage seulement ; le backend est
   // l'autorité finale et refuse déjà côté API).
@@ -25,15 +24,9 @@ export default function RegisterPage() {
 
   if (!registrationEnabled) {
     return (
-      <div className="flex flex-1 items-center justify-center px-6 py-12">
+      <div className="flex flex-1 items-center justify-center px-4 py-12">
         <div className="w-full max-w-sm space-y-4 text-center">
-          <Image
-            src="/logo.jpg"
-            alt="RoyalVibe"
-            width={64}
-            height={64}
-            className="mx-auto rounded-full object-cover shadow-md"
-          />
+          <Wordmark className="mx-auto text-xl font-bold" />
           <h1 className="text-xl font-bold">Inscription désactivée</h1>
           <p className="text-sm text-muted-foreground">
             L&apos;inscription en ligne est momentanément indisponible. Si tu as
@@ -50,51 +43,79 @@ export default function RegisterPage() {
     );
   }
 
+  if (done) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-4 py-12">
+        <div className="w-full max-w-sm space-y-4 text-center">
+          <Wordmark className="mx-auto text-xl font-bold" />
+          <h1 className="text-xl font-bold">Compte créé</h1>
+          <p className="text-sm text-muted-foreground">
+            Ton entreprise et ton compte propriétaire ont été créés.
+            Connecte-toi pour continuer.
+          </p>
+          <Link
+            href="/auth/login"
+            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+          >
+            Se connecter
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setError(null);
     try {
-      await register(name, email, password);
-      router.push("/");
+      await authRegister({ name, email, password, organizationName });
+      setPassword("");
+      setDone(true);
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Erreur d'inscription");
+      const code = getApiErrorCode(err);
+      setError(
+        code === "REGISTRATION_DISABLED"
+          ? "L'inscription est actuellement désactivée."
+          : getApiErrorMessage(err),
+      );
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="flex flex-1 items-center justify-center px-6 py-12">
+    <div className="flex flex-1 items-center justify-center px-4 py-12 pb-[max(3rem,env(safe-area-inset-bottom))]">
       <div className="w-full max-w-sm space-y-6">
         <div className="space-y-3 text-center">
-          <div className="flex justify-center">
-            <Image
-              src="/logo.jpg"
-              alt="RoyalVibe"
-              width={96}
-              height={96}
-              className="rounded-full object-cover shadow-md"
-            />
-          </div>
+          <Wordmark className="mx-auto text-2xl font-bold" />
           <div>
-            <h1 className="text-xl font-bold">
-              RoyalVibe Cosmétiques &amp; Bijoux
-            </h1>
+            <h1 className="text-lg font-semibold">Créer ton entreprise</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Créer un compte vendeur
+              Ceci crée ton entreprise et ton compte propriétaire.
             </p>
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <div className="space-y-2">
-            <Label htmlFor="name">Prénom / Nom</Label>
+            <Label htmlFor="name">Nom</Label>
             <Input
               id="name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
               autoComplete="name"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="organizationName">Nom de l&apos;entreprise</Label>
+            <Input
+              id="organizationName"
+              value={organizationName}
+              onChange={(e) => setOrganizationName(e.target.value)}
+              required
+              autoComplete="organization"
             />
           </div>
           <div className="space-y-2">
@@ -118,10 +139,22 @@ export default function RegisterPage() {
               required
               minLength={6}
               autoComplete="new-password"
+              aria-describedby={error ? "register-error" : undefined}
             />
           </div>
+
+          {error && (
+            <p
+              id="register-error"
+              role="alert"
+              className="text-sm text-destructive"
+            >
+              {error}
+            </p>
+          )}
+
           <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? "Inscription…" : "Créer mon compte"}
+            {loading ? "Création…" : "Créer mon entreprise"}
           </Button>
         </form>
 

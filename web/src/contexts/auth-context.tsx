@@ -15,13 +15,27 @@ import {
   clearAuth,
   type StoredUser,
 } from "@/lib/auth";
-import { authLogin, authRegister, getApiErrorMessage } from "@/lib/api";
+import {
+  authLogin,
+  getApiErrorMessage,
+  type SelectableOrganization,
+} from "@/lib/api";
+
+export type LoginOutcome =
+  | { status: "success" }
+  | {
+      status: "organizationSelectionRequired";
+      organizations: SelectableOrganization[];
+    };
 
 interface AuthContextValue {
   user: StoredUser | null;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (name: string, email: string, password: string) => Promise<void>;
+  login: (
+    email: string,
+    password: string,
+    organizationId?: string,
+  ) => Promise<LoginOutcome>;
   logout: () => void;
 }
 
@@ -38,40 +52,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(false);
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
-    try {
-      const { access_token, user: u } = await authLogin({ email, password });
-      setToken(access_token);
-      const stored: StoredUser = {
-        _id: u._id,
-        name: u.name,
-        email: u.email,
-        role: u.role,
-      };
-      setStoredUser(stored);
-      setUser(stored);
-    } catch (err) {
-      throw new Error(getApiErrorMessage(err));
-    }
-  }, []);
-
-  const register = useCallback(
-    async (name: string, email: string, password: string) => {
+  // N'accepte JAMAIS de conserver le mot de passe : il ne fait que transiter
+  // vers l'appel API, aucun state du contexte ne le stocke.
+  const login = useCallback(
+    async (
+      email: string,
+      password: string,
+      organizationId?: string,
+    ): Promise<LoginOutcome> => {
       try {
-        const { access_token, user: u } = await authRegister({
-          name,
-          email,
-          password,
-        });
-        setToken(access_token);
+        const result = await authLogin({ email, password, organizationId });
+        if ("organizationSelectionRequired" in result) {
+          return {
+            status: "organizationSelectionRequired",
+            organizations: result.organizations,
+          };
+        }
+        setToken(result.access_token);
         const stored: StoredUser = {
-          _id: u._id,
-          name: u.name,
-          email: u.email,
-          role: u.role,
+          _id: result.user._id,
+          name: result.user.name,
+          email: result.user.email,
+          role: result.user.role,
         };
         setStoredUser(stored);
         setUser(stored);
+        return { status: "success" };
       } catch (err) {
         throw new Error(getApiErrorMessage(err));
       }
@@ -85,7 +91,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

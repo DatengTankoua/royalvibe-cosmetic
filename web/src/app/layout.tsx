@@ -17,13 +17,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "RoyalVibe Cosmétiques & Bijoux",
-  description:
-    "Application de gestion des ventes — Cosmétiques, Parfums & Joaillerie",
-  applicationName: "RoyalVibe",
+  title: "Stock Master",
+  description: "Application de gestion des stocks et des ventes",
+  applicationName: "Stock Master",
   appleWebApp: {
     capable: true,
-    title: "RoyalVibe",
+    title: "Stock Master",
     statusBarStyle: "default",
   },
   icons: {
@@ -31,15 +30,14 @@ export const metadata: Metadata = {
     apple: "/logo.jpg",
   },
   openGraph: {
-    title: "RoyalVibe Cosmétiques & Bijoux",
-    description:
-      "Application de gestion des ventes — Cosmétiques, Parfums & Joaillerie",
+    title: "Stock Master",
+    description: "Application de gestion des stocks et des ventes",
     images: ["/logo.jpg"],
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#b8960c",
+  themeColor: "#062B5C",
   width: "device-width",
   initialScale: 1,
 };
