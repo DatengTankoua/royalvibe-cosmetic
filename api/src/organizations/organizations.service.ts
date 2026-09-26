@@ -40,6 +40,7 @@ import { UpdateBrandingDto } from './dto/update-branding.dto';
 import { AcceptInvitationDto } from '../auth/dto/accept-invitation.dto';
 import { SocketRegistryService } from './socket-registry.service';
 import { S3Service } from '../s3/s3.service';
+import { EmailService, EmailDeliveryStatus } from '../email/email.service';
 import * as bcrypt from 'bcryptjs';
 
 // Session transactionnelle Mongoose (`mongodb.ClientSession`) : même
@@ -180,6 +181,7 @@ export class OrganizationsService {
     @InjectConnection() private connection: Connection,
     private socketRegistry: SocketRegistryService,
     private s3Service: S3Service,
+    private emailService: EmailService,
   ) {}
 
   /**
@@ -347,7 +349,11 @@ export class OrganizationsService {
     invitedById: string,
     dto: CreateInvitationDto,
     now: Date = new Date(),
-  ): Promise<{ invitation: InvitationView; token: string }> {
+  ): Promise<{
+    invitation: InvitationView;
+    token: string;
+    delivery: { status: EmailDeliveryStatus };
+  }> {
     const orgOid = new Types.ObjectId(organizationId);
 
     const actor = await this.membershipModel
@@ -440,7 +446,54 @@ export class OrganizationsService {
       throw err;
     }
 
-    return { invitation: this.toInvitationView(invitation), token: rawToken };
+    // Email hors transaction Mongo (1-10B) : l'invitation est déjà
+    // persistée et RESTE ACQUISE quel que soit le résultat de l'envoi —
+    // jamais de second document créé, jamais un échec provider en 500.
+    let delivery: EmailDeliveryStatus;
+    try {
+      delivery = await this.sendInvitationEmail(
+        orgOid,
+        invitation,
+        dto,
+        rawToken,
+      );
+    } catch {
+      // Toute panne inattendue APRÈS la création (ex. lecture du nom
+      // d'organisation) reste un échec de LIVRAISON, jamais un 500 —
+      // l'invitation est déjà acquise, seul le statut change.
+      delivery = 'failed';
+    }
+
+    return {
+      invitation: this.toInvitationView(invitation),
+      token: rawToken,
+      delivery: { status: delivery },
+    };
+  }
+
+  /**
+   * Nom d'organisation relu ici (jamais mis en cache dans le contexte) :
+   * seul appel réseau/DB additionnel de ce flux, effectué APRÈS la création
+   * de l'invitation — un échec de lecture du nom ne doit jamais faire
+   * échouer la création (fallback chaîne vide, jamais une valeur inventée).
+   */
+  private async sendInvitationEmail(
+    organizationId: Types.ObjectId,
+    invitation: OrganizationInvitationDocument,
+    dto: CreateInvitationDto,
+    rawToken: string,
+  ): Promise<EmailDeliveryStatus> {
+    const organization = await this.organizationModel
+      .findById(organizationId)
+      .select('name')
+      .exec();
+    return this.emailService.sendInvitationEmail({
+      to: invitation.email,
+      organizationName: organization?.name ?? '',
+      role: dto.role,
+      token: rawToken,
+      expiresAt: invitation.expiresAt,
+    });
   }
 
   /** Invitations de l'organisation courante uniquement, jamais `tokenHash`. */

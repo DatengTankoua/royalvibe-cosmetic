@@ -6,9 +6,10 @@ import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import {
+  AUTH_THROTTLER_WINDOWS,
   AuthThrottlerGuard,
-  createAuthThrottlerOptions,
 } from '../common/auth-rate-limiting';
+import { createInvitationThrottlerWindow } from '../common/invitation-rate-limiting';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -34,12 +35,21 @@ import { OrganizationsModule } from '../organizations/organizations.module';
         signOptions: { expiresIn: '7d' },
       }),
     }),
-    // Rate limiting du login (0B.6) : stockage mémoire officiel de
+    // Rate limiting (0B.6 + 1-10B) : stockage mémoire officiel de
     // `@nestjs/throttler` (module global => ses tokens résident en tous
-    // modules). La garde est FOURNIE par CE module (module d'accueil du
-    // contrôleur) afin que `GuardsContextCreator` la résolve via le
-    // conteneur — attachée à /auth/login, jamais garde globale.
-    ThrottlerModule.forRoot(createAuthThrottlerOptions()),
+    // modules) — UNIQUE `forRoot()` du projet, jamais un second (créerait
+    // une seconde instance de stockage ambiguë pour un module `@Global()`).
+    // La fenêtre `invitation-create` (1-10B, `POST /organizations/invitations`)
+    // est fusionnée ICI ; `AuthController` s'en exclut explicitement
+    // (`@SkipThrottle`) puisque `AuthThrottlerGuard` (tracker IP) ne doit
+    // jamais évaluer une fenêtre conçue pour un tracker utilisateur+organisation.
+    ThrottlerModule.forRoot({
+      setHeaders: false,
+      throttlers: [
+        ...AUTH_THROTTLER_WINDOWS,
+        createInvitationThrottlerWindow(),
+      ],
+    }),
   ],
   providers: [
     AuthService,

@@ -7,6 +7,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
@@ -35,6 +36,12 @@ export function isPublicRegistrationEnabled(): boolean {
   return process.env.PUBLIC_REGISTRATION_ENABLED === 'true';
 }
 
+// `AuthThrottlerGuard` (login/register/accept-invitation) trace par IP ;
+// exclusion explicite de la fenêtre `invitation-create` (1-10B, tracker
+// utilisateur+organisation, sans rapport avec ces routes publiques) —
+// jamais l'inverse (`OrganizationsController` exclut symétriquement les
+// fenêtres `login-short`/`login-long`).
+@SkipThrottle({ 'invitation-create': true })
 @Controller('auth')
 export class AuthController {
   constructor(

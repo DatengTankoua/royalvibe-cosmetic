@@ -20,12 +20,19 @@ import { UsersService } from '../users/users.service';
 import { UserRole } from '../users/schemas/user.schema';
 import { SocketRegistryService } from './socket-registry.service';
 import { S3Service } from '../s3/s3.service';
+import { EmailService } from '../email/email.service';
 
 // Stub partagé (1-8A) : aucun test de ce fichier n'exerce `getCurrent`/
 // `updateBranding`/`removeLogo` (couverts par leur propre describe) — seule
 // la résolution DI du nouveau constructeur importe ici.
 const s3ServiceStub = {
   publicUrlForKey: jest.fn((key: string) => `http://s3/${key}`),
+};
+// Stub partagé (1-10B) : `manual` par défaut (config email absente) — seule
+// la résolution DI du nouveau constructeur importe ici, sauf dans le
+// describe `invitations` qui redéfinit son propre mock par test.
+const emailServiceStub = {
+  sendInvitationEmail: jest.fn().mockResolvedValue('manual'),
 };
 import {
   DelegablePermission,
@@ -76,6 +83,7 @@ describe('OrganizationsService.resolveActiveContext', () => {
           useValue: { disconnectMember: jest.fn() },
         },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: EmailService, useValue: emailServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -408,6 +416,7 @@ describe('OrganizationsService.listActiveOrganizations', () => {
           useValue: { disconnectMember: jest.fn() },
         },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: EmailService, useValue: emailServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -647,6 +656,9 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
   // un `jest.fn()` unique ne peut plus distinguer les deux requêtes depuis
   // la correction anti-escalade (1-9C), qui relit l'acteur EN PREMIER.
   let membershipByUserId: Map<string, Record<string, unknown> | null>;
+  // 1-10B : nom d'organisation (email) + provider email, mockés par test.
+  let organizationModel: { findById: jest.Mock };
+  let emailServiceStub: { sendInvitationEmail: jest.Mock };
 
   function invitationDoc(overrides: Record<string, unknown> = {}) {
     return {
@@ -692,11 +704,26 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
       })),
     };
     usersService = { findByEmail: jest.fn().mockResolvedValue(null) };
+    organizationModel = {
+      findById: jest.fn(() => ({
+        select: jest.fn(() => ({
+          exec: () => Promise.resolve({ name: 'Test Org' }),
+        })),
+      })),
+    };
+    // `manual` par défaut (config absente) — chaque test de statut
+    // redéfinit ce mock explicitement (`mockResolvedValueOnce`/`Once`).
+    emailServiceStub = {
+      sendInvitationEmail: jest.fn().mockResolvedValue('manual'),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OrganizationsService,
-        { provide: getModelToken(Organization.name), useValue: {} },
+        {
+          provide: getModelToken(Organization.name),
+          useValue: organizationModel,
+        },
         {
           provide: getModelToken(OrganizationMembership.name),
           useValue: membershipModel,
@@ -712,6 +739,7 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
           useValue: { disconnectMember: jest.fn() },
         },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: EmailService, useValue: emailServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -759,7 +787,7 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
       );
     });
 
-    it('réponse : { invitation, token } — jamais tokenHash/invitedById', async () => {
+    it('réponse : { invitation, token, delivery } — jamais tokenHash/invitedById', async () => {
       await build();
       const result = await service.createInvitation(
         ORG_OBJECT_ID,
@@ -767,7 +795,11 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
         VALID_DTO,
         NOW,
       );
-      expect(Object.keys(result).sort()).toEqual(['invitation', 'token']);
+      expect(Object.keys(result).sort()).toEqual([
+        'delivery',
+        'invitation',
+        'token',
+      ]);
       expect(Object.keys(result.invitation).sort()).toEqual([
         '_id',
         'email',
@@ -776,6 +808,104 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
         'role',
         'status',
       ]);
+      expect(result.delivery).toEqual({ status: 'manual' });
+    });
+
+    // ---- Livraison email (1-10B) ----
+    describe('email d’invitation (1-10B)', () => {
+      it('config email absente (mock manual) → aucun échec, delivery.status = manual', async () => {
+        await build();
+        const result = await service.createInvitation(
+          ORG_OBJECT_ID,
+          OWNER_ID,
+          VALID_DTO,
+          NOW,
+        );
+        expect(result.delivery).toEqual({ status: 'manual' });
+        expect(emailServiceStub.sendInvitationEmail).toHaveBeenCalledTimes(1);
+      });
+
+      it('provider accepte → delivery.status = sent, payload exact (destinataire/rôle/token/nom d’organisation)', async () => {
+        await build();
+        emailServiceStub.sendInvitationEmail.mockResolvedValueOnce('sent');
+        const result = await service.createInvitation(
+          ORG_OBJECT_ID,
+          OWNER_ID,
+          VALID_DTO,
+          NOW,
+        );
+        expect(result.delivery).toEqual({ status: 'sent' });
+        expect(emailServiceStub.sendInvitationEmail).toHaveBeenCalledWith({
+          to: 'invite@example.com',
+          organizationName: 'Test Org',
+          role: OrganizationRole.ADMIN,
+          token: result.token,
+          expiresAt: new Date(NOW.getTime() + 72 * 60 * 60 * 1000),
+        });
+      });
+
+      it('provider échoue/rejette → delivery.status = failed, invitation quand même renvoyée avec son token', async () => {
+        await build();
+        emailServiceStub.sendInvitationEmail.mockRejectedValueOnce(
+          new Error('resend unreachable'),
+        );
+        const result = await service.createInvitation(
+          ORG_OBJECT_ID,
+          OWNER_ID,
+          VALID_DTO,
+          NOW,
+        );
+        expect(result.delivery).toEqual({ status: 'failed' });
+        expect(result.token).toEqual(expect.any(String));
+        expect(invitationModel.create).toHaveBeenCalledTimes(1);
+      });
+
+      it('aucun envoi tant que l’invitation n’est pas créée (refus anti-escalade AVANT tout appel email)', async () => {
+        await build();
+        const error: unknown = await service
+          .createInvitation(
+            ORG_OBJECT_ID,
+            '999988887777666655554444',
+            { email: 'x@example.com', role: OrganizationRole.SELLER },
+            NOW,
+          )
+          .catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(ForbiddenException);
+        expect(emailServiceStub.sendInvitationEmail).not.toHaveBeenCalled();
+      });
+
+      it('aucun envoi si l’email appartient déjà à un membre actif (409 avant création)', async () => {
+        await build();
+        const existingUserId = '998877665544332211009988';
+        usersService.findByEmail.mockResolvedValue({
+          _id: new Types.ObjectId(existingUserId),
+        });
+        membershipByUserId.set(existingUserId, {
+          status: MembershipStatus.ACTIVE,
+        });
+        const error: unknown = await service
+          .createInvitation(ORG_OBJECT_ID, OWNER_ID, VALID_DTO, NOW)
+          .catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(ConflictException);
+        expect(emailServiceStub.sendInvitationEmail).not.toHaveBeenCalled();
+      });
+
+      it('aucun envoi si une invitation `pending` existe déjà (409 avant création)', async () => {
+        await build();
+        invitationModel.findOne.mockReturnValue({
+          exec: () =>
+            Promise.resolve(
+              invitationDoc({
+                expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+              }),
+            ),
+        });
+        const error: unknown = await service
+          .createInvitation(ORG_OBJECT_ID, OWNER_ID, VALID_DTO, NOW)
+          .catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(ConflictException);
+        expect(emailServiceStub.sendInvitationEmail).not.toHaveBeenCalled();
+      });
     });
 
     it('email avec membership active existante dans CETTE org → 409 MEMBER_ALREADY_ACTIVE', async () => {
@@ -1246,6 +1376,7 @@ describe('OrganizationsService.acceptInvitation (1-6B.2)', () => {
           useValue: { disconnectMember: jest.fn() },
         },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: EmailService, useValue: emailServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1549,6 +1680,7 @@ describe('OrganizationsService.listMembers (1-7C)', () => {
           useValue: { disconnectMember: jest.fn() },
         },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: EmailService, useValue: emailServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1604,6 +1736,7 @@ describe('OrganizationsService.updateMembership (1-7C)', () => {
         { provide: getConnectionToken(), useValue: fixture.connection },
         { provide: SocketRegistryService, useValue: socketRegistry },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: EmailService, useValue: emailServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1827,6 +1960,7 @@ describe('OrganizationsService.transferOwnership (1-7C)', () => {
         { provide: getConnectionToken(), useValue: fixture.connection },
         { provide: SocketRegistryService, useValue: socketRegistry },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: EmailService, useValue: emailServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1995,6 +2129,7 @@ describe('OrganizationsService — branding (1-8A)', () => {
           useValue: { disconnectMember: jest.fn() },
         },
         { provide: S3Service, useValue: s3Service },
+        { provide: EmailService, useValue: emailServiceStub },
       ],
     }).compile();
     service = module.get(OrganizationsService);

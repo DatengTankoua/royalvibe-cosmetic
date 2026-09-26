@@ -2,7 +2,13 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { CopyIcon, PlusIcon } from "lucide-react";
+import {
+  CheckCircle2Icon,
+  CopyIcon,
+  InfoIcon,
+  PlusIcon,
+  TriangleAlertIcon,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -41,6 +47,9 @@ export function CreateInvitationDialog({
   const [error, setError] = useState<string | null>(null);
   const [acceptLink, setAcceptLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [deliveryStatus, setDeliveryStatus] = useState<
+    "sent" | "manual" | "failed" | null
+  >(null);
 
   const reset = () => {
     setEmail("");
@@ -49,6 +58,7 @@ export function CreateInvitationDialog({
     setError(null);
     setAcceptLink(null);
     setCopied(false);
+    setDeliveryStatus(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -56,16 +66,23 @@ export function CreateInvitationDialog({
     setSaving(true);
     setError(null);
     try {
-      const { invitation, token } = await createInvitation({
+      const { invitation, token, delivery } = await createInvitation({
         email,
         role,
         permissions,
       });
       onCreated(invitation);
+      // Jeton brut : uniquement en mémoire (état React), jamais persisté
+      // (localStorage/sessionStorage) ni journalisé.
       setAcceptLink(
         `${window.location.origin}/auth/invitations/accept?token=${token}`,
       );
-      toast.success("Invitation créée");
+      setDeliveryStatus(delivery.status);
+      if (delivery.status === "sent") {
+        toast.success("Invitation créée et email envoyé");
+      } else {
+        toast.success("Invitation créée");
+      }
     } catch (err) {
       setError(describeOrganizationError(err));
     } finally {
@@ -99,6 +116,27 @@ export function CreateInvitationDialog({
 
           {acceptLink ? (
             <div className="space-y-3">
+              {deliveryStatus === "sent" && (
+                <p className="flex items-start gap-2 text-sm text-muted-foreground">
+                  <CheckCircle2Icon className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
+                  Email envoyé à l&apos;invité(e). Le lien reste disponible
+                  ci-dessous si besoin de le partager toi-même.
+                </p>
+              )}
+              {deliveryStatus === "manual" && (
+                <p className="flex items-start gap-2 text-sm text-muted-foreground">
+                  <InfoIcon className="mt-0.5 h-4 w-4 shrink-0" />
+                  L&apos;envoi automatique d&apos;email n&apos;est pas configuré
+                  : partage ce lien manuellement avec l&apos;invité(e).
+                </p>
+              )}
+              {deliveryStatus === "failed" && (
+                <p className="flex items-start gap-2 text-sm text-destructive">
+                  <TriangleAlertIcon className="mt-0.5 h-4 w-4 shrink-0" />
+                  L&apos;email n&apos;a pas pu être envoyé. L&apos;invitation
+                  reste valable : partage ce lien manuellement.
+                </p>
+              )}
               <p className="text-sm text-muted-foreground">
                 Lien d&apos;invitation — affiché une seule fois, transmets-le
                 dès maintenant.

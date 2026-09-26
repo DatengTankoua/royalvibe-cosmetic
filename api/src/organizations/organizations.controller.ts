@@ -1,4 +1,13 @@
-import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { OrganizationsService } from './organizations.service';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -6,6 +15,7 @@ import { CurrentOrganization } from '../auth/decorators/current-organization.dec
 import type { ResolvedOrganizationContext } from './organizations.service';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
+import { InvitationCreateThrottlerGuard } from '../common/invitation-rate-limiting';
 import { User } from '../users/schemas/user.schema';
 
 /**
@@ -20,6 +30,15 @@ import { User } from '../users/schemas/user.schema';
 export class OrganizationsController {
   constructor(private readonly organizationsService: OrganizationsService) {}
 
+  // Rate limiting (correction sécurité 1-10B) : fenêtre nommée dédiée
+  // (`invitation-create`, 5 créations / 60 s), tracker utilisateur+
+  // organisation — jamais les fenêtres de connexion (skip explicite) et
+  // jamais appliquée à GET/revoke ci-dessous (garde de MÉTHODE, pas de
+  // classe). S'exécute APRÈS les gardes globaux (Jwt/OrganizationGuard/
+  // PermissionGuard/RolesGuard) : un refus de permission ne consomme
+  // jamais ce quota.
+  @UseGuards(InvitationCreateThrottlerGuard)
+  @SkipThrottle({ 'login-short': true, 'login-long': true })
   @Post()
   create(
     @Body() dto: CreateInvitationDto,

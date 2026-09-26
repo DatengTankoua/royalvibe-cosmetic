@@ -1,11 +1,20 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { OrganizationsController } from './organizations.controller';
 import { OrganizationsService } from './organizations.service';
 import { ResolvedOrganizationContext } from './organizations.service';
 import { OrganizationRole } from './permissions';
 import { PERMISSIONS_KEY } from '../auth/decorators/permissions.decorator';
+import {
+  InvitationCreateThrottlerGuard,
+  createInvitationThrottlerWindow,
+} from '../common/invitation-rate-limiting';
 import type { User } from '../users/schemas/user.schema';
+
+// Clé interne de `@nestjs/throttler` (`THROTTLER_SKIP`, non ré-exportée par
+// l'index public du package — jamais d'import profond dans `dist/`).
+const THROTTLER_SKIP = 'THROTTLER:SKIP';
 
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const ORG_B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
@@ -47,8 +56,21 @@ describe('OrganizationsController — invitations (1-7B)', () => {
       (serviceStub as Record<string, jest.Mock>)[key].mockReset();
     }
     const module: TestingModule = await Test.createTestingModule({
+      // 1-10B : ThrottlerModule réel (même convention que
+      // auth.controller.spec.ts pour AuthThrottlerGuard) — seule la
+      // résolution DI de `@UseGuards` importe ici (jamais exécuté,
+      // `controller.create()` est appelé directement, hors pipeline
+      // HTTP/gardes).
+      imports: [
+        ThrottlerModule.forRoot({
+          throttlers: [createInvitationThrottlerWindow()],
+        }),
+      ],
       controllers: [OrganizationsController],
-      providers: [{ provide: OrganizationsService, useValue: serviceStub }],
+      providers: [
+        { provide: OrganizationsService, useValue: serviceStub },
+        InvitationCreateThrottlerGuard,
+      ],
     }).compile();
     controller = module.get(OrganizationsController);
   });
@@ -60,6 +82,30 @@ describe('OrganizationsController — invitations (1-7B)', () => {
     expect(
       Reflect.getMetadata(PERMISSIONS_KEY, OrganizationsController),
     ).toEqual(['members.invite']);
+  });
+
+  // 1-10B : la fenêtre `invitation-create` (tracker user+org) ne doit
+  // jamais s'appliquer aux fenêtres `login-short`/`login-long` du garde
+  // partagé, et réciproquement — vérifie l'exclusion déclarée sur `create`.
+  it('create exclut explicitement les fenêtres login-short/login-long (1-10B)', () => {
+    // Cast en `Record<string, unknown>` : lecture de métadonnées sur la
+    // référence de fonction, jamais un appel — évite le faux positif
+    // `unbound-method` (qui suppose un besoin de binding `this`).
+    const proto = OrganizationsController.prototype as unknown as Record<
+      string,
+      unknown
+    >;
+    const createHandler = proto.create;
+    const skipLoginShort = Reflect.getMetadata(
+      THROTTLER_SKIP + 'login-short',
+      createHandler,
+    );
+    const skipLoginLong = Reflect.getMetadata(
+      THROTTLER_SKIP + 'login-long',
+      createHandler,
+    );
+    expect(skipLoginShort).toBe(true);
+    expect(skipLoginLong).toBe(true);
   });
 
   describe('create (POST /organizations/invitations)', () => {

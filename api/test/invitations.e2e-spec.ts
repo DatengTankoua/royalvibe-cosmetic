@@ -75,6 +75,17 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       .post(`/organizations/invitations/${id}/revoke`)
       .set('Authorization', `Bearer ${token}`);
 
+  // Correction sécurité 1-10B : `POST /organizations/invitations` porte
+  // désormais une fenêtre `invitation-create` (5/60 s, tracker user+org)
+  // partageant le MÊME stockage mémoire que le rate limiting existant
+  // (0B.6). Réinitialisé avant CHAQUE test de ce fichier — sans cela, les
+  // nombreux appels `invite()` réutilisant les mêmes acteurs/organisations
+  // d'un test à l'autre épuiseraient ce quota (le comportement de limite
+  // lui-même est testé isolément dans invitation-rate-limiting.e2e-spec.ts).
+  beforeEach(() => {
+    moduleFixture.get(ThrottlerStorage).onApplicationShutdown();
+  });
+
   beforeAll(async () => {
     const replSet = await startEphemeralMongo();
     try {
@@ -295,7 +306,11 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       expect(res.status).toBe(201);
 
       const body = res.body as Record<string, unknown>;
-      expect(Object.keys(body).sort()).toEqual(['invitation', 'token']);
+      expect(Object.keys(body).sort()).toEqual([
+        'delivery',
+        'invitation',
+        'token',
+      ]);
       expect(Object.keys(body.invitation as object).sort()).toEqual([
         '_id',
         'email',
@@ -306,6 +321,9 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       ]);
       expect(res.body.invitation.email).toBe(email);
       expect(res.body.invitation.status).toBe('pending');
+      // 1-10B : aucun RESEND_API_KEY/EMAIL_FROM/PUBLIC_APP_URL dans cette
+      // suite → configuration absente, jamais d'appel réseau, lien manuel.
+      expect(res.body.delivery).toEqual({ status: 'manual' });
       expect(JSON.stringify(res.body)).not.toContain('tokenHash');
 
       // Le hash en base (select:false) correspond exactement au token brut.
