@@ -4,6 +4,11 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthController, isPublicRegistrationEnabled } from './auth.controller';
 import { AuthService } from './auth.service';
 import { OrganizationsService } from '../organizations/organizations.service';
+import {
+  ALL_DELEGABLE_PERMISSIONS,
+  DelegablePermission,
+  OrganizationRole,
+} from '../organizations/permissions';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import {
@@ -205,5 +210,50 @@ describe('AuthController', () => {
     expect(listActiveOrganizationsMock).toHaveBeenCalledTimes(1);
     expect(listActiveOrganizationsMock).toHaveBeenCalledWith(AUTH_USER._id);
     expect(out).toEqual(list);
+  });
+
+  // ---- contexte d'autorisation (1-9C) ----
+
+  it('context : renvoie exclusivement les champs de request.organizationContext (jamais un lookup)', () => {
+    const organizationContext = {
+      userId: '111111111111111111111111',
+      organizationId: '222222222222222222222222',
+      membershipId: '333333333333333333333333',
+      role: OrganizationRole.SELLER,
+      permissions: ['analytics.read'] as DelegablePermission[],
+    };
+    const out = controller.context(organizationContext);
+    expect(out).toEqual({
+      userId: organizationContext.userId,
+      organizationId: organizationContext.organizationId,
+      role: OrganizationRole.SELLER,
+      permissions: ['analytics.read'],
+      // seller par défaut : sales.record + sales.view_own, ∪ analytics.read accordé.
+      effectivePermissions: expect.arrayContaining([
+        'sales.record',
+        'sales.view_own',
+        'analytics.read',
+      ]),
+    });
+    expect(out.effectivePermissions).toHaveLength(3);
+    // jamais membershipId (donnée interne, hors contrat de réponse) :
+    expect(out).not.toHaveProperty('membershipId');
+  });
+
+  it('context : owner sans permission supplémentaire → effectivePermissions couvre déjà tout le délégable', () => {
+    const organizationContext = {
+      userId: '111111111111111111111111',
+      organizationId: '222222222222222222222222',
+      membershipId: '333333333333333333333333',
+      role: OrganizationRole.OWNER,
+      permissions: [] as DelegablePermission[],
+    };
+    const out = controller.context(organizationContext);
+    expect(out.effectivePermissions).toEqual(
+      expect.arrayContaining(ALL_DELEGABLE_PERMISSIONS as unknown as string[]),
+    );
+    expect(out.effectivePermissions).toHaveLength(
+      ALL_DELEGABLE_PERMISSIONS.length,
+    );
   });
 });

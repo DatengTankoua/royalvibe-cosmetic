@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { OrganizationsService } from '../organizations/organizations.service';
+import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
+import { effectivePermissions } from '../organizations/permissions';
 import { AuthThrottlerGuard } from '../common/auth-rate-limiting';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -17,6 +19,7 @@ import { AcceptInvitationDto } from './dto/accept-invitation.dto';
 import { Public } from './decorators/public.decorator';
 import { SkipOrganizationContext } from './decorators/skip-organization-context.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
+import { CurrentOrganization } from './decorators/current-organization.decorator';
 import { User } from '../users/schemas/user.schema';
 
 /**
@@ -106,5 +109,27 @@ export class AuthController {
   @Get('me')
   me(@CurrentUser() user: User) {
     return user;
+  }
+
+  // 1-9C — source unique et fiable des droits de l'organisation COURANTE
+  // pour le frontend (jamais `User.role`, jamais un décodage JWT côté
+  // client). Données exclusivement depuis `request.organizationContext`
+  // (branché par `OrganizationGuard`, aucune résolution/lookup ici).
+  @Get('context')
+  context(
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+  ) {
+    return {
+      userId: organizationContext.userId,
+      organizationId: organizationContext.organizationId,
+      role: organizationContext.role,
+      permissions: organizationContext.permissions,
+      effectivePermissions: [
+        ...effectivePermissions(
+          organizationContext.role,
+          organizationContext.permissions,
+        ),
+      ],
+    };
   }
 }

@@ -321,12 +321,26 @@ export class OrganizationsService {
   }
 
   /**
-   * Émission d'une invitation (1-6B.1, owner uniquement — vérifié par
-   * l'appelant). `now` est un paramètre pour une horloge testable (défaut :
-   * horloge réelle) — les 72h d'expiration sont calculées ici, jamais au
-   * client. Refuse : email déjà membre actif de CETTE org, ou invitation
-   * `pending` déjà émise (une invitation `pending` expirée est d'abord
-   * marquée `expired`, elle ne bloque plus une réémission).
+   * Émission d'une invitation (1-6B.1). `now` est un paramètre pour une
+   * horloge testable (défaut : horloge réelle) — les 72h d'expiration sont
+   * calculées ici, jamais au client. Refuse : email déjà membre actif de
+   * CETTE org, ou invitation `pending` déjà émise (une invitation `pending`
+   * expirée est d'abord marquée `expired`, elle ne bloque plus une
+   * réémission).
+   *
+   * CORRECTION SÉCURITÉ (1-9C) : `PermissionGuard` ne vérifie que la
+   * permission `members.invite` de l'acteur, jamais que le rôle/permissions
+   * DE L'INVITATION restent dans les droits de l'acteur — un acteur
+   * délégué `members.invite` seul pouvait émettre une invitation
+   * `role=admin` (permissions par défaut = tout le délégable) ou greffer
+   * une permission qu'il ne possède pas lui-même. La membership de l'acteur
+   * est donc RELUE ici (jamais depuis `organizationContext`/JWT/body,
+   * potentiellement obsolètes) et `effectivePermissions(dto.role, dto.
+   * permissions)` doit être un sous-ensemble de `effectivePermissions`
+   * de l'acteur (`isPermissionSubset`) — sinon 403 `PERMISSION_DENIED`
+   * AVANT toute lecture/écriture d'invitation. `owner` contourne cette
+   * borne (ses permissions effectives sont déjà l'ensemble complet, même
+   * convention que `updateMembership`).
    */
   async createInvitation(
     organizationId: string,
@@ -334,8 +348,32 @@ export class OrganizationsService {
     dto: CreateInvitationDto,
     now: Date = new Date(),
   ): Promise<{ invitation: InvitationView; token: string }> {
-    const email = dto.email.trim().toLowerCase();
     const orgOid = new Types.ObjectId(organizationId);
+
+    const actor = await this.membershipModel
+      .findOne({
+        organizationId: orgOid,
+        userId: new Types.ObjectId(invitedById),
+      })
+      .exec();
+    if (!actor || actor.status !== MembershipStatus.ACTIVE) {
+      throw new ForbiddenException(PERMISSION_DENIED_RESPONSE);
+    }
+    const actorEffective = effectivePermissions(actor.role, actor.permissions);
+    if (actor.role !== OrganizationRole.OWNER) {
+      if (!actorEffective.has('members.invite')) {
+        throw new ForbiddenException(PERMISSION_DENIED_RESPONSE);
+      }
+      const invitedEffective = effectivePermissions(
+        dto.role,
+        dto.permissions ?? [],
+      );
+      if (!isPermissionSubset(invitedEffective, actorEffective)) {
+        throw new ForbiddenException(PERMISSION_DENIED_RESPONSE);
+      }
+    }
+
+    const email = dto.email.trim().toLowerCase();
 
     const existingUser = await this.usersService.findByEmail(email);
     if (existingUser) {

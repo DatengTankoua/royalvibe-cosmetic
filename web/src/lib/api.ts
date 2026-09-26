@@ -1,5 +1,9 @@
 import axios from "axios";
 import { getToken, clearAuth } from "./auth";
+import type {
+  DelegablePermission,
+  OrganizationRole,
+} from "./organization-permissions";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -230,6 +234,137 @@ export interface ApiOrganizationCurrent {
 export async function fetchCurrentOrganization(): Promise<ApiOrganizationCurrent> {
   const { data } = await apiClient.get<ApiOrganizationCurrent>(
     "/organizations/current",
+  );
+  return data;
+}
+
+// PATCH /organizations/current/branding (1-8A, multipart) — `branding.manage`.
+export async function updateOrganizationBranding(payload: {
+  name?: string;
+  brandColor?: string;
+  logo?: File;
+}): Promise<ApiOrganizationCurrent> {
+  const form = new FormData();
+  if (payload.name !== undefined) form.append("name", payload.name);
+  if (payload.brandColor !== undefined)
+    form.append("brandColor", payload.brandColor);
+  if (payload.logo) form.append("logo", payload.logo);
+  const { data } = await apiClient.patch<ApiOrganizationCurrent>(
+    "/organizations/current/branding",
+    form,
+  );
+  return data;
+}
+
+// DELETE /organizations/current/logo (1-8A) — `branding.manage`.
+export async function removeOrganizationLogo(): Promise<ApiOrganizationCurrent> {
+  const { data } = await apiClient.delete<ApiOrganizationCurrent>(
+    "/organizations/current/logo",
+  );
+  return data;
+}
+
+// ─── Contexte d'autorisation (1-9C) ──────────────────────────────────────────
+// GET /auth/context — source unique et fiable de role/permissions/userId de
+// la membership courante ; jamais `ApiUser.role` (legacy) ni un décodage JWT
+// côté client pour décider des droits.
+export interface ApiAuthContext {
+  userId: string;
+  organizationId: string;
+  role: OrganizationRole;
+  permissions: DelegablePermission[];
+  effectivePermissions: DelegablePermission[];
+}
+
+export async function fetchAuthContext(): Promise<ApiAuthContext> {
+  const { data } = await apiClient.get<ApiAuthContext>("/auth/context");
+  return data;
+}
+
+// ─── Membres (1-7C) ──────────────────────────────────────────────────────────
+
+export interface ApiMember {
+  membershipId: string;
+  user: { _id: string; name: string; email: string };
+  role: OrganizationRole;
+  permissions: DelegablePermission[];
+  status: "active" | "suspended" | "revoked";
+  joinedAt: string;
+}
+
+// GET /organizations/members — `members.manage`.
+export async function fetchMembers(): Promise<ApiMember[]> {
+  const { data } = await apiClient.get<ApiMember[]>("/organizations/members");
+  return data;
+}
+
+// PATCH /organizations/members/:id — `members.manage`. Jamais `owner` en
+// `role` (rejeté par le backend) ; au moins un champ requis.
+export async function updateMember(
+  membershipId: string,
+  payload: {
+    role?: "admin" | "seller";
+    permissions?: DelegablePermission[];
+    status?: "active" | "suspended" | "revoked";
+  },
+): Promise<ApiMember> {
+  const { data } = await apiClient.patch<ApiMember>(
+    `/organizations/members/${membershipId}`,
+    payload,
+  );
+  return data;
+}
+
+// POST /organizations/members/:id/transfer-ownership — `@OwnerOnly` : le
+// rôle `owner` STRICT (jamais via `permissions`) est seul autorisé.
+export async function transferOwnership(
+  membershipId: string,
+): Promise<{ previousOwner: ApiMember; newOwner: ApiMember }> {
+  const { data } = await apiClient.post<{
+    previousOwner: ApiMember;
+    newOwner: ApiMember;
+  }>(`/organizations/members/${membershipId}/transfer-ownership`);
+  return data;
+}
+
+// ─── Invitations (1-6B.1) ────────────────────────────────────────────────────
+
+export interface ApiInvitation {
+  _id: string;
+  email: string;
+  role: OrganizationRole;
+  permissions: DelegablePermission[];
+  status: "pending" | "accepted" | "revoked" | "expired";
+  expiresAt: string;
+}
+
+// GET /organizations/invitations — `members.invite`.
+export async function fetchInvitations(): Promise<ApiInvitation[]> {
+  const { data } = await apiClient.get<ApiInvitation[]>(
+    "/organizations/invitations",
+  );
+  return data;
+}
+
+// POST /organizations/invitations — `members.invite`. `token` est le
+// jeton brut, renvoyé UNE SEULE fois : jamais persisté ni journalisé
+// côté appelant (aucun stockage local/session, aucun log).
+export async function createInvitation(payload: {
+  email: string;
+  role: "admin" | "seller";
+  permissions?: DelegablePermission[];
+}): Promise<{ invitation: ApiInvitation; token: string }> {
+  const { data } = await apiClient.post<{
+    invitation: ApiInvitation;
+    token: string;
+  }>("/organizations/invitations", payload);
+  return data;
+}
+
+// POST /organizations/invitations/:id/revoke — `members.invite`.
+export async function revokeInvitation(id: string): Promise<ApiInvitation> {
+  const { data } = await apiClient.post<ApiInvitation>(
+    `/organizations/invitations/${id}/revoke`,
   );
   return data;
 }

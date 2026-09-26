@@ -641,6 +641,12 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
   };
   let membershipModel: { findOne: jest.Mock };
   let usersService: { findByEmail: jest.Mock };
+  // Dispatch par userId (chaîne) : l'acteur (`invitedById`) ET l'éventuelle
+  // membership active d'un email déjà membre (`existingUser._id`) partagent
+  // le même modèle mais ne sont JAMAIS le même document dans les tests —
+  // un `jest.fn()` unique ne peut plus distinguer les deux requêtes depuis
+  // la correction anti-escalade (1-9C), qui relit l'acteur EN PREMIER.
+  let membershipByUserId: Map<string, Record<string, unknown> | null>;
 
   function invitationDoc(overrides: Record<string, unknown> = {}) {
     return {
@@ -655,6 +661,16 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
     };
   }
 
+  // Acteur par défaut de toutes les invitations préexistantes : `owner`
+  // actif (contourne l'anti-escalade, même convention que `updateMembership`).
+  function ownerActor(): Record<string, unknown> {
+    return {
+      role: OrganizationRole.OWNER,
+      permissions: [] as DelegablePermission[],
+      status: MembershipStatus.ACTIVE,
+    };
+  }
+
   async function build() {
     invitationModel = {
       findOne: jest.fn(() => ({ exec: () => Promise.resolve(null) })),
@@ -666,8 +682,14 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
       })),
       findOneAndUpdate: jest.fn(() => ({ exec: () => Promise.resolve(null) })),
     };
+    membershipByUserId = new Map([[OWNER_ID, ownerActor()]]);
     membershipModel = {
-      findOne: jest.fn(() => ({ exec: () => Promise.resolve(null) })),
+      findOne: jest.fn((query: { userId: { toString(): string } }) => ({
+        exec: () =>
+          Promise.resolve(
+            membershipByUserId.get(query.userId.toString()) ?? null,
+          ),
+      })),
     };
     usersService = { findByEmail: jest.fn().mockResolvedValue(null) };
 
@@ -758,11 +780,14 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
 
     it('email avec membership active existante dans CETTE org → 409 MEMBER_ALREADY_ACTIVE', async () => {
       await build();
+      const existingUserId = '998877665544332211009988';
       usersService.findByEmail.mockResolvedValue({
-        _id: new Types.ObjectId(OWNER_ID),
+        _id: new Types.ObjectId(existingUserId),
       });
-      membershipModel.findOne.mockReturnValue({
-        exec: () => Promise.resolve({ status: MembershipStatus.ACTIVE }),
+      // Distinct de l'acteur (`OWNER_ID`, déjà `owner` actif par défaut) —
+      // sinon la même clé de dispatch masquerait la relecture de l'acteur.
+      membershipByUserId.set(existingUserId, {
+        status: MembershipStatus.ACTIVE,
       });
 
       const error: unknown = await service
@@ -838,6 +863,196 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
         permissions: unknown[];
       };
       expect(created.permissions).toEqual([]);
+    });
+
+    // ---- CORRECTION SÉCURITÉ (1-9C) : anti-escalade des invitations ----
+    // `PermissionGuard` ne vérifie QUE `members.invite` ; jamais que le
+    // rôle/permissions DE L'INVITATION restent dans les droits de l'acteur.
+    // L'acteur est RELU ici (jamais depuis le body/JWT), donc chaque
+    // scénario contrôle son ID d'acteur explicitement (jamais `OWNER_ID`
+    // implicite) et vérifie ZÉRO écriture en cas de refus.
+    describe('anti-escalade — rôle/permissions de l’invitation ⊆ droits de l’acteur', () => {
+      const ADMIN_ACTOR_ID = '111122223333444455556666';
+      const SELLER_INVITER_ID = '222233334444555566667777';
+      const SELLER_PLAIN_ID = '333344445555666677778888';
+
+      it('owner invite admin (permissions par défaut) → succès', async () => {
+        await build();
+        const result = await service.createInvitation(
+          ORG_OBJECT_ID,
+          OWNER_ID,
+          { email: 'admin@example.com', role: OrganizationRole.ADMIN },
+          NOW,
+        );
+        expect(result.invitation.role).toBe(OrganizationRole.ADMIN);
+        expect(invitationModel.create).toHaveBeenCalledTimes(1);
+      });
+
+      it('admin invite seller dans ses droits (admin = tout le délégable par défaut) → succès', async () => {
+        await build();
+        membershipByUserId.set(ADMIN_ACTOR_ID, {
+          role: OrganizationRole.ADMIN,
+          permissions: [] as DelegablePermission[],
+          status: MembershipStatus.ACTIVE,
+        });
+        const result = await service.createInvitation(
+          ORG_OBJECT_ID,
+          ADMIN_ACTOR_ID,
+          {
+            email: 'seller@example.com',
+            role: OrganizationRole.SELLER,
+            permissions: ['analytics.read'] as DelegablePermission[],
+          },
+          NOW,
+        );
+        expect(result.invitation.role).toBe(OrganizationRole.SELLER);
+        expect(invitationModel.create).toHaveBeenCalledTimes(1);
+      });
+
+      it('seller délégué members.invite SEUL tente d’inviter role=admin → 403 PERMISSION_DENIED, zéro écriture', async () => {
+        await build();
+        membershipByUserId.set(SELLER_INVITER_ID, {
+          role: OrganizationRole.SELLER,
+          permissions: ['members.invite'] as DelegablePermission[],
+          status: MembershipStatus.ACTIVE,
+        });
+
+        const error: unknown = await service
+          .createInvitation(
+            ORG_OBJECT_ID,
+            SELLER_INVITER_ID,
+            { email: 'escalated@example.com', role: OrganizationRole.ADMIN },
+            NOW,
+          )
+          .catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(ForbiddenException);
+        expect((error as ForbiddenException).getStatus()).toBe(403);
+        expect((error as ForbiddenException).getResponse()).toMatchObject({
+          code: 'PERMISSION_DENIED',
+        });
+        expect(invitationModel.create).not.toHaveBeenCalled();
+        // Aucune lecture d'email/pending n'a même lieu : le refus intervient
+        // AVANT toute autre logique métier.
+        expect(usersService.findByEmail).not.toHaveBeenCalled();
+      });
+
+      it('seller tente de déléguer une permission qu’il ne possède pas lui-même → 403, zéro écriture', async () => {
+        await build();
+        membershipByUserId.set(SELLER_INVITER_ID, {
+          role: OrganizationRole.SELLER,
+          permissions: ['members.invite'] as DelegablePermission[],
+          status: MembershipStatus.ACTIVE,
+        });
+
+        const error: unknown = await service
+          .createInvitation(
+            ORG_OBJECT_ID,
+            SELLER_INVITER_ID,
+            {
+              email: 'over-privileged@example.com',
+              role: OrganizationRole.SELLER,
+              permissions: ['members.manage'] as DelegablePermission[],
+            },
+            NOW,
+          )
+          .catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(ForbiddenException);
+        expect((error as ForbiddenException).getResponse()).toMatchObject({
+          code: 'PERMISSION_DENIED',
+        });
+        expect(invitationModel.create).not.toHaveBeenCalled();
+      });
+
+      it('seller invite un seller avec un sous-ensemble strictement autorisé de ses propres permissions → succès', async () => {
+        await build();
+        membershipByUserId.set(SELLER_INVITER_ID, {
+          role: OrganizationRole.SELLER,
+          permissions: [
+            'members.invite',
+            'analytics.read',
+          ] as DelegablePermission[],
+          status: MembershipStatus.ACTIVE,
+        });
+
+        const result = await service.createInvitation(
+          ORG_OBJECT_ID,
+          SELLER_INVITER_ID,
+          {
+            email: 'peer@example.com',
+            role: OrganizationRole.SELLER,
+            permissions: ['analytics.read'] as DelegablePermission[],
+          },
+          NOW,
+        );
+
+        expect(result.invitation.role).toBe(OrganizationRole.SELLER);
+        expect(invitationModel.create).toHaveBeenCalledTimes(1);
+      });
+
+      it('acteur sans members.invite (permission absente) → 403 PERMISSION_DENIED, zéro écriture', async () => {
+        await build();
+        membershipByUserId.set(SELLER_PLAIN_ID, {
+          role: OrganizationRole.SELLER,
+          permissions: [] as DelegablePermission[],
+          status: MembershipStatus.ACTIVE,
+        });
+
+        const error: unknown = await service
+          .createInvitation(
+            ORG_OBJECT_ID,
+            SELLER_PLAIN_ID,
+            { email: 'x@example.com', role: OrganizationRole.SELLER },
+            NOW,
+          )
+          .catch((e: unknown) => e);
+
+        expect((error as ForbiddenException).getResponse()).toMatchObject({
+          code: 'PERMISSION_DENIED',
+        });
+        expect(invitationModel.create).not.toHaveBeenCalled();
+      });
+
+      it('acteur absent (aucune membership dans cette organisation) → 403 PERMISSION_DENIED, zéro écriture', async () => {
+        await build();
+        const error: unknown = await service
+          .createInvitation(
+            ORG_OBJECT_ID,
+            '999988887777666655554444',
+            { email: 'x@example.com', role: OrganizationRole.SELLER },
+            NOW,
+          )
+          .catch((e: unknown) => e);
+
+        expect((error as ForbiddenException).getResponse()).toMatchObject({
+          code: 'PERMISSION_DENIED',
+        });
+        expect(invitationModel.create).not.toHaveBeenCalled();
+      });
+
+      it('acteur inactif (membership suspendue) → 403 PERMISSION_DENIED, zéro écriture', async () => {
+        await build();
+        membershipByUserId.set(SELLER_PLAIN_ID, {
+          role: OrganizationRole.SELLER,
+          permissions: ['members.invite'] as DelegablePermission[],
+          status: MembershipStatus.SUSPENDED,
+        });
+
+        const error: unknown = await service
+          .createInvitation(
+            ORG_OBJECT_ID,
+            SELLER_PLAIN_ID,
+            { email: 'x@example.com', role: OrganizationRole.SELLER },
+            NOW,
+          )
+          .catch((e: unknown) => e);
+
+        expect((error as ForbiddenException).getResponse()).toMatchObject({
+          code: 'PERMISSION_DENIED',
+        });
+        expect(invitationModel.create).not.toHaveBeenCalled();
+      });
     });
   });
 

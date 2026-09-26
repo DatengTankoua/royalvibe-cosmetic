@@ -1,21 +1,25 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { LogOutIcon, StoreIcon } from "lucide-react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { Building2Icon, LogOutIcon, StoreIcon } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 import { OrganizationShellContext } from "@/contexts/organization-shell-context";
 import { Wordmark } from "@/components/brand/wordmark";
 import {
   fetchActiveOrganizations,
+  fetchAuthContext,
   fetchCurrentOrganization,
   getApiErrorMessage,
+  type ApiAuthContext,
   type ApiOrganizationCurrent,
   type SelectableOrganization,
 } from "@/lib/api";
 
-// Shell authentifié partagé pour les pages /app (1-9B) : header desktop +
-// navigation mobile fixe, branding organisation, switch multi-organisation.
+// Shell authentifié partagé pour les pages /app (1-9B/1-9C) : header desktop +
+// navigation mobile fixe, branding organisation, switch multi-organisation,
+// section « Organisation » (branding/membres/invitations).
 export default function AppShellLayout({
   children,
 }: {
@@ -24,11 +28,16 @@ export default function AppShellLayout({
   const { user, isLoading, sessionVersion, logout, switchOrganization } =
     useAuth();
   const router = useRouter();
+  const pathname = usePathname();
   const [organization, setOrganization] =
     useState<ApiOrganizationCurrent | null>(null);
   const [organizations, setOrganizations] = useState<SelectableOrganization[]>(
     [],
   );
+  // 1-9C : `null` tant que non chargé/en échec — l'absence masque
+  // simplement la section « Organisation » (fail-closed), le backend
+  // reste l'autorité finale sur chaque route.
+  const [authContext, setAuthContext] = useState<ApiAuthContext | null>(null);
   const [loadingOrg, setLoadingOrg] = useState(true);
   // Indépendantes : l'échec de l'une ne doit jamais écraser le résultat
   // valide de l'autre (branding vs liste des organisations).
@@ -39,6 +48,10 @@ export default function AppShellLayout({
   // Garde synchrone (l'état React ne se met à jour qu'au prochain rendu,
   // insuffisant contre un double-clic dans le même tick).
   const switchingRef = useRef(false);
+  // Incrémenté pour forcer un rechargement du branding/liste/contexte sans
+  // recharger toute la page (ex. après édition du branding, 1-9C).
+  const [refreshTick, setRefreshTick] = useState(0);
+  const refreshShell = () => setRefreshTick((v) => v + 1);
 
   useEffect(() => {
     if (!isLoading && !user) router.push("/auth/login");
@@ -52,11 +65,13 @@ export default function AppShellLayout({
     setListError(null);
     // `allSettled` : une organisation courante suspendue (403) ne doit
     // jamais empêcher l'exploitation d'une liste d'organisations valide,
-    // et vice-versa.
+    // et vice-versa. Le contexte d'autorisation suit la même logique
+    // (échec → section « Organisation » simplement masquée).
     Promise.allSettled([
       fetchCurrentOrganization(),
       fetchActiveOrganizations(),
-    ]).then(([currentResult, listResult]) => {
+      fetchAuthContext(),
+    ]).then(([currentResult, listResult, authContextResult]) => {
       if (cancelled) return;
       if (currentResult.status === "fulfilled") {
         setOrganization(currentResult.value);
@@ -69,12 +84,17 @@ export default function AppShellLayout({
       } else {
         setListError(getApiErrorMessage(listResult.reason));
       }
+      setAuthContext(
+        authContextResult.status === "fulfilled"
+          ? authContextResult.value
+          : null,
+      );
       setLoadingOrg(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [user, sessionVersion]);
+  }, [user, sessionVersion, refreshTick]);
 
   // Organisations sélectionnables : jamais celle déjà courante (si connue).
   const alternatives = organizations.filter(
@@ -111,8 +131,12 @@ export default function AppShellLayout({
 
   if (isLoading || !user) return null;
 
+  const isOrganizationSection = pathname.startsWith("/app/organization");
+
   return (
-    <OrganizationShellContext.Provider value={{ organization }}>
+    <OrganizationShellContext.Provider
+      value={{ organization, authContext, refreshShell }}
+    >
       <div className="flex min-h-full flex-1 flex-col">
         <header className="sticky top-0 z-40 border-b bg-background">
           <div className="mx-auto flex h-14 max-w-4xl items-center gap-3 px-4 sm:px-6">
@@ -130,6 +154,19 @@ export default function AppShellLayout({
                 ? "Chargement…"
                 : (organization?.name ?? brandingError)}
             </span>
+
+            {/* Organisation : branding lisible par tout membre actif, pas
+                de garde de permission sur ce lien (le backend reste
+                l'autorité par route/onglet). */}
+            <Link
+              href="/app/organization"
+              className={`hidden items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium hover:bg-muted sm:inline-flex ${
+                isOrganizationSection ? "bg-muted" : ""
+              }`}
+            >
+              <Building2Icon className="h-3.5 w-3.5" />
+              Organisation
+            </Link>
 
             <div className="ml-auto flex items-center gap-2">
               <div className="relative">
@@ -218,13 +255,23 @@ export default function AppShellLayout({
 
         <nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
           <div className="flex h-16 items-stretch">
-            <div
+            <Link
+              href="/app"
               className="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium"
               style={{ color: "var(--brand-navy)" }}
             >
               <StoreIcon className="h-5 w-5" />
               Stock Master
-            </div>
+            </Link>
+            <Link
+              href="/app/organization"
+              className={`flex flex-1 flex-col items-center justify-center gap-0.5 text-xs ${
+                isOrganizationSection ? "text-primary" : "text-muted-foreground"
+              }`}
+            >
+              <Building2Icon className="h-5 w-5" />
+              Organisation
+            </Link>
             <button
               type="button"
               onClick={handleLogout}

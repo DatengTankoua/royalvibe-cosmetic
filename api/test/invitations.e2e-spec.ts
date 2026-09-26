@@ -477,6 +477,178 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
     });
   });
 
+  // CORRECTION SÉCURITÉ (1-9C) : `PermissionGuard` ne vérifie que la
+  // permission `members.invite` de l'acteur, jamais que le rôle/permissions
+  // DE L'INVITATION restent dans ses droits effectifs. Ces requêtes sont
+  // envoyées directement via `supertest` — un client HTTP brut, AUCUN
+  // frontend en jeu — la preuve que l'API refuse l'escalade indépendamment
+  // de tout filtrage côté client.
+  describe('Anti-escalade des invitations (1-9C) — requêtes API forgées, frontend non-autorité', () => {
+    const escalationEmail = (label: string) =>
+      `escalation-${label}-${Date.now()}@royalvibe.test`;
+
+    it('seller délégué members.invite SEUL tente role=admin (requête forgée) → 403 PERMISSION_DENIED, zéro écriture', async () => {
+      const email = escalationEmail('admin-role');
+      const inviteOnlyEmail = `invite-only-a-${Date.now()}@royalvibe.test`;
+      const inviteOnly = await userModel.create({
+        name: 'Invite Only Seller',
+        email: inviteOnlyEmail,
+        password: await bcrypt.hash(PASSWORD, 10),
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgAId),
+        userId: inviteOnly._id,
+        role: 'seller',
+        status: 'active',
+        permissions: ['members.invite'],
+      });
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: inviteOnlyEmail,
+          password: PASSWORD,
+          organizationId: orgAId,
+        });
+      expect(login.status).toBe(201);
+      const inviteOnlyToken = login.body.access_token as string;
+
+      const before = await invitationModel.countDocuments();
+      // Requête forgée : un client HTTP brut peut envoyer n'importe quel
+      // `role`/`permissions` autorisé par le DTO — la validation de forme
+      // (whitelist) laisse passer `role: 'admin'`, seule l'autorisation
+      // métier doit le refuser.
+      const res = await invite(inviteOnlyToken, { email, role: 'admin' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('PERMISSION_DENIED');
+      expect(await invitationModel.countDocuments()).toBe(before);
+      expect(await invitationModel.findOne({ email }).exec()).toBeNull();
+    });
+
+    it('seller délégué members.invite SEUL tente de greffer une permission qu’il ne possède pas → 403, zéro écriture', async () => {
+      const email = escalationEmail('extra-perm');
+      const inviteOnlyEmail = `invite-only-b-${Date.now()}@royalvibe.test`;
+      const inviteOnly = await userModel.create({
+        name: 'Invite Only Seller 2',
+        email: inviteOnlyEmail,
+        password: await bcrypt.hash(PASSWORD, 10),
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgAId),
+        userId: inviteOnly._id,
+        role: 'seller',
+        status: 'active',
+        permissions: ['members.invite'],
+      });
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: inviteOnlyEmail,
+          password: PASSWORD,
+          organizationId: orgAId,
+        });
+      expect(login.status).toBe(201);
+      const inviteOnlyToken = login.body.access_token as string;
+
+      const before = await invitationModel.countDocuments();
+      const res = await invite(inviteOnlyToken, {
+        email,
+        role: 'seller',
+        permissions: ['members.manage'],
+      });
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('PERMISSION_DENIED');
+      expect(await invitationModel.countDocuments()).toBe(before);
+    });
+
+    it('seller invite un seller avec un sous-ensemble strictement autorisé de ses propres permissions → 201', async () => {
+      const email = escalationEmail('allowed-subset');
+      const delegatedEmail = `invite-analytics-${Date.now()}@royalvibe.test`;
+      const delegated = await userModel.create({
+        name: 'Invite + Analytics Seller',
+        email: delegatedEmail,
+        password: await bcrypt.hash(PASSWORD, 10),
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgAId),
+        userId: delegated._id,
+        role: 'seller',
+        status: 'active',
+        permissions: ['members.invite', 'analytics.read'],
+      });
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: delegatedEmail,
+          password: PASSWORD,
+          organizationId: orgAId,
+        });
+      expect(login.status).toBe(201);
+      const delegatedToken = login.body.access_token as string;
+
+      const res = await invite(delegatedToken, {
+        email,
+        role: 'seller',
+        permissions: ['analytics.read'],
+      });
+
+      expect(res.status).toBe(201);
+      expect(res.body.invitation.permissions).toEqual(['analytics.read']);
+    });
+
+    it('isolation : admin de l’organisation B, seulement seller+members.invite dans A, ne peut PAS exploiter son rôle B depuis A', async () => {
+      const email = escalationEmail('cross-org');
+      const crossEmail = `cross-org-admin-${Date.now()}@royalvibe.test`;
+      const crossUser = await userModel.create({
+        name: 'Cross Org User',
+        email: crossEmail,
+        password: await bcrypt.hash(PASSWORD, 10),
+      });
+      // Admin ACTIF réel dans B (permissions par défaut = tout le délégable) :
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgBId),
+        userId: crossUser._id,
+        role: 'admin',
+        status: 'active',
+      });
+      // Seulement `members.invite` dans A — jamais admin ici :
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgAId),
+        userId: crossUser._id,
+        role: 'seller',
+        status: 'active',
+        permissions: ['members.invite'],
+      });
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: crossEmail,
+          password: PASSWORD,
+          organizationId: orgAId,
+        });
+      expect(login.status).toBe(201);
+      const crossToken = login.body.access_token as string;
+
+      const before = await invitationModel.countDocuments();
+      // Contexte HTTP = organisation A (JWT) : la relecture serveur de
+      // l'acteur doit filtrer par (organizationId=A, userId) — jamais par
+      // userId seul, sinon la membership `admin` de B fuiterait ici.
+      const res = await invite(crossToken, { email, role: 'admin' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('PERMISSION_DENIED');
+      expect(await invitationModel.countDocuments()).toBe(before);
+    });
+
+    it('owner A conserve la capacité normale d’inviter admin (contrôle positif, non régressé)', async () => {
+      const email = escalationEmail('owner-control');
+      const res = await invite(ownerAToken, { email, role: 'admin' });
+      expect(res.status).toBe(201);
+      expect(res.body.invitation.role).toBe('admin');
+    });
+  });
+
   describe('Acceptation (POST /auth/invitations/accept) — 1-6B.2', () => {
     const clearThrottle = (): void => {
       moduleFixture.get(ThrottlerStorage).onApplicationShutdown();
