@@ -21,11 +21,17 @@ export function useProducts(sectionId?: string) {
   const [isOffline, setIsOffline] = useState(false);
   const socket = useSocket();
 
+  // 1-11C.3 : début de la dernière requête RÉUSSIE — une vente locale
+  // confirmée après cet instant n'est pas encore reflétée dans `products`.
+  const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
+
   const load = useCallback(async () => {
     setIsLoading(true);
+    const requestedAt = Date.now();
     try {
       const data = await fetchProducts(sectionId);
       setProducts(data);
+      setLoadedAt(requestedAt);
       setError(null);
       setIsOffline(false);
     } catch (err) {
@@ -121,6 +127,8 @@ export function useProducts(sectionId?: string) {
     isLoading,
     error,
     isOffline,
+    reload: load,
+    loadedAt,
     addProduct,
     editProduct,
     removeProduct,

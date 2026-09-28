@@ -22,6 +22,10 @@ import {
   type ApiSale,
 } from "@/lib/api";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
+import {
+  useIndicativeStock,
+  useOfflineSales,
+} from "@/contexts/offline-sales-context";
 import { hasPermission } from "@/lib/organization-permissions";
 import { fmtXof } from "@/lib/currency";
 
@@ -113,11 +117,16 @@ export default function ProductDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [editSale, setEditSale] = useState<ApiSale | null>(null);
 
+  // 1-11C.3 : début de la dernière requête réussie (voir `reservesStock`).
+  const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
+
   const load = useCallback(async () => {
     setIsLoading(true);
+    const requestedAt = Date.now();
     try {
       const data = await fetchProduct(params.id);
       setDetail(data);
+      setLoadedAt(requestedAt);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -128,6 +137,17 @@ export default function ProductDetailPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // 1-11C.3 : rechargement après confirmation serveur d'une vente locale.
+  const { syncedVersion } = useOfflineSales();
+  useEffect(() => {
+    if (syncedVersion > 0) void load();
+  }, [syncedVersion, load]);
+  const indicative = useIndicativeStock(
+    params.id,
+    detail?.remainingQuantity ?? 0,
+    loadedAt,
+  );
 
   const canEditSale = (sale: ApiSale) =>
     canRecordSale &&
@@ -199,6 +219,7 @@ export default function ProductDetailPage() {
                   productName={detail.name}
                   targetPrice={detail.salePrice}
                   remainingStock={detail.remainingQuantity}
+                  serverLoadedAt={loadedAt}
                   onSaleRecorded={load}
                 />
               )}
@@ -214,7 +235,12 @@ export default function ProductDetailPage() {
               },
               { label: "Prix de vente cible", value: fmt(detail.salePrice) },
               { label: "Stock initial", value: detail.initialQuantity },
-              { label: "Stock restant", value: detail.remainingQuantity },
+              indicative.hasReservation
+                ? {
+                    label: "Stock indicatif",
+                    value: `${indicative.value} (serveur : ${detail.remainingQuantity})`,
+                  }
+                : { label: "Stock restant", value: detail.remainingQuantity },
               { label: "Unités vendues", value: detail.unitsSold },
               {
                 label: "Coût total d'achat",

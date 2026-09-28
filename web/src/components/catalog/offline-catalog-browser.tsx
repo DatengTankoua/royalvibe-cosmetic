@@ -1,7 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowLeftIcon, FolderIcon, ImageOffIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  FolderIcon,
+  ImageOffIcon,
+  ShoppingCartIcon,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +16,12 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { OfflineProductCard } from "@/components/products/offline-product-card";
+import { SaleFormDialog } from "@/components/products/record-sale-dialog";
+import { Button } from "@/components/ui/button";
+import {
+  useIndicativeStock,
+  useOfflineSales,
+} from "@/contexts/offline-sales-context";
 import { fmtXof } from "@/lib/currency";
 import {
   scopeKey,
@@ -33,8 +44,10 @@ const STATUS_VARIANT = {
 // Navigateur de catalogue hors ligne (1-11B, correction) : navigation
 // interne en mémoire dans le snapshot déjà synchronisé — jamais de
 // `router.push`/`Link` vers une route dynamique (/app/catalog/[id],
-// /app/catalog/products/[id]) tant qu'on est hors ligne. Lecture seule
-// stricte, aucune action create/update/delete/upload n'existe ici.
+// /app/catalog/products/[id]) tant qu'on est hors ligne. Aucune action
+// create/update/delete/upload sur le catalogue. 1-11C.3 : seule action
+// possible, la saisie d'une vente dans l'outbox locale, et uniquement si
+// la capacité hors ligne `canRecordSales` est valide.
 export function OfflineCatalogBrowser({
   snapshot,
 }: {
@@ -42,6 +55,12 @@ export function OfflineCatalogBrowser({
 }) {
   const [stack, setStack] = useState<{ id: string; name: string }[]>([]);
   const [productId, setProductId] = useState<string | null>(null);
+  const [saleProductId, setSaleProductId] = useState<string | null>(null);
+  const { canRecordSales } = useOfflineSales();
+  const parsedUpdatedAt = Date.parse(snapshot.updatedAt);
+  const snapshotUpdatedAt = Number.isNaN(parsedUpdatedAt)
+    ? undefined
+    : parsedUpdatedAt;
 
   const currentParentId = stack.length ? stack[stack.length - 1].id : null;
 
@@ -72,6 +91,9 @@ export function OfflineCatalogBrowser({
 
   const openProduct = productId
     ? (snapshot.products.find((p) => p._id === productId) ?? null)
+    : null;
+  const saleProduct = saleProductId
+    ? (snapshot.products.find((p) => p._id === saleProductId) ?? null)
     : null;
 
   return (
@@ -126,6 +148,7 @@ export function OfflineCatalogBrowser({
             <OfflineProductCard
               key={p._id}
               product={p}
+              snapshotUpdatedAt={snapshotUpdatedAt}
               onSelect={() => setProductId(p._id)}
             />
           ))}
@@ -167,19 +190,90 @@ export function OfflineCatalogBrowser({
                 <span className="text-right font-medium">
                   {fmtXof(openProduct.salePrice)}
                 </span>
-                <span className="text-muted-foreground">Stock restant</span>
-                <span className="text-right">
-                  {openProduct.remainingQuantity} /{" "}
-                  {openProduct.initialQuantity}
-                </span>
+                <OfflineStockRows
+                  productId={openProduct._id}
+                  remaining={openProduct.remainingQuantity}
+                  loadedAt={snapshotUpdatedAt}
+                  initial={openProduct.initialQuantity}
+                />
               </div>
+              {canRecordSales && (
+                <OfflineSaleButton
+                  productId={openProduct._id}
+                  remaining={openProduct.remainingQuantity}
+                  loadedAt={snapshotUpdatedAt}
+                  onClick={() => {
+                    setSaleProductId(openProduct._id);
+                    setProductId(null);
+                  }}
+                />
+              )}
               <p className="text-xs text-muted-foreground">
-                Ventes, historique et analyses non disponibles hors connexion.
+                Historique et analyses non disponibles hors connexion. Le stock
+                affiché provient de la dernière synchronisation ; le serveur
+                reste l&apos;autorité finale.
               </p>
             </>
           )}
         </DialogContent>
       </Dialog>
+
+      {saleProduct && (
+        <SaleFormDialog
+          key={saleProduct._id}
+          open
+          onOpenChange={(v) => !v && setSaleProductId(null)}
+          productId={saleProduct._id}
+          productName={saleProduct.name}
+          targetPrice={saleProduct.salePrice}
+          remainingStock={saleProduct.remainingQuantity}
+          serverLoadedAt={snapshotUpdatedAt}
+        />
+      )}
     </div>
+  );
+}
+
+function OfflineStockRows({
+  productId,
+  remaining,
+  initial,
+  loadedAt,
+}: {
+  productId: string;
+  remaining: number;
+  initial: number;
+  loadedAt?: number;
+}) {
+  const indicative = useIndicativeStock(productId, remaining, loadedAt);
+  return (
+    <>
+      <span className="text-muted-foreground">
+        {indicative.hasReservation ? "Stock indicatif" : "Stock restant"}
+      </span>
+      <span className="text-right">
+        {indicative.value} / {initial}
+      </span>
+    </>
+  );
+}
+
+function OfflineSaleButton({
+  productId,
+  remaining,
+  loadedAt,
+  onClick,
+}: {
+  productId: string;
+  remaining: number;
+  loadedAt?: number;
+  onClick: () => void;
+}) {
+  const indicative = useIndicativeStock(productId, remaining, loadedAt);
+  return (
+    <Button size="sm" onClick={onClick} disabled={indicative.value === 0}>
+      <ShoppingCartIcon className="mr-1 h-4 w-4" />
+      Enregistrer une vente
+    </Button>
   );
 }

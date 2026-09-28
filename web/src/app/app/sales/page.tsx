@@ -1,8 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ClockIcon } from "lucide-react";
 import { fetchSales, getApiErrorMessage, type ApiSale } from "@/lib/api";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
+import {
+  useOfflineSales,
+  usePendingSalesHref,
+} from "@/contexts/offline-sales-context";
+import { PendingSalesAnchor } from "@/components/sales/pending-sales-nav";
 import { hasPermission } from "@/lib/organization-permissions";
 import { fmtXof } from "@/lib/currency";
 import { Card, CardContent } from "@/components/ui/card";
@@ -24,6 +30,9 @@ export default function SalesPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
+  // 1-11C.3 : liste rechargée après confirmation d'une vente locale.
+  const { unfinalizedCount, syncedVersion } = useOfflineSales();
+  const pendingLink = usePendingSalesHref();
 
   useEffect(() => {
     if (!authContext) return;
@@ -37,13 +46,29 @@ export default function SalesPage() {
       .then(setSales)
       .catch((err) => setError(getApiErrorMessage(err)))
       .finally(() => setIsLoading(false));
-  }, [authContext, canView, retryKey]);
+  }, [authContext, canView, retryKey, syncedVersion]);
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 sm:py-10">
-      <h1 className="text-2xl font-semibold">
-        {canViewAll ? "Toutes les ventes" : "Mes ventes"}
-      </h1>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-2xl font-semibold">
+          {canViewAll ? "Toutes les ventes" : "Mes ventes"}
+        </h1>
+        {/* 1-11C.3 : accès permanent depuis la page ventes. */}
+        <PendingSalesAnchor
+          href={pendingLink.href}
+          offline={pendingLink.offline}
+          className="inline-flex items-center gap-1.5 self-start rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-muted"
+        >
+          <ClockIcon className="h-3.5 w-3.5" aria-hidden />
+          Ventes en attente sur cet appareil
+          {unfinalizedCount > 0 && (
+            <span className="rounded-full bg-destructive px-1.5 text-[10px] font-semibold text-destructive-foreground">
+              {unfinalizedCount}
+            </span>
+          )}
+        </PendingSalesAnchor>
+      </div>
 
       {!authContext || (isLoading && canView) ? (
         <p className="text-sm text-muted-foreground">Chargement…</p>

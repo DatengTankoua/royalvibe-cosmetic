@@ -2,6 +2,7 @@ import { attachVersionChangeAutoClose } from "./offline-db-utils";
 import { readVerifiedIdentity } from "./offline-identity-db";
 import {
   OUTBOX_MAX_UNFINALIZED_PER_PARTITION,
+  allowedOperationActions,
   isPendingExpired,
   isSyncedPurgeable,
   isUnfinalized,
@@ -222,7 +223,11 @@ async function getMetaIn(
 
 export type EnqueueResult =
   | { ok: true; clientOperationId: string }
-  | { ok: false; reason: "identity" | "invalid" | "limit" | "unavailable" };
+  | {
+      ok: false;
+      reason:
+        "identity" | "invalid" | "limit" | "unavailable" | "not-replaceable";
+    };
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
 
@@ -276,6 +281,12 @@ function requestPersistentStorage(): void {
  * `clientOperationId` et `occurredAt` (heure réelle UTC) sont figés ICI, une
  * seule fois. Au-delà de 200 opérations non finalisées : refus, jamais
  * d'éviction.
+ *
+ * 1-11C.3 — `replaces` : correction d'un conflit. La NOUVELLE opération
+ * (nouvel UUID) est ajoutée et l'ancienne passe `abandoned` dans la MÊME
+ * transaction : jamais d'abandon sans remplaçant, jamais de réutilisation de
+ * l'ancienne clé. Refusé si l'ancienne n'est pas éditable
+ * (`allowedOperationActions`).
  */
 export async function enqueueOfflineSale(params: {
   userId: string;
@@ -283,6 +294,7 @@ export async function enqueueOfflineSale(params: {
   token: string | null;
   payload: Omit<OutboxSalePayload, "occurredAt">;
   display: { productName: string; unitPriceHint: number };
+  replaces?: string;
   now?: number;
 }): Promise<EnqueueResult> {
   if (!isIndexedDbAvailable() || typeof crypto?.randomUUID !== "function") {
@@ -297,10 +309,23 @@ export async function enqueueOfflineSale(params: {
   const { productId, quantity, salePrice, buyerName, buyerContact } =
     params.payload;
   try {
-    const added = await withTx([OPS, META], "readwrite", async (tx) => {
+    const outcome = await withTx([OPS, META], "readwrite", async (tx) => {
       const ops = await getPartitionOps(tx, partitionKey);
-      const unfinalized = ops.filter((op) => isUnfinalized(op.status)).length;
-      if (unfinalized >= OUTBOX_MAX_UNFINALIZED_PER_PARTITION) return false;
+      const replaced = params.replaces
+        ? ops.find((op) => op.clientOperationId === params.replaces)
+        : undefined;
+      if (
+        params.replaces &&
+        (!replaced || !allowedOperationActions(replaced).edit)
+      ) {
+        return "not-replaceable" as const;
+      }
+      const unfinalized = ops.filter(
+        (op) => isUnfinalized(op.status) && op !== replaced,
+      ).length;
+      if (unfinalized >= OUTBOX_MAX_UNFINALIZED_PER_PARTITION) {
+        return "limit" as const;
+      }
       const meta = await getMetaIn(tx, partitionKey);
       const operation: OutboxOperation = {
         schemaVersion: OUTBOX_SCHEMA_VERSION,
@@ -328,12 +353,19 @@ export async function enqueueOfflineSale(params: {
         updatedAt: now,
       };
       await req(tx.objectStore(OPS).add(operation));
+      if (replaced) {
+        await req(
+          tx
+            .objectStore(OPS)
+            .put({ ...replaced, status: "abandoned", updatedAt: now }),
+        );
+      }
       await req(
         tx.objectStore(META).put({ ...meta, nextSeq: meta.nextSeq + 1 }),
       );
-      return true;
+      return "added" as const;
     });
-    if (!added) return { ok: false, reason: "limit" };
+    if (outcome !== "added") return { ok: false, reason: outcome };
   } catch {
     console.warn("Offline sales outbox: ajout indisponible.");
     return { ok: false, reason: "unavailable" };
@@ -343,7 +375,7 @@ export async function enqueueOfflineSale(params: {
   return { ok: true, clientOperationId };
 }
 
-/** Lecture vérifiée d'une partition (FIFO) — pour 1-11C.3 et le stock indicatif. */
+/** Lecture vérifiée d'une partition (FIFO) — interface et stock indicatif. */
 export async function readPartitionOperations(params: {
   userId: string;
   organizationId: string;
@@ -526,4 +558,207 @@ export async function releaseLease(
     delete next.lease;
     await req(tx.objectStore(META).put(next));
   });
+}
+
+// ─── Actions utilisateur vérifiées (1-11C.3) ─────────────────────────────────
+
+export interface PartitionState {
+  operations: OutboxOperation[];
+  blocked: OutboxPartitionMeta["blocked"] | null;
+}
+
+/** Opérations + blocage de la partition, après vérification d'identité. */
+export async function readPartitionState(params: {
+  userId: string;
+  organizationId: string;
+  token: string | null;
+}): Promise<PartitionState | null> {
+  if (!isIndexedDbAvailable()) return null;
+  const partitionKey = await verifiedPartition(params);
+  if (!partitionKey) return null;
+  if (!(await outboxDatabaseMayExist())) {
+    return { operations: [], blocked: null };
+  }
+  try {
+    return await withTx([OPS, META], "readonly", async (tx) => ({
+      operations: await getPartitionOps(tx, partitionKey),
+      blocked: (await getMetaIn(tx, partitionKey)).blocked ?? null,
+    }));
+  } catch {
+    console.warn("Offline sales outbox: lecture indisponible.");
+    return null;
+  }
+}
+
+export type OperationAction =
+  "sync-now" | "retry" | "abandon" | "remove-corrupted";
+
+/**
+ * Action explicite de l'utilisateur sur UNE opération de SA partition,
+ * autorisée par `allowedOperationActions` :
+ * - `sync-now` : pending → échéance immédiate (même UUID) ;
+ * - `retry` : conflit SERVER_UNAVAILABLE → pending, compteur remis à zéro
+ *   (même UUID : le serveur dédoublonne) ;
+ * - `abandon` : conflit → abandoned (confirmé par l'utilisateur) ;
+ * - `remove-corrupted` : conflit d'idempotence → abandoned ET levée du
+ *   blocage de partition (après export, confirmé par l'utilisateur).
+ * Rien n'est jamais supprimé physiquement ici.
+ */
+export async function applyOperationAction(
+  params: { userId: string; organizationId: string; token: string | null },
+  clientOperationId: string,
+  action: OperationAction,
+  now: number = Date.now(),
+): Promise<boolean> {
+  const partitionKey = await verifiedPartition(params);
+  if (!partitionKey) return false;
+  try {
+    const ok = await withTx([OPS, META], "readwrite", async (tx) => {
+      const store = tx.objectStore(OPS);
+      const op = (await req(store.get(clientOperationId))) as
+        OutboxOperation | undefined;
+      if (!op || op.partitionKey !== partitionKey) return false;
+      const allowed = allowedOperationActions(op);
+      let next: OutboxOperation;
+      switch (action) {
+        case "sync-now":
+          if (!allowed.syncNow) return false;
+          next = { ...op, nextAttemptAt: now };
+          break;
+        case "retry":
+          if (!allowed.retry) return false;
+          next = { ...op, status: "pending", attempts: 0, nextAttemptAt: now };
+          delete next.lastError;
+          break;
+        case "abandon":
+          if (!allowed.abandon) return false;
+          next = { ...op, status: "abandoned" };
+          break;
+        case "remove-corrupted": {
+          if (!allowed.removeCorrupted) return false;
+          next = { ...op, status: "abandoned" };
+          const meta = await getMetaIn(tx, partitionKey);
+          if (meta.blocked?.reason === "corruption") {
+            const unblocked: OutboxPartitionMeta = { ...meta };
+            delete unblocked.blocked;
+            await req(tx.objectStore(META).put(unblocked));
+          }
+          break;
+        }
+      }
+      await req(store.put({ ...next, updatedAt: now }));
+      return true;
+    });
+    if (ok) notifyOutboxChanged(action === "abandon" ? "updated" : "enqueued");
+    return ok;
+  } catch {
+    console.warn("Offline sales outbox: action indisponible.");
+    return false;
+  }
+}
+
+// ─── Logout : toutes les partitions de l'utilisateur courant ─────────────────
+
+const USER_SCAN_TIMEOUT_MS = 3000;
+
+function withRejectTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * Opérations NON finalisées de toutes les partitions de `userId` (plusieurs
+ * organisations possibles). `null` = lecture impossible (timeout/erreur) :
+ * l'appelant ne supprime alors RIEN.
+ */
+export async function readUserUnfinalizedOperations(
+  userId: string,
+): Promise<OutboxOperation[] | null> {
+  if (!isIndexedDbAvailable()) return null;
+  try {
+    if (!(await outboxDatabaseMayExist())) return [];
+    const all = await withRejectTimeout(
+      withTx([OPS], "readonly", (tx) =>
+        req(tx.objectStore(OPS).getAll() as IDBRequest<OutboxOperation[]>),
+      ),
+      USER_SCAN_TIMEOUT_MS,
+    );
+    return all
+      .filter((op) => op.userId === userId && isUnfinalized(op.status))
+      .sort((a, b) =>
+        a.partitionKey === b.partitionKey
+          ? a.seq - b.seq
+          : a.partitionKey.localeCompare(b.partitionKey),
+      );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Suppression DÉFINITIVE, uniquement sur double confirmation explicite au
+ * logout : toutes les opérations de `userId` (toutes partitions) et leurs
+ * métadonnées. Jamais appelée par défaut.
+ */
+export async function deleteUserOperations(userId: string): Promise<boolean> {
+  if (!isIndexedDbAvailable()) return false;
+  try {
+    await withRejectTimeout(
+      withTx([OPS, META], "readwrite", async (tx) => {
+        const store = tx.objectStore(OPS);
+        const all = (await req(store.getAll())) as OutboxOperation[];
+        const partitions = new Set<string>();
+        for (const op of all) {
+          if (op.userId !== userId) continue;
+          partitions.add(op.partitionKey);
+          await req(store.delete(op.clientOperationId));
+        }
+        for (const key of partitions) {
+          await req(tx.objectStore(META).delete(key));
+        }
+      }),
+      USER_SCAN_TIMEOUT_MS,
+    );
+    notifyOutboxChanged("updated");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** « Synchroniser maintenant » : toutes les pending de la partition à échéance immédiate. */
+export async function expeditePartition(
+  params: { userId: string; organizationId: string; token: string | null },
+  now: number = Date.now(),
+): Promise<boolean> {
+  const partitionKey = await verifiedPartition(params);
+  if (!partitionKey) return false;
+  try {
+    await withTx([OPS], "readwrite", async (tx) => {
+      for (const op of await getPartitionOps(tx, partitionKey)) {
+        if (op.status === "pending" && op.nextAttemptAt > now) {
+          await req(
+            tx
+              .objectStore(OPS)
+              .put({ ...op, nextAttemptAt: now, updatedAt: now }),
+          );
+        }
+      }
+    });
+    notifyOutboxChanged("enqueued");
+    return true;
+  } catch {
+    return false;
+  }
 }

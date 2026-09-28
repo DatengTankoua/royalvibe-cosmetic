@@ -24,6 +24,7 @@ import {
 import { useProducts } from "@/hooks/use-products";
 import { useOfflineCatalog } from "@/hooks/use-offline-catalog";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
+import { useOfflineSales } from "@/contexts/offline-sales-context";
 import { hasPermission } from "@/lib/organization-permissions";
 import type { OfflineCatalogSection } from "@/lib/offline-catalog-db";
 
@@ -70,7 +71,14 @@ export default function CatalogSectionPage() {
     addProduct,
     editProduct,
     removeProduct,
+    reload: reloadProducts,
+    loadedAt: productsLoadedAt,
   } = useProducts(params.id);
+  // 1-11C.3 : stock serveur rechargé après confirmation d'une vente locale.
+  const { syncedVersion } = useOfflineSales();
+  useEffect(() => {
+    if (syncedVersion > 0) void reloadProducts();
+  }, [syncedVersion, reloadProducts]);
   const { writeSectionScope } = useOfflineCatalog();
 
   const loadSubSections = useCallback(async () => {
@@ -298,6 +306,7 @@ export default function CatalogSectionPage() {
                   canEdit={canEditProduct}
                   canDelete={canManageProducts}
                   priority={i === 0}
+                  serverLoadedAt={productsLoadedAt}
                   onDelete={handleDeleteProduct}
                   onEdit={handleEditProduct}
                 />

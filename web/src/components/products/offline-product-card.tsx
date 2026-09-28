@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { fmtXof } from "@/lib/currency";
 import type { OfflineCatalogProduct } from "@/lib/offline-catalog-db";
+import { useIndicativeStock } from "@/contexts/offline-sales-context";
 
 const STATUS_CONFIG = {
   in_stock: {
@@ -32,15 +33,25 @@ const STATUS_CONFIG = {
 // affiché à la place) ni de métriques dérivées des ventes (unitsSold,
 // bénéfice…), jamais d'action create/update/delete/upload. Navigation
 // interne uniquement (onSelect) — jamais de route dynamique hors ligne.
+// 1-11C.3 : stock indicatif si des ventes locales attendent l'envoi.
 export function OfflineProductCard({
   product,
+  snapshotUpdatedAt,
   onSelect,
 }: {
   product: OfflineCatalogProduct;
+  // Écriture du snapshot (ms) : borne des ventes déjà reflétées (1-11C.3).
+  snapshotUpdatedAt?: number;
   onSelect: () => void;
 }) {
   const cfg = STATUS_CONFIG[product.status] ?? STATUS_CONFIG.in_stock;
   const StatusIcon = cfg.icon;
+  // 1-11C.3 : snapshot moins ventes locales non confirmées (≥ 0).
+  const indicative = useIndicativeStock(
+    product._id,
+    product.remainingQuantity,
+    snapshotUpdatedAt,
+  );
   return (
     <Card className="overflow-hidden">
       <button
@@ -77,9 +88,11 @@ export function OfflineProductCard({
           <span className="text-right font-medium">
             {fmtXof(product.salePrice)}
           </span>
-          <span className="text-muted-foreground">Stock restant</span>
+          <span className="text-muted-foreground">
+            {indicative.hasReservation ? "Stock indicatif" : "Stock restant"}
+          </span>
           <span className="text-right">
-            {product.remainingQuantity} / {product.initialQuantity}
+            {indicative.value} / {product.initialQuantity}
           </span>
         </div>
       </CardContent>

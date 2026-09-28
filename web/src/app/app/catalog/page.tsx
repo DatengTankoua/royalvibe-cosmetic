@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { useSections } from "@/hooks/use-sections";
 import { useOfflineCatalog } from "@/hooks/use-offline-catalog";
 import { OfflineCatalogBrowser } from "@/components/catalog/offline-catalog-browser";
+import { OfflineSalesPanelSection } from "@/components/sales/pending-sales-panel";
+import { useOfflineSales } from "@/contexts/offline-sales-context";
 import { SectionCard } from "@/components/sections/section-card";
 import { CreateSectionDialog } from "@/components/sections/create-section-dialog";
 import { Input } from "@/components/ui/input";
@@ -51,6 +53,7 @@ export default function CatalogPage() {
     renameSection,
   } = useSections();
   const { writeRootSections, readSnapshot } = useOfflineCatalog();
+  const { unfinalizedCount, offline } = useOfflineSales();
 
   // N'écrit qu'après un chargement COMPLET et réussi (jamais une réponse
   // partielle/en erreur) ; remplace intégralement le scope racine (jamais
@@ -141,7 +144,7 @@ export default function CatalogPage() {
               <p className="text-xs text-muted-foreground">
                 Dernière synchronisation :{" "}
                 {new Date(offlineSnapshot.updatedAt).toLocaleString("fr-FR")} —
-                ces données peuvent être anciennes. Lecture seule.
+                ces données peuvent être anciennes. Catalogue en lecture seule.
               </p>
             </div>
             <button
@@ -208,6 +211,13 @@ export default function CatalogPage() {
             </div>
           )}
         </>
+      )}
+
+      {/* 1-11C.3 : /app/catalog est la seule route /app servie hors ligne
+          (service worker inchangé) : les ventes locales y restent
+          consultables et traitables (ancre #offline-sales-panel). */}
+      {unfinalizedCount > 0 && (showingOffline || offline) && (
+        <OfflineSalesPanelSection count={unfinalizedCount} />
       )}
     </div>
   );

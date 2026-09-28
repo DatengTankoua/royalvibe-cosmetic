@@ -183,23 +183,174 @@ export function isSyncedPurgeable(updatedAt: number, now: number): boolean {
   return now - updatedAt > OUTBOX_SYNCED_RETENTION_MS;
 }
 
-// Stock INDICATIF : stock serveur connu moins les ventes locales non encore
-// confirmées (pending/syncing) de ce produit, jamais négatif. Le serveur
+// Opération minimale pour le calcul de réservation (pure).
+export interface StockReservationInput {
+  status: OutboxStatus;
+  attempts: number;
+  lastError?: OutboxLastError;
+  updatedAt: number;
+  payload: { productId: string; quantity: number };
+}
+
+/**
+ * 1-11C.3 — Une opération réserve-t-elle ENCORE du stock local ? Prudence :
+ * tout ce qui a pu (ou pourra) décrémenter le stock serveur sans être déjà
+ * reflété dans les données serveur affichées.
+ * - pending / syncing : oui ;
+ * - conflict : oui si l'issue serveur est incertaine (SERVER_UNAVAILABLE,
+ *   EXPIRED déjà tentée, corruption…), non sur refus métier certain ou
+ *   EXPIRED jamais envoyée ;
+ * - synced : oui tant que les données serveur affichées ont été CHARGÉES
+ *   (début de requête) avant la confirmation — sinon elles incluent déjà la
+ *   vente. `serverLoadedAt` inconnu → réservée (jamais de stock réaugmenté
+ *   artificiellement). Déjà appliquée puis annulée : non ;
+ * - abandoned : non.
+ */
+export function reservesStock(
+  op: StockReservationInput,
+  serverLoadedAt?: number,
+): boolean {
+  switch (op.status) {
+    case "pending":
+    case "syncing":
+      return true;
+    case "conflict":
+      return allowedOperationActions(op).mayBeRecorded;
+    case "synced":
+      if (op.lastError?.code === "SALE_OPERATION_ALREADY_APPLIED") return false;
+      return serverLoadedAt === undefined || serverLoadedAt < op.updatedAt;
+    default:
+      return false;
+  }
+}
+
+// Stock INDICATIF : stock serveur connu moins les ventes locales qui
+// réservent encore du stock (`reservesStock`), jamais négatif. Le serveur
 // reste l'autorité finale.
 export function computeIndicativeStock(
   remainingQuantity: number,
-  operations: ReadonlyArray<{
-    status: OutboxStatus;
-    payload: { productId: string; quantity: number };
-  }>,
+  operations: ReadonlyArray<StockReservationInput>,
   productId: string,
-): number {
+  serverLoadedAt?: number,
+): { value: number; reserved: number } {
   const reserved = operations
     .filter(
       (op) =>
-        (op.status === "pending" || op.status === "syncing") &&
-        op.payload.productId === productId,
+        op.payload.productId === productId && reservesStock(op, serverLoadedAt),
     )
     .reduce((sum, op) => sum + op.payload.quantity, 0);
-  return Math.max(0, remainingQuantity - reserved);
+  return { value: Math.max(0, remainingQuantity - reserved), reserved };
+}
+
+// ─── Actions utilisateur autorisées (1-11C.3) ────────────────────────────────
+
+export interface AllowedOperationActions {
+  // pending : échéance immédiate (même UUID).
+  syncNow: boolean;
+  // Corriger → NOUVELLE opération (nouvel UUID) remplaçant celle-ci.
+  edit: boolean;
+  // Renvoi manuel avec le MÊME UUID (SERVER_UNAVAILABLE).
+  retry: boolean;
+  // Abandon explicite (confirmation).
+  abandon: boolean;
+  // Conflit d'idempotence : export + retrait explicite, jamais de renvoi.
+  removeCorrupted: boolean;
+  // La vente a PU être enregistrée par le serveur (réponse perdue puis
+  // échec) : l'abandon doit être signalé comme risqué.
+  mayBeRecorded: boolean;
+}
+
+const DEFINITIVE_BUSINESS_REFUSALS = new Set([
+  "INSUFFICIENT_STOCK",
+  "SALE_DATE_OUT_OF_RANGE",
+  "PRODUCT_NOT_FOUND",
+  "VALIDATION_FAILED",
+]);
+
+/**
+ * Règles de résolution. Une correction (nouvel UUID) n'est permise que si la
+ * clé actuelle n'a CERTAINEMENT pas créé de vente :
+ * - refus métier du serveur pour CETTE clé (une clé déjà appliquée aurait été
+ *   rejouée en 201, jamais refusée en 4xx) ;
+ * - `EXPIRED` jamais envoyée (`attempts === 0`).
+ * Sinon (SERVER_UNAVAILABLE, EXPIRED déjà tentée) : seul le renvoi avec le
+ * même UUID ou l'abandon averti sont proposés — jamais de doublon possible.
+ */
+export function allowedOperationActions(op: {
+  status: OutboxStatus;
+  attempts: number;
+  lastError?: OutboxLastError;
+}): AllowedOperationActions {
+  const none: AllowedOperationActions = {
+    syncNow: false,
+    edit: false,
+    retry: false,
+    abandon: false,
+    removeCorrupted: false,
+    mayBeRecorded: false,
+  };
+  if (op.status === "pending") return { ...none, syncNow: true };
+  if (op.status !== "conflict") return none;
+  const error = op.lastError;
+  if (error?.kind === "corruption") {
+    return { ...none, removeCorrupted: true, mayBeRecorded: true };
+  }
+  if (error?.code === "SERVER_UNAVAILABLE") {
+    return { ...none, retry: true, abandon: true, mayBeRecorded: true };
+  }
+  if (error?.code === "EXPIRED") {
+    return op.attempts === 0
+      ? { ...none, edit: true, abandon: true }
+      : { ...none, abandon: true, mayBeRecorded: true };
+  }
+  if (
+    error?.kind === "business" &&
+    (DEFINITIVE_BUSINESS_REFUSALS.has(error.code ?? "") ||
+      (error.httpStatus !== undefined &&
+        error.httpStatus >= 400 &&
+        error.httpStatus < 500))
+  ) {
+    return { ...none, edit: true, abandon: true };
+  }
+  return { ...none, abandon: true, mayBeRecorded: op.attempts > 0 };
+}
+
+// Message GÉNÉRIQUE (jamais de texte serveur brut) pour une opération.
+export function describeOperationError(error?: OutboxLastError): string | null {
+  if (!error) return null;
+  switch (error.code) {
+    case "INSUFFICIENT_STOCK":
+      return "Stock insuffisant côté serveur.";
+    case "PRODUCT_NOT_FOUND":
+      return "Produit introuvable ou supprimé.";
+    case "SALE_DATE_OUT_OF_RANGE":
+      return "Date de vente hors de la période autorisée.";
+    case "VALIDATION_FAILED":
+      return "Données de vente refusées par le serveur.";
+    case "EXPIRED":
+      return "Vente en attente depuis plus de 14 jours : non envoyée automatiquement.";
+    case "SERVER_UNAVAILABLE":
+      return "Serveur indisponible après plusieurs tentatives.";
+    case "SALE_OPERATION_ALREADY_APPLIED":
+      return "Déjà enregistrée par le serveur, puis annulée.";
+    case "IDEMPOTENCY_KEY_REUSED":
+    case "IDEMPOTENCY_KEY_CONFLICT":
+    case "PARTITION_MISMATCH":
+      return "Incohérence détectée : exportez cette vente et contactez le support.";
+    case "ORGANIZATION_ACCESS_DENIED":
+    case "PERMISSION_DENIED":
+      return "Accès refusé par le serveur.";
+  }
+  switch (error.kind) {
+    case "network":
+      return "Réseau indisponible, nouvel essai automatique.";
+    case "server":
+      return "Serveur momentanément indisponible, nouvel essai automatique.";
+    case "auth":
+      return "Session expirée ou accès refusé.";
+    case "corruption":
+      return "Incohérence détectée : exportez cette vente et contactez le support.";
+    default:
+      return "Vente refusée par le serveur.";
+  }
 }

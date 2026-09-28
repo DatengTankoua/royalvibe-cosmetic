@@ -127,6 +127,15 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
+// 1-11C.3 : notifié AVANT une déconnexion forcée (401 sur le token courant)
+// — le moteur de synchronisation s'arrête, l'outbox est conservée, aucune
+// modale bloquante.
+let forcedLogoutListener: (() => void) | null = null;
+
+export function setForcedLogoutListener(listener: (() => void) | null): void {
+  forcedLogoutListener = listener;
+}
+
 function bearerOf(value: unknown): string | null {
   return typeof value === "string" && value.startsWith("Bearer ")
     ? value.slice("Bearer ".length)
@@ -145,6 +154,7 @@ apiClient.interceptors.response.use(
       // actuelle.
       bearerOf(error.config?.headers?.Authorization) === getToken()
     ) {
+      forcedLogoutListener?.();
       clearAuth();
       if (typeof window !== "undefined") {
         window.location.replace("/auth/login");
@@ -564,16 +574,8 @@ export async function fetchSales(productId?: string): Promise<ApiSale[]> {
   return data;
 }
 
-export async function createSale(payload: {
-  productId: string;
-  quantity: number;
-  salePrice: number;
-  buyerName?: string;
-  buyerContact?: string;
-}): Promise<ApiSale> {
-  const { data } = await apiClient.post<ApiSale>("/sales", payload);
-  return data;
-}
+// 1-11C.3 : plus aucun `POST /sales` direct — toute vente passe par
+// l'outbox (`enqueueOfflineSale`) puis `createSaleIdempotent`.
 
 // 1-11C.2 — envoi d'une vente de l'outbox hors ligne. `capturedToken` est
 // utilisé tel quel (jamais relu au milieu de la requête) ; `clientOperationId`

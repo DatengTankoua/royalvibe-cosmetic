@@ -1,4 +1,8 @@
-import { createSaleIdempotent, toSaleSyncOutcome } from "./api";
+import {
+  createSaleIdempotent,
+  setForcedLogoutListener,
+  toSaleSyncOutcome,
+} from "./api";
 import { getToken } from "./auth";
 import { isJwtExpired } from "./jwt";
 import { sha256Hex } from "./offline-db-utils";
@@ -88,6 +92,13 @@ export async function stopOfflineSalesSync(timeoutMs: number): Promise<void> {
     new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
   ]);
 }
+
+// 1-11C.3 : déconnexion forcée (401 du token courant) → arrêt immédiat,
+// outbox conservée.
+setForcedLogoutListener(() => {
+  stopped = true;
+  currentController?.abort();
+});
 
 export function resumeOfflineSalesSync(): void {
   stopped = false;

@@ -24,6 +24,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { fmtXof } from "@/lib/currency";
+import { useIndicativeStock } from "@/contexts/offline-sales-context";
 import type { ApiProduct } from "@/lib/api";
 
 const STATUS_CONFIG = {
@@ -51,6 +52,8 @@ interface ProductCardProps {
   canEdit: boolean;
   canDelete: boolean;
   priority?: boolean;
+  // Début de la requête serveur ayant fourni `product` (1-11C.3).
+  serverLoadedAt?: number;
   onDelete: (id: string) => void;
   onEdit: (product: ApiProduct) => void;
 }
@@ -60,6 +63,7 @@ export function ProductCard({
   canEdit,
   canDelete,
   priority = false,
+  serverLoadedAt,
   onDelete,
   onEdit,
 }: ProductCardProps) {
@@ -67,6 +71,12 @@ export function ProductCard({
   const StatusIcon = cfg.icon;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmEdit, setConfirmEdit] = useState(false);
+  // 1-11C.3 : stock serveur moins ventes locales non confirmées (≥ 0).
+  const indicative = useIndicativeStock(
+    product._id,
+    product.remainingQuantity,
+    serverLoadedAt,
+  );
 
   return (
     <>
@@ -113,9 +123,11 @@ export function ProductCard({
             <span className="text-right font-medium">
               {fmt(product.salePrice)}
             </span>
-            <span className="text-muted-foreground">Stock restant</span>
+            <span className="text-muted-foreground">
+              {indicative.hasReservation ? "Stock indicatif" : "Stock restant"}
+            </span>
             <span className="text-right">
-              {product.remainingQuantity} / {product.initialQuantity}
+              {indicative.value} / {product.initialQuantity}
             </span>
             <span className="text-muted-foreground">Vendus</span>
             <span className="text-right">{product.unitsSold ?? 0}</span>
