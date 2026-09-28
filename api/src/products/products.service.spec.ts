@@ -125,6 +125,11 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     expect((err as Error).message).toBe(
       `Product ${PRODUCT_OBJECT_ID} not found`,
     );
+    // 1-11C.1 : code stable ajouté, message historique conservé.
+    expect((err as NotFoundException).getResponse()).toEqual({
+      code: 'PRODUCT_NOT_FOUND',
+      message: `Product ${PRODUCT_OBJECT_ID} not found`,
+    });
 
     // 1-4C.1 : la relecture d'erreur cible UNIQUEMENT un produit actif du
     // MÊME tenant : `{_id, organizationId, deletedAt:null}`.
@@ -163,6 +168,11 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BadRequestException);
     expect((err as Error).message).toBe('Not enough stock. Available: 2');
+    expect((err as BadRequestException).getResponse()).toEqual({
+      code: 'INSUFFICIENT_STOCK',
+      message: 'Not enough stock. Available: 2',
+      available: 2,
+    });
     // la relecture d'erreur a bien eu lieu (une fois) :
     expect(productModel.findOne).toHaveBeenCalledTimes(1);
   });

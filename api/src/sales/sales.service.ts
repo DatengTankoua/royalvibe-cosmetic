@@ -1,9 +1,26 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel, InjectConnection } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { Connection } from 'mongoose';
 import { Sale, SaleDocument } from './schemas/sale.schema';
+import {
+  SaleOperation,
+  SaleOperationDocument,
+} from './schemas/sale-operation.schema';
 import { CreateSaleDto } from './dto/create-sale.dto';
+import { SALE_ERROR_CODES } from './sale-error-codes';
+import {
+  NormalizedSaleInput,
+  computeSaleRequestHash,
+  isSaleOperationDuplicateKeyError,
+  normalizeCreateSale,
+  resolveOccurredAt,
+} from './sale-idempotency';
 import { UpdateSaleDto } from './dto/update-sale.dto';
 import { ProductsService } from '../products/products.service';
 import { EventsGateway } from '../events/events.gateway';
@@ -12,8 +29,12 @@ import { AuditAction } from '../audit/schemas/audit-log.schema';
 
 @Injectable()
 export class SalesService {
+  private readonly logger = new Logger(SalesService.name);
+
   constructor(
     @InjectModel(Sale.name) private saleModel: Model<SaleDocument>,
+    @InjectModel(SaleOperation.name)
+    private saleOperationModel: Model<SaleOperationDocument>,
     @InjectConnection() private connection: Connection,
     private productsService: ProductsService,
     private eventsGateway: EventsGateway,
@@ -44,26 +65,153 @@ export class SalesService {
    * tenant est écrit dans la vente, passé à la décrémentation ATOMIQUE du
    * stock ET à l'audit `SOLD` — les trois écritures de la transaction. Le
    * DTO ne le porte jamais et ne le détermine pas.
+   *
+   * 1-11C.1 — IDEMPOTENCE : avec `clientOperationId`, une trace
+   * `SaleOperation` (index unique `{organizationId, clientOperationId}`) est
+   * la première écriture de la même transaction. Tout rejeu (séquentiel ou
+   * concurrent) renvoie la même vente sans stock, audit ni événement
+   * (`replay`). Sans clé : flux historique.
    */
   async create(
     organizationId: string,
     dto: CreateSaleDto,
     sellerId: string,
   ): Promise<SaleDocument> {
+    const input = normalizeCreateSale(dto);
+    if (dto.clientOperationId === undefined) {
+      // Flux historique : aucune déduplication.
+      return this.createFresh(
+        organizationId,
+        input,
+        sellerId,
+        resolveOccurredAt(input.occurredAt),
+      );
+    }
+
+    // 1-11C.1 — flux idempotent.
+    const clientOperationId = dto.clientOperationId;
+    const requestHash = computeSaleRequestHash(input);
+    const key = {
+      organizationId: new Types.ObjectId(organizationId),
+      clientOperationId,
+    };
+
+    // Chemin rapide : clé déjà appliquée → réponse rejouée, AVANT toute
+    // validation de plage de date (un rejeu tardif d'une vente appliquée
+    // doit toujours aboutir au même résultat).
+    const existing = await this.saleOperationModel.findOne(key).exec();
+    if (existing) {
+      return this.replay(organizationId, existing, sellerId, requestHash);
+    }
+
+    const occurredAt = resolveOccurredAt(input.occurredAt);
+    try {
+      return await this.createFresh(
+        organizationId,
+        input,
+        sellerId,
+        occurredAt,
+        { clientOperationId, requestHash },
+      );
+    } catch (error) {
+      // Rejeu concurrent : l'autre requête a commité la même clé. Seul
+      // l'E11000 de l'index idempotent est absorbé ; tout autre est relancé.
+      if (!isSaleOperationDuplicateKeyError(error)) throw error;
+      const winner = await this.saleOperationModel
+        .findOne(key)
+        .read('primary')
+        .exec();
+      if (!winner) throw error;
+      return this.replay(organizationId, winner, sellerId, requestHash);
+    }
+  }
+
+  /**
+   * Rejeu d'une clé déjà appliquée : AUCUNE écriture, AUCUN stock, AUCUN
+   * audit, AUCUN événement. Contrôles dans cet ordre :
+   * 1. autre vendeur → 409 `IDEMPOTENCY_KEY_CONFLICT`, sans aucune donnée ;
+   * 2. payload différent → 409 `IDEMPOTENCY_KEY_REUSED` ;
+   * 3. vente supprimée depuis → 409 `SALE_OPERATION_ALREADY_APPLIED` ;
+   * 4. sinon → la vente (même `_id`), dans sa représentation COURANTE
+   *    (modifications PATCH ultérieures incluses), vendeur peuplé comme la
+   *    réponse initiale. Statut HTTP 201 inchangé.
+   */
+  private async replay(
+    organizationId: string,
+    operation: SaleOperationDocument,
+    sellerId: string,
+    requestHash: string,
+  ): Promise<SaleDocument> {
+    if (operation.sellerId.toString() !== sellerId) {
+      throw new ConflictException({
+        code: SALE_ERROR_CODES.IDEMPOTENCY_KEY_CONFLICT,
+        message: "Clé d'opération déjà utilisée.",
+      });
+    }
+    if (operation.requestHash !== requestHash) {
+      throw new ConflictException({
+        code: SALE_ERROR_CODES.IDEMPOTENCY_KEY_REUSED,
+        message: "Clé d'opération déjà utilisée pour une autre vente.",
+      });
+    }
+    const sale = await this.saleModel
+      .findOne({
+        _id: operation.saleId,
+        organizationId: new Types.ObjectId(organizationId),
+      })
+      .populate('sellerId', 'name email')
+      .exec();
+    if (!sale) {
+      throw new ConflictException({
+        code: SALE_ERROR_CODES.SALE_OPERATION_ALREADY_APPLIED,
+        message: 'Vente déjà enregistrée puis supprimée.',
+      });
+    }
+    return sale;
+  }
+
+  private async createFresh(
+    organizationId: string,
+    input: NormalizedSaleInput,
+    sellerId: string,
+    occurredAt: Date,
+    idempotency?: { clientOperationId: string; requestHash: string },
+  ): Promise<SaleDocument> {
     const orgOid = new Types.ObjectId(organizationId);
+    // `_id` connu AVANT la transaction : la trace idempotente le référence
+    // dès sa première écriture.
+    const saleId = new Types.ObjectId();
     const session = await this.connection.startSession();
     let created: SaleDocument | undefined;
 
     try {
       await session.withTransaction(async () => {
+        // 0. (1-11C.1) Trace idempotente en PREMIÈRE écriture : un rejeu
+        //    concurrent de la même clé bute sur l'index unique (conflit
+        //    d'écriture puis E11000). Annulée avec le reste sur rollback.
+        if (idempotency) {
+          await this.saleOperationModel.create(
+            [
+              {
+                organizationId: orgOid,
+                clientOperationId: idempotency.clientOperationId,
+                sellerId: new Types.ObjectId(sellerId),
+                saleId,
+                requestHash: idempotency.requestHash,
+              },
+            ],
+            { session },
+          );
+        }
+
         // 1. Décrémentation ATOMIQUE et conditionnelle du stock tenant. Lève
         //    404 (produit absent/étranger/corbeillé) ou 400 (stock
         //    insuffisant) : la transaction est alors annulée, rien n'est
         //    persisté.
         const product = await this.productsService.decrementStock(
           organizationId,
-          dto.productId,
-          dto.quantity,
+          input.productId,
+          input.quantity,
           session,
         );
 
@@ -73,17 +221,19 @@ export class SalesService {
         const [sale] = await this.saleModel.create(
           [
             {
+              ...(idempotency ? { _id: saleId } : {}),
               organizationId: orgOid,
-              productId: new Types.ObjectId(dto.productId),
-              quantity: dto.quantity,
-              salePrice: dto.salePrice,
+              productId: new Types.ObjectId(input.productId),
+              quantity: input.quantity,
+              salePrice: input.salePrice,
               sellerId: new Types.ObjectId(sellerId),
               productName: product.name,
-              ...(dto.buyerName !== undefined
-                ? { buyerName: dto.buyerName }
+              occurredAt,
+              ...(input.buyerName !== null
+                ? { buyerName: input.buyerName }
                 : {}),
-              ...(dto.buyerContact !== undefined
-                ? { buyerContact: dto.buyerContact }
+              ...(input.buyerContact !== null
+                ? { buyerContact: input.buyerContact }
                 : {}),
             },
           ],
@@ -95,14 +245,17 @@ export class SalesService {
         //    annulée, l'audit ne subsiste pas.
         await this.auditService.log(
           organizationId,
-          dto.productId,
+          input.productId,
           AuditAction.SOLD,
           sellerId,
           {
             saleId: sale._id,
-            quantity: dto.quantity,
-            salePrice: dto.salePrice,
-            buyerName: dto.buyerName,
+            quantity: input.quantity,
+            salePrice: input.salePrice,
+            buyerName: input.buyerName ?? undefined,
+            ...(idempotency
+              ? { clientOperationId: idempotency.clientOperationId }
+              : {}),
           },
           session,
         );
@@ -124,11 +277,19 @@ export class SalesService {
     // à la session close.
     created.$session(null);
     const populated = await created.populate('sellerId', 'name email');
-    this.eventsGateway.emitToOrganization(
-      organizationId,
-      'sale:created',
-      populated,
-    );
+    // Best effort, UNE fois dans le flux normal : la vente est déjà commitée,
+    // un échec d'émission ne doit pas la transformer en erreur (un rejeu
+    // n'émettrait de toute façon plus rien). Aucune garantie « exactement
+    // une émission » en cas de crash entre le commit et cette ligne.
+    try {
+      this.eventsGateway.emitToOrganization(
+        organizationId,
+        'sale:created',
+        populated,
+      );
+    } catch {
+      this.logger.warn('sale:created non émis (best effort).');
+    }
     return populated;
   }
 

@@ -3,6 +3,7 @@ import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { Sale } from './schemas/sale.schema';
+import { SaleOperation } from './schemas/sale-operation.schema';
 import { SalesService } from './sales.service';
 import { ProductsService } from '../products/products.service';
 import { EventsGateway } from '../events/events.gateway';
@@ -134,6 +135,10 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
         SalesService,
         { provide: getConnectionToken(), useValue: fixture.connection },
         { provide: getModelToken(Sale.name), useValue: saleModel },
+        {
+          provide: getModelToken(SaleOperation.name),
+          useValue: { findOne: jest.fn(), create: jest.fn() },
+        },
         { provide: ProductsService, useValue: products },
         { provide: EventsGateway, useValue: events },
         { provide: AuditService, useValue: audit },
@@ -530,6 +535,10 @@ describe('SalesService — vente tenant (1-4C.1)', () => {
         SalesService,
         { provide: getConnectionToken(), useValue: fixture.connection },
         { provide: getModelToken(Sale.name), useValue: saleModel },
+        {
+          provide: getModelToken(SaleOperation.name),
+          useValue: { findOne: jest.fn(), create: jest.fn() },
+        },
         { provide: ProductsService, useValue: products },
         { provide: EventsGateway, useValue: events },
         { provide: AuditService, useValue: audit },

@@ -9,6 +9,7 @@ import { Model, Types } from 'mongoose';
 import type { Connection } from 'mongoose';
 import { Product, ProductDocument } from './schemas/product.schema';
 import { Sale, SaleDocument } from '../sales/schemas/sale.schema';
+import { SALE_ERROR_CODES } from '../sales/sale-error-codes';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { S3Service } from '../s3/s3.service';
@@ -520,12 +521,18 @@ export class ProductsService {
           { session: session ?? null },
         )
         .exec();
+      // 1-11C.1 : codes stables ajoutés, messages historiques inchangés.
       if (!fresh) {
-        throw new NotFoundException(`Product ${productId} not found`);
+        throw new NotFoundException({
+          code: SALE_ERROR_CODES.PRODUCT_NOT_FOUND,
+          message: `Product ${productId} not found`,
+        });
       }
-      throw new BadRequestException(
-        `Not enough stock. Available: ${fresh.remainingQuantity}`,
-      );
+      throw new BadRequestException({
+        code: SALE_ERROR_CODES.INSUFFICIENT_STOCK,
+        message: `Not enough stock. Available: ${fresh.remainingQuantity}`,
+        available: fresh.remainingQuantity,
+      });
     }
     return product;
   }

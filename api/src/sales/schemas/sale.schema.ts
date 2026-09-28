@@ -49,6 +49,15 @@ export class Sale {
 
   @Prop({ trim: true })
   buyerContact?: string;
+
+  /**
+   * 1-11C.1 — heure RÉELLE de la vente (fournie par le client dans la fenêtre
+   * autorisée, sinon heure serveur). `createdAt` reste l'heure technique de
+   * persistance. Absent sur les ventes antérieures : les analytics se
+   * replient alors sur `createdAt`.
+   */
+  @Prop({ type: Date, required: false })
+  occurredAt?: Date;
 }
 
 export const SaleSchema = SchemaFactory.createForClass(Sale);

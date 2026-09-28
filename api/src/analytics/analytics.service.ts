@@ -4,6 +4,13 @@ import { Model, Types } from 'mongoose';
 import { Sale, SaleDocument } from '../sales/schemas/sale.schema';
 import { Product, ProductDocument } from '../products/schemas/product.schema';
 
+/**
+ * 1-11C.1 — date métier d'une vente : `occurredAt` (heure réelle, possiblement
+ * antérieure à la synchronisation hors ligne), sinon `createdAt` pour les
+ * ventes antérieures à ce champ.
+ */
+const SALE_EFFECTIVE_DATE = { $ifNull: ['$occurredAt', '$createdAt'] };
+
 @Injectable()
 export class AnalyticsService {
   constructor(
@@ -184,8 +191,8 @@ export class AnalyticsService {
       {
         $group: {
           _id: {
-            year: { $year: '$createdAt' },
-            month: { $month: '$createdAt' },
+            year: { $year: SALE_EFFECTIVE_DATE },
+            month: { $month: SALE_EFFECTIVE_DATE },
           },
           totalRevenue: { $sum: { $multiply: ['$salePrice', '$quantity'] } },
           totalUnitsSold: { $sum: '$quantity' },
@@ -217,10 +224,13 @@ export class AnalyticsService {
     ]);
   }
 
+  // 1-11C.1 : période sur `occurredAt` ; les ventes antérieures (sans
+  // `occurredAt`, `null` couvre aussi « absent ») retombent sur `createdAt`.
   private monthMatch(month: string): Record<string, unknown> {
     const [year, m] = month.split('-').map(Number);
-    const start = new Date(year, m - 1, 1);
-    const end = new Date(year, m, 1);
-    return { createdAt: { $gte: start, $lt: end } };
+    const range = { $gte: new Date(year, m - 1, 1), $lt: new Date(year, m, 1) };
+    return {
+      $or: [{ occurredAt: range }, { occurredAt: null, createdAt: range }],
+    };
   }
 }

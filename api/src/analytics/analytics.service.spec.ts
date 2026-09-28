@@ -41,10 +41,12 @@ describe('AnalyticsService — isolation tenant (1-4D)', () => {
       unknown
     >[];
     expectTenantMatch(pipeline);
-    expect((pipeline[0].$match as Record<string, unknown>).createdAt).toEqual({
-      $gte: new Date(2026, 8, 1),
-      $lt: new Date(2026, 9, 1),
-    });
+    // 1-11C.1 : période sur `occurredAt`, repli `createdAt` (ventes anciennes).
+    const range = { $gte: new Date(2026, 8, 1), $lt: new Date(2026, 9, 1) };
+    expect((pipeline[0].$match as Record<string, unknown>).$or).toEqual([
+      { occurredAt: range },
+      { occurredAt: null, createdAt: range },
+    ]);
     expect(productModel.find).toHaveBeenCalledWith({
       organizationId: new Types.ObjectId(ORG_A),
     });
@@ -95,5 +97,21 @@ describe('AnalyticsService — isolation tenant (1-4D)', () => {
     >[];
     expectTenantMatch(sellerPipeline);
     expectTenantMatch(monthlyPipeline);
+  });
+
+  it('tendance mensuelle groupe par occurredAt avec repli createdAt (1-11C.1)', async () => {
+    await service.getMonthlyTrend(ORG_A);
+    const pipeline = saleModel.aggregate.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >[];
+    const group = pipeline.find((stage) => '$group' in stage)?.$group as {
+      _id: unknown;
+    };
+    const effective = { $ifNull: ['$occurredAt', '$createdAt'] };
+    expect(group._id).toEqual({
+      year: { $year: effective },
+      month: { $month: effective },
+    });
   });
 });
