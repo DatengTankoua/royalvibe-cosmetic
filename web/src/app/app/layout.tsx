@@ -33,6 +33,8 @@ import {
   readVerifiedIdentity,
 } from "@/lib/offline-identity-db";
 import { getToken } from "@/lib/auth";
+import { requestOfflineSalesSync } from "@/lib/offline-sales-sync";
+import { useOfflineSalesSync } from "@/hooks/use-offline-sales-sync";
 import {
   fetchActiveOrganizations,
   fetchAuthContext,
@@ -141,6 +143,10 @@ export default function AppShellLayout({
   const [converterOpen, setConverterOpen] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
 
+  // 1-11C.2 : synchronisation des ventes hors ligne — partition issue du
+  // contexte SERVEUR uniquement ; inactive sans contexte ou file vide.
+  useOfflineSalesSync(authContext);
+
   const navItems = visibleNavItems(authContext);
   const mobileCompact = navItems.length > MOBILE_PRIMARY_COUNT;
   const mobilePrimary = mobileCompact
@@ -186,10 +192,13 @@ export default function AppShellLayout({
         setOfflineIdentity(null);
         const token = getToken();
         if (token) {
+          // 1-11C.2 : pointeur écrit → le moteur peut vérifier l'identité.
           void writeIdentityPointer({
             userId: authContextResult.value.userId,
             organizationId: authContextResult.value.organizationId,
             token,
+          }).then((written) => {
+            if (written && !cancelled) requestOfflineSalesSync();
           });
         }
       } else {

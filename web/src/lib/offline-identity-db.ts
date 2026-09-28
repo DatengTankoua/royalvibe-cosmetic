@@ -7,6 +7,7 @@ import {
   withTimeout,
   attachVersionChangeAutoClose,
   deleteIndexedDb,
+  sha256Hex,
 } from "./offline-db-utils";
 import { isJwtExpired } from "./jwt";
 
@@ -32,14 +33,6 @@ function isIndexedDbAvailable(): boolean {
 
 function hasWebCrypto(): boolean {
   return typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined";
-}
-
-async function sha256Hex(input: string): Promise<string> {
-  const data = new TextEncoder().encode(input);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 function openDb(): Promise<IDBDatabase> {

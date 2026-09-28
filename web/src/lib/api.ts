@@ -1,5 +1,7 @@
 import axios from "axios";
 import { getToken, clearAuth } from "./auth";
+import type { SaleSyncOutcome } from "./offline-sales-policy";
+import { parseRetryAfterMs } from "./offline-sales-policy";
 import type {
   DelegablePermission,
   OrganizationRole,
@@ -115,11 +117,21 @@ export const apiClient = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL,
 });
 
+// 1-11C.2 : un `Authorization` fourni explicitement (token capturé par le
+// moteur de synchronisation) n'est JAMAIS remplacé par le token courant.
 apiClient.interceptors.request.use((config) => {
   const token = getToken();
-  if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (token && !config.headers.Authorization) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
   return config;
 });
+
+function bearerOf(value: unknown): string | null {
+  return typeof value === "string" && value.startsWith("Bearer ")
+    ? value.slice("Bearer ".length)
+    : null;
+}
 
 apiClient.interceptors.response.use(
   (response) => response,
@@ -127,7 +139,11 @@ apiClient.interceptors.response.use(
     if (
       axios.isAxiosError(error) &&
       error.response?.status === 401 &&
-      !error.config?.url?.startsWith("/auth/")
+      !error.config?.url?.startsWith("/auth/") &&
+      // 1-11C.2 : un 401 obtenu avec un token qui n'est PLUS le token courant
+      // (switch/login entre-temps) ne doit jamais déconnecter la session
+      // actuelle.
+      bearerOf(error.config?.headers?.Authorization) === getToken()
     ) {
       clearAuth();
       if (typeof window !== "undefined") {
@@ -557,6 +573,61 @@ export async function createSale(payload: {
 }): Promise<ApiSale> {
   const { data } = await apiClient.post<ApiSale>("/sales", payload);
   return data;
+}
+
+// 1-11C.2 — envoi d'une vente de l'outbox hors ligne. `capturedToken` est
+// utilisé tel quel (jamais relu au milieu de la requête) ; `clientOperationId`
+// rend l'appel idempotent côté serveur (1-11C.1).
+export interface IdempotentSalePayload {
+  productId: string;
+  quantity: number;
+  salePrice: number;
+  buyerName?: string;
+  buyerContact?: string;
+  occurredAt: string;
+}
+
+const IDEMPOTENT_SALE_TIMEOUT_MS = 30_000;
+
+export async function createSaleIdempotent(
+  payload: IdempotentSalePayload,
+  clientOperationId: string,
+  capturedToken: string,
+  signal: AbortSignal,
+): Promise<ApiSale> {
+  const { data } = await apiClient.post<ApiSale>(
+    "/sales",
+    { ...payload, clientOperationId },
+    {
+      headers: { Authorization: `Bearer ${capturedToken}` },
+      signal,
+      timeout: IDEMPOTENT_SALE_TIMEOUT_MS,
+    },
+  );
+  return data;
+}
+
+// Traduit une erreur Axios en issue neutre (aucun message brut conservé).
+export function toSaleSyncOutcome(
+  error: unknown,
+  now: number = Date.now(),
+): SaleSyncOutcome {
+  if (axios.isCancel(error)) return { kind: "aborted" };
+  if (!axios.isAxiosError(error)) return { kind: "network" };
+  if (error.code === "ERR_CANCELED") return { kind: "aborted" };
+  if (!error.response) return { kind: "network" };
+  const body = error.response.data as { code?: unknown } | undefined;
+  const header = error.response.headers?.["retry-after"] as unknown;
+  const retryAfterMs = parseRetryAfterMs(
+    typeof header === "string" ? header : undefined,
+    now,
+  );
+  return {
+    kind: "http",
+    status: error.response.status,
+    ...(typeof body?.code === "string" ? { code: body.code } : {}),
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+  };
 }
 
 export async function updateSale(
