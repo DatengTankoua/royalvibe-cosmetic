@@ -25,7 +25,7 @@ import {
 } from "@/components/sales/pending-sales-nav";
 import { LogoutPendingDialog } from "@/components/sales/logout-pending-dialog";
 import { PendingSalesIfAny } from "@/components/sales/pending-sales-panel";
-import { Wordmark } from "@/components/brand/wordmark";
+import { TenantLogo } from "@/components/brand/tenant-logo";
 import { OnlineStatusIndicator } from "@/components/layout/online-status-indicator";
 import { CurrencyConverter } from "@/components/currency/currency-converter";
 import {
@@ -35,7 +35,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { hasPermission } from "@/lib/organization-permissions";
-import { purgeAllOfflineData } from "@/lib/offline-purge";
 import {
   writeIdentityPointer,
   readVerifiedIdentity,
@@ -56,6 +55,18 @@ import {
   clearSalesCapability,
   writeSalesCapability,
 } from "@/lib/offline-sales-capability";
+import {
+  clearTenantBrand,
+  readTenantBrand,
+  writeTenantBrand,
+  type TenantBrandSnapshot,
+} from "@/lib/offline-tenant-brand-db";
+import { computeTenantAccent, tenantAccentStyle } from "@/lib/tenant-brand";
+import {
+  ORGANIZATION_NAME_FALLBACK,
+  firstNameOf,
+  fullNameOf,
+} from "@/lib/display-names";
 import { useOfflineSalesSync } from "@/hooks/use-offline-sales-sync";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import {
@@ -182,16 +193,18 @@ function ShellNavLink({
 }
 
 // Shell authentifié partagé pour les pages /app (1-9B/1-9C/1-9D) : header
-// desktop + navigation mobile fixe, branding organisation, switch
-// multi-organisation, navigation métier (catalogue/ventes/analyse/corbeille/
-// organisation) et connexion Socket.IO unique partagée par les pages migrées.
+// desktop + navigation mobile fixe, identité visuelle du commerce (1-12A :
+// logo/initiales, nom, couleur ; Stock Master en simple signature),
+// navigation métier (catalogue/ventes/analyse/corbeille/organisation) et
+// connexion Socket.IO unique partagée par les pages migrées. 1-12A : aucun
+// changement d'organisation dans le shell — déconnexion puis connexion
+// (sélection multi-organisation existante du login).
 export default function AppShellLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const { user, isLoading, sessionVersion, logout, switchOrganization } =
-    useAuth();
+  const { user, isLoading, sessionVersion, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const [organization, setOrganization] =
@@ -210,6 +223,11 @@ export default function AppShellLayout({
     userId: string;
     organizationId: string;
   } | null>(null);
+  // 1-12A : nom + couleur du commerce relus hors ligne, uniquement après
+  // validation de l'identité locale (correspondance exacte, TTL 72 h).
+  const [offlineBrand, setOfflineBrand] = useState<TenantBrandSnapshot | null>(
+    null,
+  );
   const [loadingOrg, setLoadingOrg] = useState(true);
   // Indépendantes : l'échec de l'une ne doit jamais écraser le résultat
   // valide de l'autre (branding vs liste des organisations).
@@ -218,11 +236,6 @@ export default function AppShellLayout({
   // Liste réellement reçue : « aucune organisation active » ne se déduit
   // jamais d'une liste non chargée (ex. hors ligne).
   const [listLoaded, setListLoaded] = useState(false);
-  const [switching, setSwitching] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  // Garde synchrone (l'état React ne se met à jour qu'au prochain rendu,
-  // insuffisant contre un double-clic dans le même tick).
-  const switchingRef = useRef(false);
   // Incrémenté pour forcer un rechargement du branding/liste/contexte sans
   // recharger toute la page (ex. après édition du branding, 1-9C).
   const [refreshTick, setRefreshTick] = useState(0);
@@ -274,9 +287,18 @@ export default function AppShellLayout({
     // contexte). Ignorée dès que le contexte a répondu : un succès la
     // remplace, un refus 401/403 la remet à `null` (fail-closed).
     let contextSettled = false;
+    // 1-12A : l'identité visuelle hors ligne n'est lue QU'APRÈS validation
+    // de l'identité locale courante, pour ce user/organisation exacts.
+    const readOfflineFallback = async () => {
+      const identity = await readVerifiedIdentity({ token: getToken() });
+      const brand = identity ? await readTenantBrand(identity) : null;
+      return { identity, brand };
+    };
     if (typeof navigator !== "undefined" && !navigator.onLine) {
-      void readVerifiedIdentity({ token: getToken() }).then((identity) => {
-        if (!cancelled && !contextSettled) setOfflineIdentity(identity);
+      void readOfflineFallback().then(({ identity, brand }) => {
+        if (cancelled || contextSettled) return;
+        setOfflineIdentity(identity);
+        setOfflineBrand(brand);
       });
     }
     // `allSettled` : une organisation courante suspendue (403) ne doit
@@ -313,6 +335,21 @@ export default function AppShellLayout({
       if (authContextResult.status === "fulfilled") {
         setAuthContext(authContextResult.value);
         setOfflineIdentity(null);
+        setOfflineBrand(null);
+        // 1-12A : snapshot visuel écrit seulement si les DEUX réponses ont
+        // réussi et désignent la même organisation (champs recopiés un à un,
+        // jamais la réponse brute).
+        if (
+          currentResult.status === "fulfilled" &&
+          currentResult.value._id === authContextResult.value.organizationId
+        ) {
+          void writeTenantBrand({
+            userId: authContextResult.value.userId,
+            organizationId: authContextResult.value.organizationId,
+            organizationName: currentResult.value.name,
+            brandColor: currentResult.value.brandColor,
+          });
+        }
         const token = getToken();
         if (token) {
           // 1-11C.2 : pointeur écrit → le moteur peut vérifier l'identité.
@@ -342,13 +379,18 @@ export default function AppShellLayout({
         // est une révocation/refus serveur — JAMAIS transformée en mode
         // hors ligne, fail-closed.
         if (isNetworkError(authContextResult.reason)) {
-          void readVerifiedIdentity({ token: getToken() }).then((identity) => {
-            if (!cancelled) setOfflineIdentity(identity);
+          void readOfflineFallback().then(({ identity, brand }) => {
+            if (cancelled) return;
+            setOfflineIdentity(identity);
+            setOfflineBrand(brand);
           });
         } else {
           setOfflineIdentity(null);
-          // Refus serveur : plus aucune saisie hors ligne sur cet appareil.
+          setOfflineBrand(null);
+          // Refus serveur : plus aucune saisie hors ligne sur cet appareil,
+          // ni identité visuelle du commerce.
           void clearSalesCapability();
+          void clearTenantBrand();
         }
       }
       setLoadingOrg(false);
@@ -358,43 +400,8 @@ export default function AppShellLayout({
     };
   }, [user, sessionVersion, refreshTick]);
 
-  // Organisations sélectionnables : jamais celle déjà courante (si connue).
-  const alternatives = organizations.filter(
-    (org) => org.organizationId !== organization?._id,
-  );
   const noActiveOrganization =
     !loadingOrg && listLoaded && organizations.length === 0;
-
-  const handleSwitch = async (organizationId: string) => {
-    setMenuOpen(false);
-    if (switchingRef.current || organizationId === organization?._id) return;
-    switchingRef.current = true;
-    setSwitching(true);
-    // 1-11C.3 : worker arrêté AVANT le changement de JWT (jamais une
-    // opération de A envoyée avec le JWT de B). L'outbox est conservée.
-    await stopOfflineSalesSync(3000);
-    try {
-      await switchOrganization(organizationId);
-      // Switch réussi uniquement : jamais purgé sur un switch échoué (catch
-      // ci-dessous, avant même d'atteindre cette ligne). Catalogue, identité
-      // et capacité seulement — jamais l'outbox des ventes.
-      await purgeAllOfflineData();
-      // Repart d'un état propre : contexte, branding, données métier et
-      // socket sont tous rechargés avec le nouveau JWT en un seul geste.
-      window.location.assign("/app");
-    } catch (err: unknown) {
-      setListError(
-        err instanceof Error
-          ? err.message
-          : "Erreur de changement d'organisation",
-      );
-      switchingRef.current = false;
-      setSwitching(false);
-      // Échec : l'ancienne session reste active, son worker reprend.
-      resumeOfflineSalesSync();
-      requestOfflineSalesSync();
-    }
-  };
 
   // 1-11C.3 : déconnexion volontaire. Worker arrêté, puis recensement des
   // ventes locales non finalisées de TOUTES les organisations de
@@ -471,36 +478,68 @@ export default function AppShellLayout({
   const isActive = (href: string) =>
     href === "/app" ? pathname === "/app" : pathname.startsWith(href);
 
+  // 1-12A : identité visuelle du commerce — réponse serveur en priorité,
+  // sinon snapshot hors ligne validé (jamais de logo hors ligne : initiales).
+  const organizationName =
+    organization?.name ?? offlineBrand?.organizationName ?? null;
+  const organizationTitle = fullNameOf(organizationName);
+  const brandLoading = loadingOrg && organizationName === null;
+  const accentStyle = tenantAccentStyle(
+    computeTenantAccent(organization?.brandColor ?? offlineBrand?.brandColor),
+  );
+  const userFullName = fullNameOf(user.name);
+
   return (
     <SocketProvider>
       <OrganizationShellContext.Provider
         value={{ organization, authContext, refreshShell, offlineIdentity }}
       >
         <OfflineSalesProvider>
-          <div className="flex min-h-full flex-1 flex-col">
-            <header className="sticky top-0 z-40 border-b bg-background">
+          {/* 1-12A : jetons --tenant-* posés sur la racine du shell
+          uniquement (jamais :root) — pages publiques/auth/offline intactes. */}
+          <div
+            data-tenant-shell=""
+            style={accentStyle}
+            className="flex min-h-full flex-1 flex-col"
+          >
+            <header className="sticky top-0 z-40 border-b border-(--tenant-accent-border) bg-background">
               <div className="mx-auto flex h-16 max-w-4xl items-center gap-3 px-4 sm:px-6">
-                <span className="hidden sm:inline-flex">
-                  <Wordmark size="medium" />
-                </span>
-                <span className="inline-flex sm:hidden">
-                  <Wordmark variant="icon" size="medium" />
-                </span>
-                <span
-                  className="hidden h-5 w-1 shrink-0 rounded-full sm:inline-block"
-                  style={{
-                    backgroundColor:
-                      organization?.brandColor ?? "var(--brand-orange)",
-                  }}
-                  aria-hidden="true"
-                />
-                <span className="hidden truncate text-sm text-muted-foreground sm:inline">
-                  {loadingOrg
-                    ? "Chargement…"
-                    : (organization?.name ?? brandingError)}
-                </span>
+                {/* Identité du commerce : logo (ou initiales), nom tronqué
+                (complet dans `title`), signature Stock Master discrète
+                masquée sous `sm`. */}
+                <div
+                  className="flex min-w-0 flex-1 items-center gap-2.5"
+                  title={organizationTitle ?? undefined}
+                  data-testid="tenant-identity"
+                >
+                  <TenantLogo
+                    name={organizationName}
+                    logoUrl={organization?.logoUrl}
+                  />
+                  <div className="flex min-w-0 flex-col leading-tight">
+                    {brandLoading ? (
+                      <span
+                        className="h-4 w-28 max-w-full animate-pulse rounded bg-muted"
+                        aria-label="Chargement"
+                      />
+                    ) : (
+                      <span
+                        className="truncate text-sm font-semibold sm:text-base"
+                        data-testid="tenant-name"
+                      >
+                        {organizationName ?? ORGANIZATION_NAME_FALLBACK}
+                      </span>
+                    )}
+                    <span
+                      className="hidden text-[11px] text-muted-foreground sm:block"
+                      data-testid="stockmaster-signature"
+                    >
+                      by Stock Master
+                    </span>
+                  </div>
+                </div>
 
-                <div className="ml-auto flex items-center gap-2">
+                <div className="ml-auto flex shrink-0 items-center gap-2">
                   <OnlineStatusIndicator />
                   <PendingSalesHeaderLink />
                   <button
@@ -511,42 +550,16 @@ export default function AppShellLayout({
                   >
                     <ArrowLeftRightIcon className="h-4 w-4" />
                   </button>
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setMenuOpen((v) => !v)}
-                      disabled={switching || alternatives.length === 0}
-                      aria-haspopup="listbox"
-                      aria-expanded={menuOpen}
-                      className="rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
-                    >
-                      {switching ? "Changement…" : "Changer d'organisation"}
-                    </button>
-                    {menuOpen && (
-                      <div
-                        role="listbox"
-                        aria-label="Organisations"
-                        className="absolute right-0 z-50 mt-1 w-56 rounded-md border bg-popover p-1 shadow-md"
-                      >
-                        {alternatives.map((org) => (
-                          <button
-                            key={org.organizationId}
-                            type="button"
-                            role="option"
-                            aria-selected={false}
-                            onClick={() =>
-                              void handleSwitch(org.organizationId)
-                            }
-                            className="block w-full rounded px-2.5 py-1.5 text-left text-sm hover:bg-muted"
-                          >
-                            {org.name}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <span className="hidden text-sm text-muted-foreground sm:inline">
-                    {user.name}
+                  <span
+                    className="hidden max-w-32 truncate text-sm text-muted-foreground sm:inline"
+                    title={userFullName ?? undefined}
+                    data-testid="user-first-name"
+                  >
+                    {firstNameOf(user.name)}
+                    {userFullName &&
+                      userFullName !== firstNameOf(user.name) && (
+                        <span className="sr-only"> ({userFullName})</span>
+                      )}
                   </span>
                   <button
                     type="button"
@@ -571,7 +584,9 @@ export default function AppShellLayout({
                       offline={navOffline}
                       disabledClassName="cursor-not-allowed opacity-50 hover:bg-transparent"
                       className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium hover:bg-muted ${
-                        isActive(item.href) ? "bg-muted text-primary" : ""
+                        isActive(item.href)
+                          ? "bg-(--tenant-accent-soft) text-(--tenant-accent-ink) ring-1 ring-inset ring-(--tenant-accent-border)"
+                          : ""
                       }`}
                     >
                       <item.icon className="h-3.5 w-3.5" />
@@ -650,12 +665,18 @@ export default function AppShellLayout({
                     href={item.href}
                     offline={navOffline}
                     disabledClassName="cursor-not-allowed opacity-40"
-                    className={`flex flex-1 flex-col items-center justify-center gap-0.5 text-xs ${
+                    className={`relative flex flex-1 flex-col items-center justify-center gap-0.5 text-xs ${
                       isActive(item.href)
-                        ? "text-primary"
+                        ? "font-medium text-(--tenant-accent-ink)"
                         : "text-muted-foreground"
                     }`}
                   >
+                    {isActive(item.href) && (
+                      <span
+                        aria-hidden="true"
+                        className="absolute inset-x-3 top-0 h-0.5 rounded-full bg-(--tenant-accent)"
+                      />
+                    )}
                     <span className="relative">
                       <item.icon className="h-5 w-5" />
                       {item.href === "/app/sales" && (
@@ -693,7 +714,8 @@ export default function AppShellLayout({
           {/* Menu « Plus » (mobile, >4 destinations visibles, 1-9D) : destinations
           restantes + utilitaires, jamais plus de 5 icônes dans la barre fixe. */}
           <Dialog open={plusOpen} onOpenChange={setPlusOpen}>
-            <DialogContent>
+            {/* Portail hors de la racine du shell : jetons ré-appliqués. */}
+            <DialogContent data-tenant-shell="" style={accentStyle}>
               <DialogHeader>
                 <DialogTitle>Plus</DialogTitle>
               </DialogHeader>
@@ -706,7 +728,9 @@ export default function AppShellLayout({
                     onClick={() => setPlusOpen(false)}
                     disabledClassName="cursor-not-allowed opacity-50 hover:bg-transparent"
                     className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-muted ${
-                      isActive(item.href) ? "bg-muted text-primary" : ""
+                      isActive(item.href)
+                        ? "bg-(--tenant-accent-soft) text-(--tenant-accent-ink) ring-1 ring-inset ring-(--tenant-accent-border)"
+                        : ""
                     }`}
                   >
                     <item.icon className="h-4 w-4" />

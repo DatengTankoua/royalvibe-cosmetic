@@ -17,11 +17,11 @@ import {
 } from "@/lib/auth";
 import {
   authLogin,
-  switchOrganization as apiSwitchOrganization,
   getApiErrorMessage,
   type SelectableOrganization,
 } from "@/lib/api";
 import { purgeAllOfflineData } from "@/lib/offline-purge";
+import { clearTenantBrand } from "@/lib/offline-tenant-brand-db";
 
 export type LoginOutcome =
   | { status: "success" }
@@ -33,15 +33,17 @@ export type LoginOutcome =
 interface AuthContextValue {
   user: StoredUser | null;
   isLoading: boolean;
-  // Incrémenté à chaque changement de JWT (login réussi, switch
-  // d'organisation) — permet à useSocket() de forcer une reconnexion.
+  // Incrémenté à chaque changement de JWT (login réussi) — permet à
+  // useSocket() de forcer une reconnexion. 1-12A : plus de switch
+  // d'organisation dans l'UI (logout puis login multi-organisation) ;
+  // `switchOrganization` reste disponible dans lib/api.ts (contrat bas
+  // niveau, endpoint backend inchangé).
   sessionVersion: number;
   login: (
     email: string,
     password: string,
     organizationId?: string,
   ) => Promise<LoginOutcome>;
-  switchOrganization: (organizationId: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -75,6 +77,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             organizations: result.organizations,
           };
         }
+        // 1-12A : nouvelle session → identité visuelle hors ligne de la
+        // session précédente purgée avant l'installation du nouveau token.
+        await clearTenantBrand();
         setToken(result.access_token);
         const stored: StoredUser = {
           _id: result.user._id,
@@ -93,18 +98,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
-  // Le token précédent n'est JAMAIS effacé avant réception du nouveau : si
-  // l'appel échoue, l'ancien token/organisation restent intacts.
-  const switchOrganization = useCallback(async (organizationId: string) => {
-    try {
-      const { access_token } = await apiSwitchOrganization(organizationId);
-      setToken(access_token);
-      setSessionVersion((v) => v + 1);
-    } catch (err) {
-      throw new Error(getApiErrorMessage(err));
-    }
-  }, []);
-
   // 1-11B : purge du catalogue hors ligne AVANT de terminer la déconnexion —
   // un échec (déjà journalisé en générique par le module) ne bloque jamais
   // le logout lui-même.
@@ -121,7 +114,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isLoading,
         sessionVersion,
         login,
-        switchOrganization,
         logout,
       }}
     >

@@ -31,10 +31,10 @@ export default function OfflineDataPage() {
         <h2 className="text-lg font-semibold">Données hors connexion</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           Stock Master conserve une copie en lecture seule du dernier catalogue
-          chargé avec succès (sections, produits, stock, prix) pour le consulter
-          sans connexion, pendant 72 heures maximum. Aucune vente, image, donnée
-          d&apos;audit ou d&apos;une autre organisation n&apos;y est jamais
-          stockée.
+          chargé avec succès (sections, produits, stock, prix), ainsi que le nom
+          et la couleur du commerce, pour les afficher sans connexion, pendant
+          72 heures maximum. Aucune vente, image, donnée d&apos;audit ou
+          d&apos;une autre organisation n&apos;y est jamais stockée.
         </p>
       </div>
       <Button

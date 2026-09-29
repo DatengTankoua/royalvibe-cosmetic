@@ -226,7 +226,8 @@ export async function fetchMe(): Promise<ApiUser> {
 }
 
 // 1-9B : organisations actives de l'utilisateur courant (userId depuis le
-// JWT côté serveur) — alimente le sélecteur de switch d'organisation.
+// JWT côté serveur). 1-12A : ne sert plus qu'à détecter « aucune
+// organisation active » dans le shell (plus de sélecteur de switch).
 export async function fetchActiveOrganizations(): Promise<
   SelectableOrganization[]
 > {

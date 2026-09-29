@@ -123,6 +123,14 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+/* 1-12A : focus aux couleurs du commerce, UNIQUEMENT sous la racine du
+   shell /app (jetons --tenant-* calculés et validés par lib/tenant-brand.ts,
+   posés en style inline sur [data-tenant-shell]) — :root et les pages
+   publiques/auth/offline ne sont jamais modifiés. */
+[data-tenant-shell] {
+  --ring: var(--tenant-accent-ring);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

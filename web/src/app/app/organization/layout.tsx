@@ -47,7 +47,7 @@ export default function OrganizationLayout({
             href={tab.href}
             className={`shrink-0 rounded-t-md px-3 py-2 text-sm font-medium ${
               pathname.startsWith(tab.href)
-                ? "border-b-2 border-primary text-primary"
+                ? "border-b-2 border-(--tenant-accent) text-(--tenant-accent-ink)"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
