@@ -12,6 +12,7 @@ export function ObjectCard({ object }: ObjectCardProps) {
   return (
     <Card>
       <Link
+        prefetch={false}
         href={`/app/catalog/products/${object._id}`}
         className="relative block aspect-video w-full overflow-hidden bg-muted"
       >
@@ -26,6 +27,7 @@ export function ObjectCard({ object }: ObjectCardProps) {
       <CardHeader>
         <CardTitle>
           <Link
+            prefetch={false}
             href={`/app/catalog/products/${object._id}`}
             className="hover:underline"
           >

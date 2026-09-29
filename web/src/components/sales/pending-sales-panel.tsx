@@ -186,8 +186,8 @@ export function PendingSalesPanel() {
       </div>
       {!online && counts.pending > 0 && (
         <p className="text-xs text-muted-foreground">
-          Hors connexion : l&apos;envoi reprendra automatiquement au retour du
-          réseau, application ouverte.
+          L&apos;envoi reprendra automatiquement au retour de la connexion,
+          application ouverte.
         </p>
       )}
 

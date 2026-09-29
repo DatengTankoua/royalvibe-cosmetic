@@ -57,6 +57,7 @@ import {
   writeSalesCapability,
 } from "@/lib/offline-sales-capability";
 import { useOfflineSalesSync } from "@/hooks/use-offline-sales-sync";
+import { useOnlineStatus } from "@/hooks/use-online-status";
 import {
   fetchActiveOrganizations,
   fetchAuthContext,
@@ -119,6 +120,67 @@ function visibleNavItems(authContext: ApiAuthContext | null): ShellNavItem[] {
 
 const MOBILE_PRIMARY_COUNT = 4;
 
+// Correctif 1-11C.3 : seule route /app servie hors ligne par le service
+// worker (document d'app shell précaché).
+const OFFLINE_AVAILABLE_HREF = "/app/catalog";
+const OFFLINE_UNAVAILABLE_LABEL = "Indisponible hors connexion";
+const OFFLINE_MAIN_MESSAGE =
+  "Vous êtes hors connexion. Vous pouvez consulter les données enregistrées sur cet appareil et saisir des ventes qui seront envoyées au retour de la connexion.";
+
+/**
+ * Lien de navigation du shell. En ligne : `Link` sans prefetch (aucune
+ * requête RSC anticipée qui échouerait à la coupure du réseau). Hors ligne :
+ * Catalogue = ancre HTML simple (document /app/catalog servi par le service
+ * worker, jamais de fetch RSC) ; toute autre destination = élément non
+ * interactif `aria-disabled` — jamais de tentative d'ouverture.
+ */
+function ShellNavLink({
+  href,
+  offline,
+  className,
+  disabledClassName,
+  onClick,
+  children,
+}: {
+  href: string;
+  offline: boolean;
+  className: string;
+  disabledClassName: string;
+  onClick?: () => void;
+  children: React.ReactNode;
+}) {
+  if (!offline) {
+    return (
+      <Link
+        href={href}
+        prefetch={false}
+        onClick={onClick}
+        className={className}
+      >
+        {children}
+      </Link>
+    );
+  }
+  if (href === OFFLINE_AVAILABLE_HREF) {
+    return (
+      <a href={href} onClick={onClick} className={className}>
+        {children}
+      </a>
+    );
+  }
+  return (
+    <span
+      role="link"
+      aria-disabled="true"
+      title={OFFLINE_UNAVAILABLE_LABEL}
+      className={`${className} ${disabledClassName}`}
+    >
+      {children}
+      <span className="sr-only"> — {OFFLINE_UNAVAILABLE_LABEL}</span>
+    </span>
+  );
+}
+
 // Shell authentifié partagé pour les pages /app (1-9B/1-9C/1-9D) : header
 // desktop + navigation mobile fixe, branding organisation, switch
 // multi-organisation, navigation métier (catalogue/ventes/analyse/corbeille/
@@ -153,6 +215,9 @@ export default function AppShellLayout({
   // valide de l'autre (branding vs liste des organisations).
   const [brandingError, setBrandingError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  // Liste réellement reçue : « aucune organisation active » ne se déduit
+  // jamais d'une liste non chargée (ex. hors ligne).
+  const [listLoaded, setListLoaded] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   // Garde synchrone (l'état React ne se met à jour qu'au prochain rendu,
@@ -179,6 +244,11 @@ export default function AppShellLayout({
     return () => window.removeEventListener("online", onOnline);
   }, [user, needsContext]);
 
+  // Hors ligne : réseau coupé, ou shell ouvert sans contexte serveur
+  // (même définition que `useOfflineSales().offline`).
+  const online = useOnlineStatus();
+  const navOffline = !online || (!authContext && offlineIdentity !== null);
+
   const navItems = visibleNavItems(authContext);
   const mobileCompact = navItems.length > MOBILE_PRIMARY_COUNT;
   const mobilePrimary = mobileCompact
@@ -198,6 +268,17 @@ export default function AppShellLayout({
     setLoadingOrg(true);
     setBrandingError(null);
     setListError(null);
+    // Correctif 1-11C.3 : navigateur déjà hors ligne → aucune requête ne
+    // peut atteindre le serveur ; l'identité vérifiée localement est lue
+    // tout de suite (catalogue hors ligne sans attendre l'échec réseau du
+    // contexte). Ignorée dès que le contexte a répondu : un succès la
+    // remplace, un refus 401/403 la remet à `null` (fail-closed).
+    let contextSettled = false;
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      void readVerifiedIdentity({ token: getToken() }).then((identity) => {
+        if (!cancelled && !contextSettled) setOfflineIdentity(identity);
+      });
+    }
     // `allSettled` : une organisation courante suspendue (403) ne doit
     // jamais empêcher l'exploitation d'une liste d'organisations valide,
     // et vice-versa. Le contexte d'autorisation suit la même logique
@@ -207,17 +288,27 @@ export default function AppShellLayout({
       fetchActiveOrganizations(),
       fetchAuthContext(),
     ]).then(([currentResult, listResult, authContextResult]) => {
+      contextSettled = true;
       if (cancelled) return;
       if (currentResult.status === "fulfilled") {
         setOrganization(currentResult.value);
       } else {
         setOrganization(null);
-        setBrandingError("Organisation actuelle indisponible.");
+        // 1-11C.3a : une panne réseau n'est pas une erreur à afficher (le
+        // message hors ligne unique du shell suffit) ; seul un refus serveur
+        // est signalé.
+        if (!isNetworkError(currentResult.reason)) {
+          setBrandingError("Organisation actuelle indisponible.");
+        }
       }
       if (listResult.status === "fulfilled") {
         setOrganizations(listResult.value);
+        setListLoaded(true);
       } else {
-        setListError(getApiErrorMessage(listResult.reason));
+        setListLoaded(false);
+        if (!isNetworkError(listResult.reason)) {
+          setListError(getApiErrorMessage(listResult.reason));
+        }
       }
       if (authContextResult.status === "fulfilled") {
         setAuthContext(authContextResult.value);
@@ -272,7 +363,7 @@ export default function AppShellLayout({
     (org) => org.organizationId !== organization?._id,
   );
   const noActiveOrganization =
-    !loadingOrg && !listError && organizations.length === 0;
+    !loadingOrg && listLoaded && organizations.length === 0;
 
   const handleSwitch = async (organizationId: string) => {
     setMenuOpen(false);
@@ -474,9 +565,11 @@ export default function AppShellLayout({
               <div className="hidden border-t md:block">
                 <div className="mx-auto flex max-w-4xl items-center gap-1 overflow-x-auto px-4 py-1.5 sm:px-6">
                   {navItems.map((item) => (
-                    <Link
+                    <ShellNavLink
                       key={item.href}
                       href={item.href}
+                      offline={navOffline}
+                      disabledClassName="cursor-not-allowed opacity-50 hover:bg-transparent"
                       className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium hover:bg-muted ${
                         isActive(item.href) ? "bg-muted text-primary" : ""
                       }`}
@@ -484,19 +577,24 @@ export default function AppShellLayout({
                       <item.icon className="h-3.5 w-3.5" />
                       {item.label}
                       {item.href === "/app/sales" && <PendingSalesNavBadge />}
-                    </Link>
+                    </ShellNavLink>
                   ))}
+                  {navOffline && (
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                      Autres pages : {OFFLINE_UNAVAILABLE_LABEL.toLowerCase()}
+                    </span>
+                  )}
                 </div>
               </div>
             </header>
 
-            {!authContext && offlineIdentity && (
+            {/* 1-11C.3a : message hors ligne principal, unique. */}
+            {navOffline && (
               <p
                 role="status"
                 className="mx-auto w-full max-w-4xl px-4 pt-3 text-sm text-muted-foreground sm:px-6"
               >
-                Mode hors connexion : identité vérifiée localement, données
-                mises en cache uniquement.
+                {OFFLINE_MAIN_MESSAGE}
               </p>
             )}
             {brandingError && (
@@ -516,7 +614,9 @@ export default function AppShellLayout({
               </p>
             )}
 
-            <main className="flex flex-1 flex-col pb-16">
+            <main
+              className={`flex flex-1 flex-col ${navOffline ? "pb-24 md:pb-16" : "pb-16"}`}
+            >
               {noActiveOrganization ? (
                 <div className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
                   <p className="text-sm text-muted-foreground">
@@ -538,11 +638,18 @@ export default function AppShellLayout({
             </main>
 
             <nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
+              {navOffline && (
+                <p className="border-b px-4 py-0.5 text-center text-[11px] text-muted-foreground">
+                  Autres pages : {OFFLINE_UNAVAILABLE_LABEL.toLowerCase()}
+                </p>
+              )}
               <div className="flex h-16 items-stretch">
                 {mobilePrimary.map((item) => (
-                  <Link
+                  <ShellNavLink
                     key={item.href}
                     href={item.href}
+                    offline={navOffline}
+                    disabledClassName="cursor-not-allowed opacity-40"
                     className={`flex flex-1 flex-col items-center justify-center gap-0.5 text-xs ${
                       isActive(item.href)
                         ? "text-primary"
@@ -558,7 +665,7 @@ export default function AppShellLayout({
                       )}
                     </span>
                     {item.label}
-                  </Link>
+                  </ShellNavLink>
                 ))}
                 {mobileCompact ? (
                   <button
@@ -592,10 +699,12 @@ export default function AppShellLayout({
               </DialogHeader>
               <div className="flex flex-col gap-1">
                 {mobileOverflow.map((item) => (
-                  <Link
+                  <ShellNavLink
                     key={item.href}
                     href={item.href}
+                    offline={navOffline}
                     onClick={() => setPlusOpen(false)}
+                    disabledClassName="cursor-not-allowed opacity-50 hover:bg-transparent"
                     className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-muted ${
                       isActive(item.href) ? "bg-muted text-primary" : ""
                     }`}
@@ -603,7 +712,7 @@ export default function AppShellLayout({
                     <item.icon className="h-4 w-4" />
                     {item.label}
                     {item.href === "/app/sales" && <PendingSalesNavBadge />}
-                  </Link>
+                  </ShellNavLink>
                 ))}
                 <button
                   type="button"

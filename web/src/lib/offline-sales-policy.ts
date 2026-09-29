@@ -345,7 +345,7 @@ export function describeOperationError(error?: OutboxLastError): string | null {
     case "network":
       return "Réseau indisponible, nouvel essai automatique.";
     case "server":
-      return "Serveur momentanément indisponible, nouvel essai automatique.";
+      return "Envoi momentanément impossible, nouvel essai automatique.";
     case "auth":
       return "Session expirée ou accès refusé.";
     case "corruption":

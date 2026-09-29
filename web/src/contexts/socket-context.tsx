@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { getToken } from "@/lib/auth";
 import { useAuth } from "@/contexts/auth-context";
+import { useOnlineStatus } from "@/hooks/use-online-status";
 
 // Connexion Socket.IO unique du shell authentifié (1-9D) : ouverte une seule
 // fois ici (montée par AppShellLayout), jamais par une page ou un hook
@@ -16,15 +17,21 @@ import { useAuth } from "@/contexts/auth-context";
 // incrémenté à chaque changement de JWT (switch d'organisation compris) —
 // la connexion existante doit alors être coupée puis rouverte avec le
 // nouveau token.
+//
+// Correctif 1-11C.3 : hors ligne (`navigator.onLine === false`), le socket
+// est fermé (cleanup de l'effet) et aucun n'est recréé — plus de boucle de
+// reconnexion. Un seul nouveau socket, avec le token courant, à l'événement
+// `online`.
 const SocketContext = createContext<Socket | null>(null);
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const { user, sessionVersion } = useAuth();
+  const online = useOnlineStatus();
   const userId: string | null = user?._id ?? null;
 
   useEffect(() => {
-    if (!userId) {
+    if (!userId || !online) {
       return;
     }
     const token = getToken();
@@ -38,7 +45,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       instance.disconnect();
       setSocket(null);
     };
-  }, [userId, sessionVersion]);
+  }, [userId, sessionVersion, online]);
 
   return (
     <SocketContext.Provider value={socket}>{children}</SocketContext.Provider>

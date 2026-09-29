@@ -82,6 +82,7 @@ export function ProductCard({
     <>
       <Card className="overflow-hidden hover:shadow-md transition-shadow">
         <Link
+          prefetch={false}
           href={`/app/catalog/products/${product._id}`}
           className="relative block aspect-video overflow-hidden bg-muted"
         >
@@ -100,6 +101,7 @@ export function ProductCard({
           <div className="flex items-start justify-between gap-2">
             <CardTitle className="text-sm leading-tight">
               <Link
+                prefetch={false}
                 href={`/app/catalog/products/${product._id}`}
                 className="hover:underline"
               >

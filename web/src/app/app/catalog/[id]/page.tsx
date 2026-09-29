@@ -198,6 +198,7 @@ export default function CatalogSectionPage() {
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
         <Link
+          prefetch={false}
           href={backHref}
           className="inline-flex shrink-0 items-center gap-1 self-start rounded-md px-2.5 py-1 text-sm hover:bg-muted transition-colors"
         >

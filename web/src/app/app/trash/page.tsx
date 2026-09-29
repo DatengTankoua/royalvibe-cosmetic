@@ -367,6 +367,7 @@ export default function TrashPage() {
                         </button>
                         <div className="flex-1 min-w-0">
                           <Link
+                            prefetch={false}
                             href={`/app/catalog/${s._id}`}
                             className="block"
                           >
@@ -495,6 +496,7 @@ export default function TrashPage() {
                     className={`transition-shadow hover:shadow-md ${selectedProducts.has(p._id) ? "ring-2 ring-primary" : ""}`}
                   >
                     <Link
+                      prefetch={false}
                       href={`/app/catalog/products/${p._id}`}
                       className="relative block aspect-video overflow-hidden bg-muted"
                     >

@@ -159,7 +159,7 @@ export function OfflineCatalogBrowser({
         <p className="text-sm text-muted-foreground">
           {scopeSynced
             ? "Aucun élément."
-            : "Cette section n'a pas encore été synchronisée."}
+            : "Cette section n'est pas disponible sur cet appareil."}
         </p>
       )}
 
@@ -209,9 +209,8 @@ export function OfflineCatalogBrowser({
                 />
               )}
               <p className="text-xs text-muted-foreground">
-                Historique et analyses non disponibles hors connexion. Le stock
-                affiché provient de la dernière synchronisation ; le serveur
-                reste l&apos;autorité finale.
+                Historique et analyses indisponibles hors connexion. Le stock
+                affiché peut ne plus être à jour.
               </p>
             </>
           )}

@@ -419,6 +419,7 @@ export default function AnalyticsPage() {
                     </p>
                   </div>
                   <Link
+                    prefetch={false}
                     href={`/app/catalog/products/${p._id}`}
                     onClick={() => setOutOfStockOpen(false)}
                     className="shrink-0 text-xs text-primary underline underline-offset-2 hover:no-underline"

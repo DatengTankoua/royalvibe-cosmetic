@@ -87,7 +87,11 @@ export function SectionCard({
   return (
     <>
       <Card className="hover:shadow-md transition-shadow">
-        <Link href={`/app/catalog/${section._id}`} className="block">
+        <Link
+          href={`/app/catalog/${section._id}`}
+          prefetch={false}
+          className="block"
+        >
           <CardHeader>
             <div className="flex items-center gap-2">
               <FolderIcon className="h-5 w-5 shrink-0 text-muted-foreground" />

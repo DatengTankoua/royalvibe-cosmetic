@@ -176,7 +176,7 @@ export function SaleFormDialog({
       } else {
         toast.info(PENDING_MESSAGE, {
           description:
-            "Le serveur reste l'autorité finale (stock, droits) lors de l'envoi.",
+            "Elle sera envoyée automatiquement au retour de la connexion.",
         });
       }
     } finally {
@@ -198,8 +198,8 @@ export function SaleFormDialog({
                 className="mt-0.5 h-3.5 w-3.5 shrink-0"
                 aria-hidden
               />
-              Hors connexion : la vente sera gardée sur cet appareil puis
-              envoyée au serveur, qui reste l&apos;autorité finale.
+              La vente sera enregistrée sur cet appareil et envoyée au retour de
+              la connexion.
             </DialogDescription>
           )}
         </DialogHeader>
@@ -272,8 +272,8 @@ export function SaleFormDialog({
             </div>
             {indicative.hasReservation && (
               <p className="text-xs text-muted-foreground">
-                Des ventes de ce produit attendent la synchronisation : le stock
-                affiché est indicatif, le serveur reste l&apos;autorité finale.
+                Des ventes de ce produit sont en attente d&apos;envoi : le stock
+                affiché est indicatif.
               </p>
             )}
             {formError && (

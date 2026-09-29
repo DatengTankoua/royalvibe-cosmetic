@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { SearchIcon, WifiOffIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { SearchIcon } from "lucide-react";
 import { toast } from "sonner";
 import { useSections } from "@/hooks/use-sections";
 import { useOfflineCatalog } from "@/hooks/use-offline-catalog";
@@ -53,7 +53,7 @@ export default function CatalogPage() {
     renameSection,
   } = useSections();
   const { writeRootSections, readSnapshot } = useOfflineCatalog();
-  const { unfinalizedCount, offline } = useOfflineSales();
+  const { unfinalizedCount, offline, online } = useOfflineSales();
 
   // N'écrit qu'après un chargement COMPLET et réussi (jamais une réponse
   // partielle/en erreur) ; remplace intégralement le scope racine (jamais
@@ -62,27 +62,46 @@ export default function CatalogPage() {
     if (!isLoading && !error) writeRootSections(sections.map(toOfflineSection));
   }, [isLoading, error, sections, writeRootSections]);
 
-  // Repli hors ligne : uniquement sur une vraie panne réseau (jamais sur
-  // 401/403/404/5xx), et uniquement la partition courante (identité
-  // authentifiée ou vérifiée localement — jamais de recherche ailleurs).
-  const [offlineSnapshot, setOfflineSnapshot] =
-    useState<OfflineCatalogSnapshot | null>(null);
+  // Repli hors ligne : réseau coupé (`navigator.onLine === false`, ou shell
+  // sans contexte serveur — voir `useOfflineSales().offline`) ou vraie panne
+  // réseau de l'API (jamais sur 401/403/404/5xx), et uniquement la partition
+  // courante (identité authentifiée ou vérifiée localement — jamais de
+  // recherche ailleurs).
+  //
+  // Correctif 1-11C.3 : la bascule suit directement `offline`, sans attendre
+  // une erreur API — après coupure sur une page déjà montée comme après F5
+  // hors ligne. Tant qu'on est hors ligne, les `SectionCard` (liens vers
+  // /app/catalog/[id]) ne sont JAMAIS rendues, même sans snapshot.
+  const wantOffline = offline || (!isLoading && !!error && isOffline);
+  const [offlineSnapshot, setOfflineSnapshot] = useState<{
+    ready: boolean;
+    snapshot: OfflineCatalogSnapshot | null;
+  }>({ ready: false, snapshot: null });
 
   useEffect(() => {
-    if (isLoading || !error || !isOffline) {
-      setOfflineSnapshot(null);
+    if (!wantOffline) {
+      setOfflineSnapshot({ ready: false, snapshot: null });
       return;
     }
     let cancelled = false;
     void readSnapshot().then((snap) => {
-      if (!cancelled) setOfflineSnapshot(snap);
+      if (!cancelled) setOfflineSnapshot({ ready: true, snapshot: snap });
     });
     return () => {
       cancelled = true;
     };
-  }, [isLoading, error, isOffline, readSnapshot]);
+  }, [wantOffline, readSnapshot]);
 
-  const showingOffline = offlineSnapshot !== null;
+  // Retour du réseau : rechargement des sections en ligne (une seule fois
+  // par transition hors ligne → en ligne).
+  const wasOnline = useRef(online);
+  useEffect(() => {
+    if (online && !wasOnline.current) void reload();
+    wasOnline.current = online;
+  }, [online, reload]);
+
+  const snapshot = offlineSnapshot.snapshot;
+  const showingOffline = wantOffline;
   const canManageNow = canManage && !showingOffline;
 
   const filtered = useMemo(
@@ -132,29 +151,32 @@ export default function CatalogPage() {
 
       {showingOffline ? (
         <>
+          {/* 1-11C.3a : le message hors ligne principal est affiché par le
+              shell ; ici, uniquement la fraîcheur des données locales. */}
           <div className="flex flex-col gap-2 rounded-md border border-dashed p-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-2">
-              <span
-                role="status"
-                className="inline-flex items-center gap-1 rounded-md bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive"
+            <p className="text-xs text-muted-foreground">
+              {snapshot ? (
+                <>
+                  Dernière mise à jour :{" "}
+                  {new Date(snapshot.updatedAt).toLocaleString("fr-FR")}.
+                  Certaines informations peuvent ne plus être à jour.
+                </>
+              ) : offlineSnapshot.ready ? (
+                "Aucune donnée de catalogue disponible sur cet appareil."
+              ) : (
+                "Chargement…"
+              )}
+            </p>
+            {online && (
+              <button
+                onClick={() => void reload()}
+                className="shrink-0 self-start text-xs text-primary underline underline-offset-2 hover:no-underline sm:self-auto"
               >
-                <WifiOffIcon className="h-3.5 w-3.5" aria-hidden />
-                Données hors connexion
-              </span>
-              <p className="text-xs text-muted-foreground">
-                Dernière synchronisation :{" "}
-                {new Date(offlineSnapshot.updatedAt).toLocaleString("fr-FR")} —
-                ces données peuvent être anciennes. Catalogue en lecture seule.
-              </p>
-            </div>
-            <button
-              onClick={() => void reload()}
-              className="shrink-0 text-xs text-primary underline underline-offset-2 hover:no-underline"
-            >
-              Réessayer
-            </button>
+                Réessayer
+              </button>
+            )}
           </div>
-          <OfflineCatalogBrowser snapshot={offlineSnapshot} />
+          {snapshot && <OfflineCatalogBrowser snapshot={snapshot} />}
         </>
       ) : (
         <>
@@ -216,7 +238,7 @@ export default function CatalogPage() {
       {/* 1-11C.3 : /app/catalog est la seule route /app servie hors ligne
           (service worker inchangé) : les ventes locales y restent
           consultables et traitables (ancre #offline-sales-panel). */}
-      {unfinalizedCount > 0 && (showingOffline || offline) && (
+      {unfinalizedCount > 0 && showingOffline && (
         <OfflineSalesPanelSection count={unfinalizedCount} />
       )}
     </div>

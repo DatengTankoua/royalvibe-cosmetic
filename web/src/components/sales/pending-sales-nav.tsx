@@ -34,7 +34,7 @@ export function PendingSalesAnchor({
 }) {
   if (!offline) {
     return (
-      <Link href={href} className={className} {...aria}>
+      <Link href={href} prefetch={false} className={className} {...aria}>
         {children}
       </Link>
     );

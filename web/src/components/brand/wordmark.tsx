@@ -36,16 +36,28 @@ export function Wordmark({
   const { src, ratio } = SOURCES[variant];
   const width = SIZE_WIDTH[variant][size];
   const height = Math.round(width / ratio);
+  // Correctif 1-11C.3a : conteneur aux dimensions explicites (largeur
+  // centralisée + ratio réel). Sans lui, une image `unoptimized` (pas de
+  // srcset) prendrait la taille naturelle du PNG source (2172 px de large).
+  // max-w-full : réduction proportionnelle si l'espace manque (320 px).
   return (
-    <Image
-      src={src}
-      alt="Stock Master"
-      width={width}
-      height={height}
-      priority={priority}
-      // h-auto/w-auto laisse le ratio (fixé par width/height ci-dessus)
-      // piloter le rendu ; max-w-full évite tout débordement à 320px.
-      className={`h-auto w-auto max-w-full shrink-0 object-contain ${className ?? ""}`.trim()}
-    />
+    <span
+      className={`block max-w-full shrink-0 ${className ?? ""}`.trim()}
+      style={{ width, aspectRatio: `${width} / ${height}` }}
+    >
+      <Image
+        src={src}
+        alt="Stock Master"
+        width={width}
+        height={height}
+        priority={priority}
+        // Sert directement l'asset statique /brand/* (précaché par le service
+        // worker) au lieu de /_next/image?url=…, URL dynamique jamais mise en
+        // cache → logo cassé hors ligne. PNG sources haute résolution : rendu
+        // net, y compris sur écran 2x/3x.
+        unoptimized
+        className="h-full w-full object-contain"
+      />
+    </span>
   );
 }
