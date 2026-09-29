@@ -1,55 +1,109 @@
 "use client";
 
-import Link from "next/link";
+import { useMemo, useState } from "react";
+import { ChevronRightIcon, ClockIcon } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
-import { TenantLogo } from "@/components/brand/tenant-logo";
+import {
+  useOfflineSales,
+  usePendingSalesHref,
+} from "@/contexts/offline-sales-context";
+import { PendingSalesAnchor } from "@/components/sales/pending-sales-nav";
+import { HomeQuickActions } from "@/components/dashboard/home-quick-actions";
+import { CurrencyConverter } from "@/components/currency/currency-converter";
+import { homeQuickActions } from "@/lib/home-quick-actions";
 import { firstNameOf, fullNameOf } from "@/lib/display-names";
 
-// Accueil du shell (1-9A/1-9B, lien mis à jour en 1-9D) : les pages métier
-// vivent maintenant sous /app/catalog, /app/sales, /app/analytics, /app/trash.
-// Le garde d'authentification vit dans app/app/layout.tsx (shell partagé).
-// 1-12A : le commerce est l'identité principale (logo/initiales, nom,
-// couleur via les jetons --tenant-* du shell) ; plus de grand logo Stock
-// Master dans l'espace connecté.
+// Accueil du shell /app. Le garde d'authentification vit dans
+// app/app/layout.tsx (shell partagé). 1-12A : le commerce est l'identité
+// principale (nom/logo dans l'en-tête, couleur via --tenant-*). 1-12B :
+// tableau d'accès rapides — aucune donnée ni appel réseau supplémentaire
+// (contexte d'autorisation, statut hors ligne et compteur de ventes en
+// attente déjà fournis par le shell), aucun chiffre ni graphique inventé.
+// Hors ligne : le message unique du shell suffit (aucun second bandeau).
 export default function AppHomePage() {
   const { user } = useAuth();
-  const { organization } = useOrganizationShell();
+  const { authContext } = useOrganizationShell();
+  const { offline, unfinalizedCount } = useOfflineSales();
+  const pendingLink = usePendingSalesHref();
+  const [converterOpen, setConverterOpen] = useState(false);
+  // Recalculé seulement quand le contexte d'autorisation change.
+  const actions = useMemo(() => homeQuickActions(authContext), [authContext]);
 
   if (!user) return null;
 
-  const organizationName = organization?.name ?? null;
+  const pendingLabel = `${unfinalizedCount} vente${unfinalizedCount > 1 ? "s" : ""} en attente`;
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center gap-6 px-4 py-12 text-center">
-      <div className="flex w-full min-w-0 flex-col items-center gap-4 rounded-xl border border-(--tenant-accent-border) bg-(--tenant-accent-soft) px-4 py-8">
-        <TenantLogo
-          size="lg"
-          name={organizationName}
-          logoUrl={organization?.logoUrl}
-        />
-        {organizationName && (
-          <h1
-            className="w-full truncate text-xl font-semibold"
-            title={fullNameOf(organizationName) ?? undefined}
-          >
-            {organizationName}
-          </h1>
-        )}
-        <p
-          className="w-full truncate text-sm text-foreground"
+    <div
+      data-testid="app-home"
+      className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-6 sm:pt-10"
+    >
+      <section
+        aria-labelledby="home-greeting"
+        className="rounded-2xl border border-l-4 border-(--tenant-accent-border) border-l-(--tenant-accent) bg-(--tenant-accent-soft) px-5 py-5"
+      >
+        <h1
+          id="home-greeting"
+          className="truncate text-2xl font-semibold"
           title={fullNameOf(user.name) ?? undefined}
         >
-          Bienvenue, {firstNameOf(user.name)}.
+          Bonjour, {firstNameOf(user.name)}
+        </h1>
+        <p className="mt-1 text-sm text-foreground">
+          Que souhaitez-vous faire aujourd&apos;hui ?
         </p>
-      </div>
-      <Link
-        prefetch={false}
-        href="/app/catalog"
-        className="inline-flex items-center justify-center rounded-md bg-(--tenant-accent) px-4 py-2 text-sm font-medium text-(--tenant-accent-foreground) hover:opacity-90"
+      </section>
+
+      {/* Ventes locales non finalisées de la partition courante : en ligne
+      → /app/sales/pending ; hors ligne → panneau du catalogue (seule route
+      /app servie hors ligne), via l'ancre existante. */}
+      {unfinalizedCount > 0 && (
+        <section aria-labelledby="home-pending">
+          <h2 id="home-pending" className="sr-only">
+            Ventes en attente
+          </h2>
+          <PendingSalesAnchor
+            href={pendingLink.href}
+            offline={pendingLink.offline}
+            className="flex min-h-14 items-center gap-3 rounded-2xl border border-amber-500/40 bg-amber-50 px-4 py-3 text-amber-900 outline-none hover:bg-amber-100 focus-visible:ring-2 focus-visible:ring-(--tenant-accent-ring) focus-visible:ring-offset-2 motion-safe:transition-colors dark:bg-amber-500/10 dark:text-amber-200"
+          >
+            <span
+              aria-hidden="true"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/20"
+            >
+              <ClockIcon className="h-5 w-5" />
+            </span>
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="font-semibold" data-testid="home-pending-count">
+                {pendingLabel}
+              </span>
+              <span className="text-sm">
+                {pendingLink.offline
+                  ? "Elles seront envoyées au retour de la connexion."
+                  : "Voir et suivre leur envoi."}
+              </span>
+            </span>
+            <ChevronRightIcon className="h-5 w-5 shrink-0" aria-hidden />
+          </PendingSalesAnchor>
+        </section>
+      )}
+
+      <section
+        aria-labelledby="home-quick-actions"
+        className="flex flex-col gap-3"
       >
-        Accéder au catalogue
-      </Link>
+        <h2 id="home-quick-actions" className="text-base font-semibold">
+          Accès rapides
+        </h2>
+        <HomeQuickActions
+          actions={actions}
+          offline={offline}
+          onOpenConverter={() => setConverterOpen(true)}
+        />
+      </section>
+
+      <CurrencyConverter open={converterOpen} onOpenChange={setConverterOpen} />
     </div>
   );
 }
