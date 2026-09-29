@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import sharp from 'sharp';
 import { OrganizationBrandingController } from './organization-branding.controller';
 import { OrganizationsService } from './organizations.service';
 import type { ResolvedOrganizationContext } from './organizations.service';
@@ -32,10 +33,24 @@ function readMetadata(methodName: string): unknown {
     : undefined;
 }
 
-function multerFile(originalname = 'logo.png'): Express.Multer.File {
+// 1-12C : le contenu est réellement validé (Sharp) — vraie image PNG.
+let PNG = Buffer.alloc(0);
+beforeAll(async () => {
+  PNG = await sharp({
+    create: { width: 8, height: 8, channels: 3, background: '#062b5c' },
+  })
+    .png()
+    .toBuffer();
+});
+
+function multerFile(
+  originalname = 'logo.png',
+  buffer: Buffer = PNG,
+): Express.Multer.File {
   return {
     originalname,
-    buffer: Buffer.from('fake'),
+    buffer,
+    size: buffer.length,
     mimetype: 'image/png',
   } as Express.Multer.File;
 }
@@ -49,7 +64,7 @@ describe('OrganizationBrandingController (1-8A)', () => {
     removeLogo: jest.fn(),
   };
   const s3Stub = {
-    uploadStoredFile: jest.fn(),
+    uploadValidatedImage: jest.fn(),
     deleteStoredKey: jest.fn(),
   };
 
@@ -73,7 +88,7 @@ describe('OrganizationBrandingController (1-8A)', () => {
       organization: currentView,
       previousLogoKey: null,
     });
-    s3Stub.uploadStoredFile.mockReset().mockResolvedValue({
+    s3Stub.uploadValidatedImage.mockReset().mockResolvedValue({
       key: `${PREFIX_A}/new.png`,
       url: 'http://s3/new.png',
     });
@@ -119,12 +134,12 @@ describe('OrganizationBrandingController (1-8A)', () => {
       controller.updateBranding({}, undefined, ctx),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(serviceStub.updateBranding).not.toHaveBeenCalled();
-    expect(s3Stub.uploadStoredFile).not.toHaveBeenCalled();
+    expect(s3Stub.uploadValidatedImage).not.toHaveBeenCalled();
   });
 
   it('updateBranding sans fichier : aucun appel S3, dto transmis tel quel', async () => {
     await controller.updateBranding({ name: 'Nouveau' }, undefined, ctx);
-    expect(s3Stub.uploadStoredFile).not.toHaveBeenCalled();
+    expect(s3Stub.uploadValidatedImage).not.toHaveBeenCalled();
     expect(serviceStub.updateBranding).toHaveBeenCalledWith(
       ORG_A,
       { name: 'Nouveau' },
@@ -134,10 +149,11 @@ describe('OrganizationBrandingController (1-8A)', () => {
 
   it('updateBranding avec fichier : upload AVANT la mutation DB, sous le préfixe exact de l’org', async () => {
     await controller.updateBranding({}, multerFile(), ctx);
-    expect(s3Stub.uploadStoredFile).toHaveBeenCalledWith(
-      expect.anything(),
-      PREFIX_A,
-    );
+    expect(s3Stub.uploadValidatedImage).toHaveBeenCalledWith(PNG, PREFIX_A, {
+      format: 'png',
+      extension: 'png',
+      contentType: 'image/png',
+    });
     expect(serviceStub.updateBranding).toHaveBeenCalledWith(
       ORG_A,
       {},
@@ -167,6 +183,25 @@ describe('OrganizationBrandingController (1-8A)', () => {
       `${PREFIX_A}/new.png`,
       PREFIX_A,
     );
+  });
+
+  it('updateBranding : fichier invalide (1-12C) → 400 stable, ni upload S3 ni mutation DB', async () => {
+    await expect(
+      controller.updateBranding(
+        {},
+        multerFile('logo.png', Buffer.from('not an image')),
+        ctx,
+      ),
+    ).rejects.toMatchObject({ response: { code: 'LOGO_INVALID_FILE' } });
+    expect(s3Stub.uploadValidatedImage).not.toHaveBeenCalled();
+    expect(serviceStub.updateBranding).not.toHaveBeenCalled();
+    expect(s3Stub.deleteStoredKey).not.toHaveBeenCalled();
+  });
+
+  it('updateBranding : contenu reçu relâché après l’envoi (aucune référence conservée)', async () => {
+    const file = multerFile();
+    await controller.updateBranding({}, file, ctx);
+    expect(file.buffer.length).toBe(0);
   });
 
   it('removeLogo : supprime l’ancien objet S3 uniquement si previousLogoKey non nul', async () => {

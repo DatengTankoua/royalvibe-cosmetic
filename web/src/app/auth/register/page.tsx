@@ -4,6 +4,12 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  ORGANIZATION_NAME_HINT,
+  ORGANIZATION_NAME_MAX_LENGTH,
+  USER_NAME_HINT,
+  USER_NAME_MAX_LENGTH,
+} from "@/lib/name-limits";
 import { authRegister, getApiErrorCode, getApiErrorMessage } from "@/lib/api";
 import { Wordmark } from "@/components/brand/wordmark";
 import Link from "next/link";
@@ -106,7 +112,12 @@ export default function RegisterPage() {
               onChange={(e) => setName(e.target.value)}
               required
               autoComplete="name"
+              maxLength={USER_NAME_MAX_LENGTH}
+              aria-describedby="name-hint"
             />
+            <p id="name-hint" className="text-xs text-muted-foreground">
+              {USER_NAME_HINT}
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="organizationName">Nom de l&apos;entreprise</Label>
@@ -116,7 +127,15 @@ export default function RegisterPage() {
               onChange={(e) => setOrganizationName(e.target.value)}
               required
               autoComplete="organization"
+              maxLength={ORGANIZATION_NAME_MAX_LENGTH}
+              aria-describedby="organizationName-hint"
             />
+            <p
+              id="organizationName-hint"
+              className="text-xs text-muted-foreground"
+            >
+              {ORGANIZATION_NAME_HINT}
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>

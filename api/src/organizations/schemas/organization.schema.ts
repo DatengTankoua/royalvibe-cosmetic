@@ -1,13 +1,25 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
 import { OrganizationCurrency, OrganizationStatus } from '../permissions';
+import { ORGANIZATION_NAME_MAX_LENGTH } from '../../common/validation/name-rules';
 
 export type OrganizationDocument = HydratedDocument<Organization>;
 
 @Schema({ timestamps: true })
 export class Organization {
-  /** Nom affiché (identité de l'organisation). Non vide après trim. */
-  @Prop({ required: true, trim: true, minLength: 1, maxlength: 100 })
+  /**
+   * Nom affiché (identité de l'organisation). Non vide après trim, 60
+   * caractères max (1-12C, ex-100). Aucune migration : un nom historique plus
+   * long reste lisible, et les sauvegardes de branding ne revalident que les
+   * chemins MODIFIÉS (`validateModifiedOnly`), jamais ce nom s'il est
+   * inchangé.
+   */
+  @Prop({
+    required: true,
+    trim: true,
+    minLength: 1,
+    maxlength: ORGANIZATION_NAME_MAX_LENGTH,
+  })
   name: string;
 
   /**

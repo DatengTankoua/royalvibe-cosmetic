@@ -5,6 +5,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import * as bcrypt from 'bcryptjs';
 import request from 'supertest';
+import sharp from 'sharp';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
@@ -14,6 +15,7 @@ import type { OrganizationDocument } from './../src/organizations/schemas/organi
 import { OrganizationMembership } from './../src/organizations/schemas/membership.schema';
 import type { OrganizationMembershipDocument } from './../src/organizations/schemas/membership.schema';
 import { S3Service } from './../src/s3/s3.service';
+import { OrganizationsService } from './../src/organizations/organizations.service';
 import {
   startEphemeralMongo,
   stopEphemeralMongoSafe,
@@ -28,7 +30,7 @@ import {
 /**
  * E2E (1-8A) — branding d'organisation + logo tenant, sur
  * `MongoMemoryReplSet` réel (2 organisations A/B). Les opérations S3
- * (`uploadStoredFile`/`deleteStoredKey`) sont ESPIONNÉES (jamais overridées
+ * (`uploadValidatedImage`/`deleteStoredKey`) sont ESPIONNÉES (jamais overridées
  * en provider) : même convention que `multitenant-isolation.e2e-spec.ts`
  * (§3) — aucun appel réseau réel, la logique HTTP+DB reste réellement
  * exercée.
@@ -59,6 +61,8 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
   let adminAToken = '';
   let sellerAToken = '';
   let delegatedSellerAToken = '';
+  // 1-12C : vraie fixture PNG (le contenu est désormais réellement décodé).
+  let pngFixture: Buffer = Buffer.alloc(0);
 
   const getCurrent = (token: string) =>
     request(app.getHttpServer())
@@ -87,7 +91,10 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
     for (const [key, value] of Object.entries(fields)) {
       req = req.field(key, value);
     }
-    return req.attach('logo', Buffer.from('fake-png-bytes'), filename);
+    return req.attach('logo', pngFixture, {
+      filename,
+      contentType: 'image/png',
+    });
   };
   const deleteLogo = (token: string) =>
     request(app.getHttpServer())
@@ -95,6 +102,16 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       .set('Authorization', `Bearer ${token}`);
 
   beforeAll(async () => {
+    pngFixture = await sharp({
+      create: {
+        width: 32,
+        height: 32,
+        channels: 4,
+        background: { r: 255, g: 106, b: 0, alpha: 1 },
+      },
+    })
+      .png()
+      .toBuffer();
     const replSet = await startEphemeralMongo();
     try {
       process.env.MONGODB_URI = validatedEphemeralUri(replSet);
@@ -354,7 +371,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
   describe('cycle logo (S3Service espionné, aucun réseau réel)', () => {
     it('upload réussi : clé sous le préfixe tenant EXACT, logoUrl calculée', async () => {
       const uploadSpy = jest
-        .spyOn(s3Service, 'uploadStoredFile')
+        .spyOn(s3Service, 'uploadValidatedImage')
         .mockResolvedValue({
           key: `organizations/${orgAId}/branding/first.png`,
           url: `http://s3-e2e/organizations/${orgAId}/branding/first.png`,
@@ -366,11 +383,12 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       const res = await patchBrandingWithLogo(adminAToken, {}, 'first.png');
       expect(res.status).toBe(200);
       expect(uploadSpy).toHaveBeenCalledWith(
-        expect.anything(),
+        expect.any(Buffer),
         `organizations/${orgAId}/branding`,
+        { format: 'png', extension: 'png', contentType: 'image/png' },
       );
       // `logoUrl` est DÉRIVÉE de `logoKey` via `publicUrlForKey` (config S3
-      // réelle) — jamais l'`url` renvoyée par `uploadStoredFile` (espionné).
+      // réelle) — jamais l'`url` renvoyée par `uploadValidatedImage` (espionné).
       expect(res.body.logoUrl).toBe(
         `http://127.0.0.1:65535/e2e-local/organizations/${orgAId}/branding/first.png`,
       );
@@ -388,7 +406,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
 
     it('nouveau logo : l’ANCIEN est supprimé APRÈS la sauvegarde, sous le préfixe tenant', async () => {
       const uploadSpy = jest
-        .spyOn(s3Service, 'uploadStoredFile')
+        .spyOn(s3Service, 'uploadValidatedImage')
         .mockResolvedValue({
           key: `organizations/${orgAId}/branding/second.png`,
           url: `http://s3-e2e/organizations/${orgAId}/branding/second.png`,
@@ -450,6 +468,511 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
     expect(currentB.status).toBe(200);
     expect(currentB.body._id).toBe(orgBId);
     expect(currentB.body.name).not.toBe(res.body.name);
+  });
+
+  // ─── 1-12C : noms + contrat logo ──────────────────────────────────────────
+  describe('1-12C — validation des noms', () => {
+    const register = (body: Record<string, unknown>) =>
+      request(app.getHttpServer())
+        .post('/auth/register')
+        .send({ password: PASSWORD, ...body });
+    let seq = 0;
+    const email = () => `names-${++seq}-112c@royalvibe.test`;
+
+    it('inscription : organisation 60 → 201 ; 61 → 400', async () => {
+      const ok = await register({
+        name: 'Awa',
+        email: email(),
+        organizationName: 'o'.repeat(60),
+      });
+      expect(ok.status).toBe(201);
+      expect(ok.body.organization.name).toBe('o'.repeat(60));
+      const ko = await register({
+        name: 'Awa',
+        email: email(),
+        organizationName: 'o'.repeat(61),
+      });
+      expect(ko.status).toBe(400);
+    });
+
+    it('inscription : utilisateur 80 → 201 ; 81 → 400', async () => {
+      const ok = await register({
+        name: 'u'.repeat(80),
+        email: email(),
+        organizationName: 'Org 80',
+      });
+      expect(ok.status).toBe(201);
+      expect(ok.body.user.name).toBe('u'.repeat(80));
+      const ko = await register({
+        name: 'u'.repeat(81),
+        email: email(),
+        organizationName: 'Org 81',
+      });
+      expect(ko.status).toBe(400);
+    });
+
+    it('inscription : trim persistant, Unicode/accents acceptés', async () => {
+      const addr = email();
+      const res = await register({
+        name: '  Zoé   Ñandú  ',
+        email: addr,
+        organizationName: '  Épicerie du Coin — 李小龙  ',
+      });
+      expect(res.status).toBe(201);
+      const user = await userModel.findOne({ email: addr }).exec();
+      expect(user!.name).toBe('Zoé   Ñandú');
+      const org = await organizationModel
+        .findById(res.body.organization._id as string)
+        .exec();
+      expect(org!.name).toBe('Épicerie du Coin — 李小龙');
+    });
+
+    it('inscription : espaces seuls → 400 (nom et organisation), aucun compte créé', async () => {
+      const a = email();
+      const b = email();
+      expect(
+        (await register({ name: '   ', email: a, organizationName: 'Org' }))
+          .status,
+      ).toBe(400);
+      expect(
+        (await register({ name: 'Awa', email: b, organizationName: ' \t ' }))
+          .status,
+      ).toBe(400);
+      expect(await userModel.countDocuments({ email: { $in: [a, b] } })).toBe(
+        0,
+      );
+    });
+
+    it('inscription : whitelist stricte toujours active', async () => {
+      const res = await register({
+        name: 'Awa',
+        email: email(),
+        organizationName: 'Org',
+        slug: 'forged',
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('acceptation d’invitation (nouveau compte) : 80 → 201 trimé ; 81 et espaces → 400', async () => {
+      const issue = async (to: string) => {
+        const res = await request(app.getHttpServer())
+          .post('/organizations/invitations')
+          .set('Authorization', `Bearer ${ownerAToken}`)
+          .send({ email: to, role: 'seller' });
+        expect(res.status).toBe(201);
+        return res.body.token as string;
+      };
+      const accept = (token: string, name: string) =>
+        request(app.getHttpServer())
+          .post('/auth/invitations/accept')
+          .send({ token, name, password: PASSWORD });
+
+      const t81 = await issue(email());
+      expect((await accept(t81, 'u'.repeat(81))).status).toBe(400);
+      const tBlank = await issue(email());
+      expect((await accept(tBlank, '    ')).status).toBe(400);
+
+      const addr = email();
+      const t80 = await issue(addr);
+      const ok = await accept(t80, `  ${'é'.repeat(80)}  `);
+      expect(ok.status).toBe(200);
+      const user = await userModel.findOne({ email: addr }).exec();
+      expect(user!.name).toBe('é'.repeat(80));
+    });
+
+    it('branding : 60 → 200 trimé ; 61 → 400 ; nom inchangé après refus', async () => {
+      const ok = await patchBranding(adminAToken, {
+        name: `  ${'A'.repeat(60)}  `,
+      });
+      expect(ok.status).toBe(200);
+      expect(ok.body.name).toBe('A'.repeat(60));
+      const ko = await patchBranding(adminAToken, { name: 'A'.repeat(61) });
+      expect(ko.status).toBe(400);
+      const stored = await organizationModel.findById(orgAId).exec();
+      expect(stored!.name).toBe('A'.repeat(60));
+      await patchBranding(adminAToken, { name: 'Org A 18A' });
+    });
+  });
+
+  describe('1-12C — compatibilité historique (aucune migration)', () => {
+    const LEGACY_ORG_NAME = `Organisation historique ${'L'.repeat(76)}`;
+    const LEGACY_USER_NAME = `Utilisateur historique ${'U'.repeat(77)}`;
+
+    beforeAll(async () => {
+      // Écriture directe hors validateurs : simule un document antérieur aux
+      // limites 1-12C (100 caractères).
+      await organizationModel.collection.updateOne(
+        { _id: new Types.ObjectId(orgAId) },
+        { $set: { name: LEGACY_ORG_NAME } },
+      );
+      await userModel.collection.updateOne(
+        { email: ADMIN_A_EMAIL },
+        { $set: { name: LEGACY_USER_NAME } },
+      );
+    });
+
+    afterAll(async () => {
+      await organizationModel.collection.updateOne(
+        { _id: new Types.ObjectId(orgAId) },
+        { $set: { name: 'Org A 18A' } },
+      );
+    });
+
+    it('lecture : nom d’organisation de 100 caractères renvoyé complet, sans troncature', async () => {
+      expect(LEGACY_ORG_NAME.length).toBe(100);
+      const res = await getCurrent(adminAToken);
+      expect(res.status).toBe(200);
+      expect(res.body.name).toBe(LEGACY_ORG_NAME);
+    });
+
+    it('lecture : utilisateur historique de 100 caractères — connexion et /auth/me OK', async () => {
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: ADMIN_A_EMAIL, password: PASSWORD });
+      expect(login.status).toBe(201);
+      const token = login.body.access_token as string;
+      const me = await request(app.getHttpServer())
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${token}`);
+      expect(me.status).toBe(200);
+      expect(me.body.name).toBe(LEGACY_USER_NAME);
+    });
+
+    it('modification INDÉPENDANTE : brandColor seule → 200, nom historique intact', async () => {
+      const res = await patchBranding(adminAToken, { brandColor: '#123456' });
+      expect(res.status).toBe(200);
+      expect(res.body.brandColor).toBe('#123456');
+      const stored = await organizationModel.findById(orgAId).exec();
+      expect(stored!.name).toBe(LEGACY_ORG_NAME);
+    });
+
+    it('modification INDÉPENDANTE : logo seul puis suppression du logo → 200, nom intact', async () => {
+      const uploadSpy = jest
+        .spyOn(s3Service, 'uploadValidatedImage')
+        .mockResolvedValue({
+          key: `organizations/${orgAId}/branding/legacy.png`,
+          url: 'unused',
+        });
+      const deleteSpy = jest
+        .spyOn(s3Service, 'deleteStoredKey')
+        .mockResolvedValue(undefined);
+      expect((await patchBrandingWithLogo(adminAToken)).status).toBe(200);
+      expect((await deleteLogo(adminAToken)).status).toBe(200);
+      const stored = await organizationModel.findById(orgAId).exec();
+      expect(stored!.name).toBe(LEGACY_ORG_NAME);
+      expect(stored!.logoKey).toBeNull();
+      uploadSpy.mockRestore();
+      deleteSpy.mockRestore();
+    });
+
+    it('renommer une organisation historique : le NOUVEAU nom reste soumis à la limite de 60', async () => {
+      expect(
+        (await patchBranding(adminAToken, { name: 'N'.repeat(61) })).status,
+      ).toBe(400);
+      const stored = await organizationModel.findById(orgAId).exec();
+      expect(stored!.name).toBe(LEGACY_ORG_NAME);
+    });
+  });
+
+  describe('1-12C — contrat du logo (validation réelle Sharp, S3 client espionné)', () => {
+    type SendSpy = jest.SpyInstance<Promise<unknown>, [unknown]>;
+    let send: SendSpy;
+    const s3Client = () =>
+      (s3Service as unknown as { s3Client: { send: (c: unknown) => unknown } })
+        .s3Client;
+    const commandInputs = () =>
+      send.mock.calls.map(
+        ([command]) => (command as { input: Record<string, unknown> }).input,
+      );
+
+    const fixture = (width: number, height: number) =>
+      sharp({
+        create: {
+          width,
+          height,
+          channels: 4,
+          background: { r: 6, g: 43, b: 92, alpha: 1 },
+        },
+      });
+    const upload = (
+      body: Buffer,
+      filename: string,
+      contentType: string,
+      token = adminAToken,
+    ) =>
+      request(app.getHttpServer())
+        .patch('/organizations/current/branding')
+        .set('Authorization', `Bearer ${token}`)
+        .attach('logo', body, { filename, contentType });
+
+    let webp: Buffer;
+    beforeAll(async () => {
+      webp = await fixture(40, 20).webp().toBuffer();
+    });
+    beforeEach(() => {
+      send = jest
+        .spyOn(s3Client() as { send: () => Promise<unknown> }, 'send')
+        .mockResolvedValue({}) as unknown as SendSpy;
+    });
+    afterEach(() => send.mockRestore());
+
+    const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+
+    it('PNG valide → clé `<uuid>.png` sous le préfixe tenant, ContentType serveur, octets inchangés', async () => {
+      const res = await upload(pngFixture, 'Mon Logo (final).PNG', 'image/png');
+      expect(res.status).toBe(200);
+      const [put] = commandInputs();
+      expect(put.Key).toMatch(
+        new RegExp(`^organizations/${orgAId}/branding/${UUID}\\.png$`),
+      );
+      expect(put.ContentType).toBe('image/png');
+      expect(Buffer.compare(put.Body as Buffer, pngFixture)).toBe(0);
+      expect(String(put.Key)).not.toContain('Mon');
+      expect(JSON.stringify(res.body)).not.toContain('logoKey');
+      const stored = await organizationModel.findById(orgAId).exec();
+      expect(stored!.logoKey).toBe(put.Key);
+    });
+
+    it('WebP valide → clé `<uuid>.webp`, ContentType image/webp ; l’ancien logo est supprimé APRÈS la mutation DB', async () => {
+      const before = (await organizationModel.findById(orgAId).exec())!.logoKey;
+      let logoKeyAtDelete: string | null | undefined;
+      send.mockImplementation(async (command: unknown) => {
+        if (
+          (command as { constructor: { name: string } }).constructor.name ===
+          'DeleteObjectCommand'
+        ) {
+          logoKeyAtDelete = (await organizationModel.findById(orgAId).exec())!
+            .logoKey;
+        }
+        return {};
+      });
+      const res = await upload(webp, 'logo.webp', 'image/webp');
+      expect(res.status).toBe(200);
+      const [put, del] = commandInputs();
+      expect(put.Key).toMatch(
+        new RegExp(`^organizations/${orgAId}/branding/${UUID}\\.webp$`),
+      );
+      expect(put.ContentType).toBe('image/webp');
+      expect(del.Key).toBe(before);
+      // Au moment de la suppression, la DB pointe DÉJÀ vers le nouveau logo.
+      expect(logoKeyAtDelete).toBe(put.Key);
+    });
+
+    it('échec DB après upload → le NOUVEAU fichier est supprimé, l’ancien conservé', async () => {
+      const before = (await organizationModel.findById(orgAId).exec())!.logoKey;
+      const failing = jest
+        .spyOn(OrganizationsService.prototype, 'updateBranding')
+        .mockRejectedValueOnce(new Error('db down'));
+      const res = await upload(pngFixture, 'logo.png', 'image/png');
+      expect(res.status).toBe(500);
+      const [put, del] = commandInputs();
+      expect(del.Key).toBe(put.Key);
+      expect(del.Key).not.toBe(before);
+      expect((await organizationModel.findById(orgAId).exec())!.logoKey).toBe(
+        before,
+      );
+      failing.mockRestore();
+    });
+
+    const rejected: Array<{
+      label: string;
+      status: number;
+      code: string;
+      build: () => [Buffer, string, string] | Promise<[Buffer, string, string]>;
+    }> = [
+      {
+        label: 'PNG renommé .webp',
+        status: 400,
+        code: 'LOGO_INVALID_FORMAT',
+        build: () => [pngFixture, 'logo.webp', 'image/webp'],
+      },
+      {
+        label: 'MIME falsifié',
+        status: 400,
+        code: 'LOGO_INVALID_FORMAT',
+        build: () => [pngFixture, 'logo.png', 'image/webp'],
+      },
+      {
+        label: 'texte déclaré image/png',
+        status: 400,
+        code: 'LOGO_INVALID_FILE',
+        build: () => [
+          Buffer.from('not an image at all'),
+          'logo.png',
+          'image/png',
+        ],
+      },
+      {
+        label: 'fichier vide',
+        status: 400,
+        code: 'LOGO_INVALID_FILE',
+        build: () => [Buffer.alloc(0), 'logo.png', 'image/png'],
+      },
+      {
+        label: 'PNG tronqué',
+        status: 400,
+        code: 'LOGO_INVALID_FILE',
+        build: () => [
+          pngFixture.subarray(0, pngFixture.length - 20),
+          'logo.png',
+          'image/png',
+        ],
+      },
+      {
+        label: 'largeur 2049',
+        status: 400,
+        code: 'LOGO_INVALID_DIMENSIONS',
+        build: async () => [
+          await fixture(2049, 1).png().toBuffer(),
+          'logo.png',
+          'image/png',
+        ],
+      },
+      {
+        label: 'hauteur 2049',
+        status: 400,
+        code: 'LOGO_INVALID_DIMENSIONS',
+        build: async () => [
+          await fixture(1, 2049).webp().toBuffer(),
+          'logo.webp',
+          'image/webp',
+        ],
+      },
+      {
+        label: 'SVG',
+        status: 400,
+        code: 'LOGO_INVALID_FORMAT',
+        build: () => [
+          Buffer.from(
+            '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+          ),
+          'logo.svg',
+          'image/svg+xml',
+        ],
+      },
+      {
+        label: 'JPEG réel',
+        status: 400,
+        code: 'LOGO_INVALID_FORMAT',
+        build: async () => [
+          await fixture(8, 8).jpeg().toBuffer(),
+          'logo.jpg',
+          'image/jpeg',
+        ],
+      },
+      {
+        label: 'GIF réel',
+        status: 400,
+        code: 'LOGO_INVALID_FORMAT',
+        build: async () => [
+          await fixture(8, 8).gif().toBuffer(),
+          'logo.gif',
+          'image/gif',
+        ],
+      },
+      {
+        label: 'JPEG déguisé en PNG',
+        status: 400,
+        code: 'LOGO_INVALID_FILE',
+        build: async () => [
+          await fixture(8, 8).jpeg().toBuffer(),
+          'logo.png',
+          'image/png',
+        ],
+      },
+      {
+        label: '> 2 Mio',
+        status: 413,
+        code: 'LOGO_TOO_LARGE',
+        build: () => [
+          Buffer.concat([pngFixture, Buffer.alloc(2 * 1024 * 1024)]),
+          'logo.png',
+          'image/png',
+        ],
+      },
+    ];
+
+    it.each(rejected)(
+      'refus $label → HTTP $status $code, zéro appel S3, zéro écriture DB, aucune fuite interne',
+      async ({ status, code, build }) => {
+        const before = await organizationModel.findById(orgAId).lean().exec();
+        const [body, filename, contentType] = await build();
+        const res = await upload(body, filename, contentType);
+        expect(res.status).toBe(status);
+        expect(res.body.code).toBe(code);
+        expect(typeof res.body.message).toBe('string');
+        expect(send).not.toHaveBeenCalled();
+        const after = await organizationModel.findById(orgAId).lean().exec();
+        expect(after!.logoKey).toBe(before!.logoKey);
+        expect(after!.updatedAt).toEqual(before!.updatedAt);
+        const raw = JSON.stringify(res.body);
+        // `path` (route publique) est ajouté par le filtre existant ; jamais
+        // de clé de stockage tenant, de chemin local ni de détail interne.
+        expect(raw).not.toMatch(
+          /organizations\/[0-9a-f]{24}|stack|\\\\|[A-Z]:\/|sharp|vips|\.tmp/i,
+        );
+      },
+    );
+
+    it('exactement 2048 × 2048 → accepté', async () => {
+      const max = await fixture(2048, 2048).png().toBuffer();
+      const res = await upload(max, 'max.png', 'image/png');
+      expect(res.status).toBe(200);
+    });
+
+    it('isolation : logo de B sous le préfixe de B uniquement, A inchangée', async () => {
+      const aBefore = (await organizationModel.findById(orgAId).exec())!
+        .logoKey;
+      const res = await upload(pngFixture, 'b.png', 'image/png', ownerBToken);
+      expect(res.status).toBe(200);
+      for (const input of commandInputs()) {
+        expect(String(input.Key)).toMatch(
+          new RegExp(`^organizations/${orgBId}/branding/`),
+        );
+      }
+      expect((await organizationModel.findById(orgAId).exec())!.logoKey).toBe(
+        aBefore,
+      );
+    });
+
+    it('suppression de logo inchangée : DB à null puis objet tenant supprimé', async () => {
+      const before = (await organizationModel.findById(orgAId).exec())!.logoKey;
+      const res = await deleteLogo(adminAToken);
+      expect(res.status).toBe(200);
+      expect(res.body.logoUrl).toBeNull();
+      expect(commandInputs().map((i) => i.Key)).toEqual([before]);
+    });
+
+    it('images produits inchangées : JPEG accepté via `uploadFile`, jamais le contrat logo', async () => {
+      const section = await request(app.getHttpServer())
+        .post('/sections')
+        .set('Authorization', `Bearer ${adminAToken}`)
+        .send({ name: 'Rayon 1-12C' });
+      expect(section.status).toBe(201);
+      const uploadFile = jest.spyOn(s3Service, 'uploadFile');
+      const validated = jest.spyOn(s3Service, 'uploadValidatedImage');
+      const jpeg = await fixture(16, 16).jpeg().toBuffer();
+      const res = await request(app.getHttpServer())
+        .post('/products')
+        .set('Authorization', `Bearer ${adminAToken}`)
+        .field('sectionId', section.body._id as string)
+        .field('name', 'Produit 1-12C')
+        .field('purchasePrice', '100')
+        .field('salePrice', '200')
+        .field('initialQuantity', '3')
+        .attach('image', jpeg, {
+          filename: 'photo.jpg',
+          contentType: 'image/jpeg',
+        });
+      expect(res.status).toBe(201);
+      expect(uploadFile).toHaveBeenCalledTimes(1);
+      expect(validated).not.toHaveBeenCalled();
+      const [put] = commandInputs();
+      expect(put.ContentType).toBe('image/jpeg');
+      expect(String(put.Key)).toMatch(/photo\.jpg$/);
+      uploadFile.mockRestore();
+      validated.mockRestore();
+    });
   });
 
   describe('garde OrganizationGuard (membre/organisation inactifs)', () => {

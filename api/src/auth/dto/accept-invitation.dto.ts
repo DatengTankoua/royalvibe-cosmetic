@@ -1,3 +1,4 @@
+import { Transform } from 'class-transformer';
 import {
   IsNotEmpty,
   IsOptional,
@@ -5,6 +6,11 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import {
+  USER_NAME_MAX_LENGTH,
+  USER_NAME_MESSAGE,
+  trimString,
+} from '../../common/validation/name-rules';
 
 /**
  * Body strict { token, name?, password? } — `name`/`password` ne sont
@@ -16,10 +22,13 @@ export class AcceptInvitationDto {
   @IsNotEmpty()
   token: string;
 
+  // 1-12C : trim avant validation, 1 à 80 caractères (même règle que
+  // l'inscription).
   @IsOptional()
+  @Transform(trimString)
   @IsString()
-  @IsNotEmpty()
-  @MaxLength(100)
+  @IsNotEmpty({ message: USER_NAME_MESSAGE })
+  @MaxLength(USER_NAME_MAX_LENGTH, { message: USER_NAME_MESSAGE })
   name?: string;
 
   @IsOptional()

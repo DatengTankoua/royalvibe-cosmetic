@@ -12,6 +12,13 @@ import {
   removeOrganizationLogo,
   updateOrganizationBranding,
 } from "@/lib/api";
+import {
+  LOGO_ACCEPT,
+  LOGO_HINT,
+  LOGO_MAX_BYTES,
+  ORGANIZATION_NAME_HINT,
+  ORGANIZATION_NAME_MAX_LENGTH,
+} from "@/lib/name-limits";
 
 // /app/organization/branding (1-9C) : lecture pour tout membre actif,
 // édition réservée à `branding.manage`. Champs interdits (slug/currency/
@@ -148,9 +155,15 @@ export default function OrganizationBrandingPage() {
               id="org-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              maxLength={100}
+              // 1-12C : limite des nouvelles saisies ; un nom historique plus
+              // long reste affiché tel quel et n'est renvoyé que s'il change.
+              maxLength={ORGANIZATION_NAME_MAX_LENGTH}
+              aria-describedby="org-name-hint"
               required
             />
+            <p id="org-name-hint" className="text-xs text-muted-foreground">
+              {ORGANIZATION_NAME_HINT}
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="org-color">Couleur de marque</Label>
@@ -167,9 +180,25 @@ export default function OrganizationBrandingPage() {
             <Input
               id="org-logo"
               type="file"
-              accept="image/*"
-              onChange={(e) => setLogo(e.target.files?.[0] ?? null)}
+              accept={LOGO_ACCEPT}
+              aria-describedby="org-logo-hint"
+              onChange={(e) => {
+                const file = e.target.files?.[0] ?? null;
+                // Pré-contrôle de confort (le backend valide contenu, format
+                // réel et dimensions) : évite un envoi manifestement refusé.
+                if (file && file.size > LOGO_MAX_BYTES) {
+                  setError("Le logo ne doit pas dépasser 2 Mo.");
+                  e.target.value = "";
+                  setLogo(null);
+                  return;
+                }
+                setError(null);
+                setLogo(file);
+              }}
             />
+            <p id="org-logo-hint" className="text-xs text-muted-foreground">
+              {LOGO_HINT}
+            </p>
           </div>
           <Button type="submit" disabled={saving}>
             {saving ? "Enregistrement…" : "Enregistrer"}

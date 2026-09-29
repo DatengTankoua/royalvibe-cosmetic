@@ -41,6 +41,10 @@ import { AcceptInvitationDto } from '../auth/dto/accept-invitation.dto';
 import { SocketRegistryService } from './socket-registry.service';
 import { S3Service } from '../s3/s3.service';
 import { EmailService, EmailDeliveryStatus } from '../email/email.service';
+import {
+  ORGANIZATION_NAME_MAX_LENGTH,
+  ORGANIZATION_NAME_MESSAGE,
+} from '../common/validation/name-rules';
 import * as bcrypt from 'bcryptjs';
 
 // Session transactionnelle Mongoose (`mongodb.ClientSession`) : même
@@ -957,10 +961,12 @@ export class OrganizationsService {
 
     if (dto.name !== undefined) {
       const trimmed = dto.name.trim();
-      if (!trimmed) {
+      // Défense en profondeur (le DTO a déjà trimé et borné) : jamais de
+      // troncature silencieuse.
+      if (!trimmed || trimmed.length > ORGANIZATION_NAME_MAX_LENGTH) {
         throw new BadRequestException({
           code: 'INVALID_BRANDING_NAME',
-          message: 'name ne peut pas être vide.',
+          message: ORGANIZATION_NAME_MESSAGE,
         });
       }
       organization.name = trimmed;
@@ -968,7 +974,11 @@ export class OrganizationsService {
     if (dto.brandColor !== undefined) organization.brandColor = dto.brandColor;
     if (newLogoKey !== undefined) organization.logoKey = newLogoKey;
 
-    await organization.save();
+    // 1-12C : seuls les chemins modifiés sont revalidés — une organisation
+    // historique au nom > 60 caractères peut changer sa couleur ou son logo
+    // sans être forcée à renommer (le nouveau nom, lui, est toujours
+    // validé par le DTO puis par le schéma).
+    await organization.save({ validateModifiedOnly: true });
 
     return {
       organization: this.toCurrentView(organization),
@@ -993,7 +1003,7 @@ export class OrganizationsService {
     const previousLogoKey = organization.logoKey;
     if (previousLogoKey !== null) {
       organization.logoKey = null;
-      await organization.save();
+      await organization.save({ validateModifiedOnly: true });
     }
     return { organization: this.toCurrentView(organization), previousLogoKey };
   }

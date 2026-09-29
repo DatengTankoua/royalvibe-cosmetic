@@ -84,6 +84,32 @@ export class S3Service {
     return { key, url: this.publicUrlForKey(key) };
   }
 
+  /**
+   * Upload d'une image DÉJÀ validée côté serveur (1-12C, logo tenant) :
+   * clé `${keyPrefix}/${uuid}.${extension}` sans aucun nom client, et
+   * `ContentType` issu du format détecté côté serveur — jamais de
+   * `originalname` ni de `mimetype` client. `uploadStoredFile` (produits)
+   * reste inchangé.
+   */
+  async uploadValidatedImage(
+    body: Buffer,
+    keyPrefix: string,
+    image: { extension: string; contentType: string },
+  ): Promise<{ key: string; url: string }> {
+    const key = `${keyPrefix}/${randomUUID()}.${image.extension}`;
+
+    await this.s3Client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentType: image.contentType,
+      }),
+    );
+
+    return { key, url: this.publicUrlForKey(key) };
+  }
+
   /** URL publique déterministe pour une clé déjà connue (jamais recalculée depuis une entrée cliente). */
   publicUrlForKey(key: string): string {
     return `${this.publicUrlBase}/${key}`;

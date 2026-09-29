@@ -5,6 +5,7 @@ import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { USER_NAME_HINT, USER_NAME_MAX_LENGTH } from "@/lib/name-limits";
 import {
   acceptInvitation,
   getApiErrorCode,
@@ -126,7 +127,12 @@ export default function AcceptInvitationPage() {
                 onChange={(e) => setName(e.target.value)}
                 required
                 autoComplete="name"
+                maxLength={USER_NAME_MAX_LENGTH}
+                aria-describedby="inv-name-hint"
               />
+              <p id="inv-name-hint" className="text-xs text-muted-foreground">
+                {USER_NAME_HINT}
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="inv-password">Mot de passe</Label>
