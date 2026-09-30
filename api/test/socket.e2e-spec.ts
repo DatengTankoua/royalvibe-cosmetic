@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import * as http from 'http';
+import { randomBytes } from 'crypto';
 import type { AddressInfo } from 'net';
 import { Model, Types } from 'mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -265,6 +266,80 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
           res.on('error', reject);
         },
       );
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  /**
+   * 1-12F — ouvre une session Engine.IO v4 en long-polling SANS token
+   * (le JWT n'est vérifié qu'à la connexion du namespace, APRÈS ce handshake)
+   * et renvoie son `sid`.
+   */
+  function openPollingSession(origin: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port,
+          path: '/socket.io/?EIO=4&transport=polling',
+          method: 'GET',
+          headers: { Origin: origin },
+          timeout: 4_000,
+        },
+        (res) => {
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk: string) => (body += chunk));
+          res.on('end', () => {
+            // Paquet OPEN Engine.IO v4 : `0{"sid":"…",…}`.
+            const match = /^0(\{.*\})/.exec(body);
+            if (res.statusCode !== 200 || !match) {
+              reject(new Error(`Handshake polling refusé (${res.statusCode})`));
+              return;
+            }
+            resolve((JSON.parse(match[1]) as { sid: string }).sid);
+          });
+          res.on('error', reject);
+        },
+      );
+      req.on('timeout', () => req.destroy(new Error('Handshake timeout')));
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  /**
+   * 1-12F — tentative d'upgrade WebSocket BRUTE (node:http, aucune
+   * dépendance) sur une session existante. Renvoie 101 si l'upgrade est
+   * accepté (le socket est aussitôt détruit, aucun paquet envoyé), sinon le
+   * statut HTTP du refus.
+   */
+  function rawWebSocketUpgrade(query: string, origin: string): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const req = http.request({
+        hostname: '127.0.0.1',
+        port,
+        path: `/socket.io/?${query}`,
+        method: 'GET',
+        headers: {
+          Connection: 'Upgrade',
+          Upgrade: 'websocket',
+          'Sec-WebSocket-Version': '13',
+          'Sec-WebSocket-Key': randomBytes(16).toString('base64'),
+          Origin: origin,
+        },
+        timeout: 4_000,
+      });
+      req.on('upgrade', (res, socket) => {
+        socket.destroy();
+        resolve(res.statusCode ?? 101);
+      });
+      req.on('response', (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on('timeout', () => req.destroy(new Error('Upgrade timeout')));
       req.on('error', reject);
       req.end();
     });
@@ -869,5 +944,84 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
         }
       },
     );
+  });
+
+  // ---------------------------------------------------------------------
+  // 9. 1-12F — GHSA-2gc4-cqfq-p2gv : révision de protocole Engine.IO
+  // ---------------------------------------------------------------------
+  // Le handshake Engine.IO précède l'authentification du namespace : un
+  // client SANS token peut ouvrir une session puis tenter un upgrade. Avant
+  // engine.io 6.6.10, un upgrade avec un `EIO` différent (ou absent,
+  // interprété comme v3) était accepté (101), ce qui permettait ensuite de
+  // faire planter le processus par un heartbeat forgé. Aucun heartbeat n'est
+  // envoyé ici : seul le refus de l'upgrade est vérifié.
+  describe('9. Upgrade Engine.IO avec révision de protocole incohérente', () => {
+    it('9.1 contrôle : upgrade avec le même EIO=4 → accepté (101)', async () => {
+      const sid = await openPollingSession(ALLOWED_ORIGIN);
+      const status = await rawWebSocketUpgrade(
+        `EIO=4&transport=websocket&sid=${encodeURIComponent(sid)}`,
+        ALLOWED_ORIGIN,
+      );
+      expect(status).toBe(101);
+    });
+
+    it.each([
+      ['EIO=3 (différent de la session v4)', 'EIO=3&'],
+      ['EIO absent (interprété comme v3)', ''],
+    ])('9.2 upgrade %s → refus 400, aucun crash', async (_label, eio) => {
+      const sid = await openPollingSession(ALLOWED_ORIGIN);
+      const status = await rawWebSocketUpgrade(
+        `${eio}transport=websocket&sid=${encodeURIComponent(sid)}`,
+        ALLOWED_ORIGIN,
+      );
+      expect(status).toBe(400);
+    });
+
+    it('9.3 après les refus : serveur disponible et connexion légitime polling → websocket', async () => {
+      const health = await request(app.getHttpServer()).get('/health');
+      expect(health.status).toBe(200);
+
+      // Transports par défaut du serveur (polling puis upgrade websocket).
+      const socket = io(`http://127.0.0.1:${port}`, {
+        transports: ['polling', 'websocket'],
+        reconnection: false,
+        timeout: 4_000,
+        extraHeaders: { origin: ALLOWED_ORIGIN },
+        auth: { token: validSellerToken },
+      });
+      openSockets.push(socket);
+      expect((await expectAttempt(socket)).connected).toBe(true);
+
+      const deadline = Date.now() + 4_000;
+      while (
+        socket.io.engine.transport.name !== 'websocket' &&
+        Date.now() < deadline
+      ) {
+        await settle(20);
+      }
+      expect(socket.io.engine.transport.name).toBe('websocket');
+      closeSocket(socket);
+      await waitForSocketCount(ioServer, 0);
+    });
+
+    it('9.4 reconnexion avec le token courant (comme le client web) : ancien refusé, courant accepté', async () => {
+      const first = connect(ALLOWED_ORIGIN, validSellerToken);
+      expect((await expectAttempt(first)).connected).toBe(true);
+      closeSocket(first);
+      await waitForSocketCount(ioServer, 0);
+
+      // Un token devenu invalide ne permet pas de se reconnecter…
+      const stale = connect(ALLOWED_ORIGIN, expiredToken);
+      const staleAttempt = await expectAttempt(stale);
+      expect(staleAttempt.connected).toBe(false);
+      expect(staleAttempt.errMsg).toBe('unauthorized');
+      closeSocket(stale);
+
+      // …le nouveau socket porteur du token courant se connecte.
+      const current = connect(ALLOWED_ORIGIN, validSellerToken);
+      expect((await expectAttempt(current)).connected).toBe(true);
+      closeSocket(current);
+      await waitForSocketCount(ioServer, 0);
+    });
   });
 });
