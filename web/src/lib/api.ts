@@ -25,30 +25,55 @@ export interface ApiSection {
   createdAt: string;
 }
 
+// 1-12H — projection serveur selon les permissions effectives : un champ
+// optionnel ABSENT signifie « non autorisé », jamais 0.
+// - standard : nom, prix de vente cible, stock restant, statut ;
+// - `products.view_stock_details` : initialQuantity, unitsSold ;
+// - `products.view_financials` : purchasePrice, totalPurchaseCost,
+//   actualRevenue, actualProfit, margin (agrégats serveur sur toutes les
+//   ventes du produit, indépendants des ventes consultables).
 export interface ApiProduct {
   _id: string;
   sectionId: string;
   name: string;
   imageUrl: string;
-  purchasePrice: number;
   salePrice: number;
-  initialQuantity: number;
   remainingQuantity: number;
   createdAt: string;
   updatedAt: string;
-  // computed metrics returned by backend
   status: "in_stock" | "low_stock" | "out_of_stock";
-  unitsSold: number;
-  totalPurchaseCost: number;
-  estimatedRevenue: number;
-  estimatedProfit: number;
+  initialQuantity?: number;
+  unitsSold?: number;
+  purchasePrice?: number;
+  totalPurchaseCost?: number;
+  actualRevenue?: number;
+  actualProfit?: number;
+  /** Bénéfice réel / CA réel × 100 ; `null` sans CA. */
+  margin?: number | null;
 }
 
 export interface ApiProductDetail extends ApiProduct {
-  actualRevenue: number;
-  actualProfit: number;
   sales: ApiSale[];
   auditLogs: ApiAuditLog[];
+}
+
+/** Enveloppe `{ product, status, ...métriques }` des réponses produit. */
+type ApiProductEnvelope = {
+  product: Omit<ApiProduct, "status">;
+  status: ApiProduct["status"];
+} & Partial<
+  Pick<
+    ApiProduct,
+    | "unitsSold"
+    | "totalPurchaseCost"
+    | "actualRevenue"
+    | "actualProfit"
+    | "margin"
+  >
+>;
+
+function flattenProduct({ product, ...metrics }: ApiProductEnvelope) {
+  return { ...product, ...metrics } as ApiProduct;
 }
 
 export interface ApiSale {
@@ -443,37 +468,23 @@ export async function deleteSection(id: string): Promise<void> {
 // ─── Products ────────────────────────────────────────────────────────────────
 
 export async function fetchProducts(sectionId?: string): Promise<ApiProduct[]> {
-  const { data } = await apiClient.get<
-    {
-      product: ApiProduct;
-      status: string;
-      unitsSold: number;
-      totalPurchaseCost: number;
-      estimatedRevenue: number;
-      estimatedProfit: number;
-    }[]
-  >("/products", { params: sectionId ? { sectionId } : {} });
-  // Flatten backend's { product, ...metrics } shape
-  return data.map(
-    ({ product, ...metrics }) => ({ ...product, ...metrics }) as ApiProduct,
-  );
+  const { data } = await apiClient.get<ApiProductEnvelope[]>("/products", {
+    params: sectionId ? { sectionId } : {},
+  });
+  return data.map(flattenProduct);
 }
 
 export async function fetchProduct(id: string): Promise<ApiProductDetail> {
-  const { data } = await apiClient.get<{
-    product: ApiProduct;
-    status: string;
-    unitsSold: number;
-    totalPurchaseCost: number;
-    estimatedRevenue: number;
-    estimatedProfit: number;
-    actualRevenue: number;
-    actualProfit: number;
-    sales: ApiSale[];
-    auditLogs: ApiAuditLog[];
-  }>(`/products/${id}`);
-  const { product, ...rest } = data;
-  return { ...product, ...rest } as ApiProductDetail;
+  const { data } = await apiClient.get<
+    ApiProductEnvelope & { sales: ApiSale[]; auditLogs: ApiAuditLog[] }
+  >(`/products/${id}`);
+  const { sales, auditLogs, ...envelope } = data;
+  return { ...flattenProduct(envelope), sales, auditLogs };
+}
+
+/** Diffusion `product:updated` : enveloppe standard (1-12H). */
+export function flattenProductEvent(data: ApiProductEnvelope): ApiProduct {
+  return flattenProduct(data);
 }
 
 export async function createProduct(payload: {
@@ -491,8 +502,12 @@ export async function createProduct(payload: {
   form.append("salePrice", String(payload.salePrice));
   form.append("initialQuantity", String(payload.initialQuantity));
   form.append("image", payload.image);
-  const { data } = await apiClient.post<ApiProduct>("/products", form);
-  return data;
+  // Réponse : produit projeté plat, sans métriques (statut non calculé ici).
+  const { data } = await apiClient.post<Omit<ApiProduct, "status">>(
+    "/products",
+    form,
+  );
+  return { ...data, status: "in_stock" };
 }
 
 export async function updateProduct(
@@ -505,16 +520,11 @@ export async function updateProduct(
     sectionId?: string;
   },
 ): Promise<ApiProduct> {
-  const { data } = await apiClient.patch<{
-    product: ApiProduct;
-    status: string;
-    unitsSold: number;
-    totalPurchaseCost: number;
-    estimatedRevenue: number;
-    estimatedProfit: number;
-  }>(`/products/${id}`, payload);
-  const { product, ...metrics } = data;
-  return { ...product, ...metrics } as ApiProduct;
+  const { data } = await apiClient.patch<ApiProductEnvelope>(
+    `/products/${id}`,
+    payload,
+  );
+  return flattenProduct(data);
 }
 
 export async function deleteProduct(id: string): Promise<void> {
@@ -531,10 +541,11 @@ export interface ApiTrashedProduct {
   sectionId: string;
   name: string;
   imageUrl: string;
-  purchasePrice: number;
   salePrice: number;
-  initialQuantity: number;
   remainingQuantity: number;
+  // 1-12H : présents seulement avec la permission correspondante.
+  purchasePrice?: number;
+  initialQuantity?: number;
   deletedAt: string;
   createdAt: string;
 }

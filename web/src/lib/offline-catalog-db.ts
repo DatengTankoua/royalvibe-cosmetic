@@ -9,7 +9,12 @@ import {
   deleteIndexedDb,
 } from "./offline-db-utils";
 
-export const OFFLINE_CATALOG_SCHEMA_VERSION = 2; // v2 : ajout syncedScopes (remplacement par scope)
+// v2 : ajout syncedScopes (remplacement par scope).
+// v3 (1-12H) : purchasePrice/initialQuantity retirés de l'allowlist — tout
+// snapshot v2 (qui peut les contenir) est rejeté par `isSnapshotUsable`,
+// purgé à la lecture et remplacé à l'écriture. L'outbox des ventes est une
+// base distincte (`stockmaster-offline-sales-outbox`), jamais touchée ici.
+export const OFFLINE_CATALOG_SCHEMA_VERSION = 3;
 export const OFFLINE_CATALOG_TTL_MS = 72 * 60 * 60 * 1000; // 72h
 const OP_TIMEOUT_MS = 2000;
 
@@ -17,10 +22,11 @@ const DB_NAME = "stockmaster-offline-catalog";
 const DB_VERSION = 1;
 const STORE_NAME = "catalogSnapshots";
 
-// Allowlist stricte : uniquement le stock/prix déjà visibles dans le
-// catalogue. Jamais imageUrl (image = réseau uniquement), jamais
-// unitsSold/estimatedProfit/estimatedRevenue/totalPurchaseCost (dérivés des
-// ventes = analytics, explicitement interdits hors ligne).
+// Allowlist stricte : uniquement les informations STANDARD (1-12H) — nom,
+// prix de vente cible, stock restant, statut. Jamais imageUrl (image =
+// réseau uniquement), jamais le prix d'achat ni le stock initial (droits
+// supplémentaires non vérifiables hors ligne), jamais de métrique dérivée
+// des ventes.
 export interface OfflineCatalogSection {
   _id: string;
   name: string;
@@ -32,11 +38,27 @@ export interface OfflineCatalogProduct {
   _id: string;
   sectionId: string;
   name: string;
-  purchasePrice: number;
   salePrice: number;
-  initialQuantity: number;
   remainingQuantity: number;
   status: "in_stock" | "low_stock" | "out_of_stock";
+}
+
+/**
+ * Copie défensive vers l'allowlist (1-12H) : même si l'appelant passe un
+ * objet plus riche (ex. produit API complet), seuls ces champs sont
+ * persistés dans IndexedDB.
+ */
+export function toOfflineCatalogProduct(
+  p: OfflineCatalogProduct,
+): OfflineCatalogProduct {
+  return {
+    _id: p._id,
+    sectionId: p.sectionId,
+    name: p.name,
+    salePrice: p.salePrice,
+    remainingQuantity: p.remainingQuantity,
+    status: p.status,
+  };
 }
 
 // Un scope = la portée exacte d'une réponse API complète. Rechargé en
@@ -171,7 +193,7 @@ export function applyScopeUpdatesToSnapshot(
       products = products.filter((p) => !productBelongsToScope(p, scope));
       const incomingIds = new Set(update.products.map((p) => p._id));
       products = products.filter((p) => !incomingIds.has(p._id));
-      products = products.concat(update.products);
+      products = products.concat(update.products.map(toOfflineCatalogProduct));
     } else {
       sections = sections.filter((s) => !sectionBelongsToScope(s, scope));
       const incomingIds = new Set(update.sections.map((s) => s._id));

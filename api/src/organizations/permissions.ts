@@ -52,6 +52,11 @@ export const DELEGABLE_PERMISSIONS = Object.freeze([
   'sales.record',
   'sales.view_own',
   'sales.view_all',
+  // 1-12H : visibilité des informations produit au-delà du standard (prix
+  // de vente cible, stock restant). N'accordent AUCUN droit de modification,
+  // ni `sales.view_all`, ni `analytics.read`.
+  'products.view_stock_details',
+  'products.view_financials',
   'analytics.read',
   'audit.read',
   'trash.manage',
@@ -85,6 +90,17 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Readonly<
 });
 
 /**
+ * 1-12H — droits STANDARD de tout membre actif, quel que soit son rôle :
+ * ajoutés par le calcul central (`effectivePermissions`), jamais retirables
+ * par `membership.permissions` ni par une requête client, sans migration
+ * (s'applique aux memberships existantes comme nouvelles). Ne contournent
+ * jamais l'authentification, les statuts (user/organisation/membership,
+ * vérifiés en amont par la résolution du contexte) ni l'isolation.
+ */
+export const STANDARD_MEMBER_PERMISSIONS: readonly DelegablePermission[] =
+  Object.freeze(['sales.record', 'sales.view_own'] as const);
+
+/**
  * Opérations EXCLUSIVES de l'opérateur `owner` (contrainte 4 du cahier des
  * charges 1A) : elles ne sont AUCUNE permission délégable. Elles seront
  * contrôlées ultérieurement directement par le rôle `owner` (phase 1-7),
@@ -100,8 +116,8 @@ export const OWNER_ONLY_OPERATIONS = Object.freeze([
 export type OwnerOnlyOperation = (typeof OWNER_ONLY_OPERATIONS)[number];
 
 /**
- * 1-7C — ensemble des permissions effectives (rôle ∪ permissions
- * supplémentaires). Base commune à `hasPermission` et aux contrôles
+ * 1-7C — ensemble des permissions effectives (standard 1-12H ∪ rôle ∪
+ * permissions supplémentaires). Base commune à `hasPermission` et aux contrôles
  * anti-escalade de gestion des membres.
  */
 export function effectivePermissions(
@@ -111,6 +127,7 @@ export function effectivePermissions(
   // `?? []` : défensif contre un rôle invalide/futur non couvert par la
   // table (jamais un TypeError → jamais 500).
   return new Set([
+    ...STANDARD_MEMBER_PERMISSIONS,
     ...(DEFAULT_PERMISSIONS_BY_ROLE[role] ?? []),
     ...permissions,
   ]);

@@ -49,12 +49,20 @@ export function UpdateProductDialog({
   const [additionalStock, setAdditionalStock] = useState("");
   const [loading, setLoading] = useState(false);
   const canEditAnything = canManageDescription || canAdjustStock;
+  // 1-12H : le prix d'achat n'est proposé que s'il est visible
+  // (`products.view_financials`) — jamais saisi « à l'aveugle » ni prérempli
+  // par une valeur inventée.
+  const purchasePriceVisible = product?.purchasePrice !== undefined;
 
   // Sync fields whenever the targeted product changes
   useEffect(() => {
     if (product) {
       setName(product.name);
-      setPurchasePrice(String(product.purchasePrice));
+      setPurchasePrice(
+        product.purchasePrice !== undefined
+          ? String(product.purchasePrice)
+          : "",
+      );
       setSalePrice(String(product.salePrice));
       setAdditionalStock("");
     }
@@ -77,7 +85,10 @@ export function UpdateProductDialog({
       payload.name = name;
     }
     if (canAdjustStock) {
-      if (purchasePrice !== String(product.purchasePrice)) {
+      if (
+        product.purchasePrice !== undefined &&
+        purchasePrice !== String(product.purchasePrice)
+      ) {
         payload.purchasePrice = parseFloat(purchasePrice);
       }
       if (salePrice !== String(product.salePrice)) {
@@ -133,21 +144,23 @@ export function UpdateProductDialog({
             {canAdjustStock && (
               <>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="u-buy">Prix d&apos;achat (FCFA)</Label>
-                    <Input
-                      id="u-buy"
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={purchasePrice}
-                      onChange={(e) => setPurchasePrice(e.target.value)}
-                      required
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Actuel : {fmtXof(product.purchasePrice)}
-                    </p>
-                  </div>
+                  {purchasePriceVisible && (
+                    <div className="space-y-2">
+                      <Label htmlFor="u-buy">Prix d&apos;achat (FCFA)</Label>
+                      <Input
+                        id="u-buy"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={purchasePrice}
+                        onChange={(e) => setPurchasePrice(e.target.value)}
+                        required
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Actuel : {fmtXof(product.purchasePrice ?? 0)}
+                      </p>
+                    </div>
+                  )}
                   <div className="space-y-2">
                     <Label htmlFor="u-sell">Prix de vente (FCFA)</Label>
                     <Input
@@ -178,8 +191,9 @@ export function UpdateProductDialog({
                     placeholder="0"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Stock restant : {product.remainingQuantity} · Vendu :{" "}
-                    {product.unitsSold ?? 0}
+                    Stock restant : {product.remainingQuantity}
+                    {product.unitsSold !== undefined &&
+                      ` · Vendu : ${product.unitsSold}`}
                   </p>
                 </div>
               </>

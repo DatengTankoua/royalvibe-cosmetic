@@ -264,10 +264,15 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
       expect(populateOrder).toBeDefined();
       expect(detachOrder).toBeLessThan(populateOrder);
       expect(events.emitToOrganization).toHaveBeenCalledTimes(1);
+      // 1-12H : diffusion commune minimale — identifiants seuls, jamais le
+      // prix, le vendeur, l'acheteur ou ses coordonnées.
       expect(events.emitToOrganization).toHaveBeenCalledWith(
         ORG_A,
         'sale:created',
-        expect.objectContaining({ _id: saleEntity._id }),
+        {
+          _id: String(saleEntity._id),
+          productId: String(saleEntity.productId),
+        },
       );
       expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
     });
@@ -376,6 +381,13 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
       );
       expect(entity.$session).toHaveBeenCalledWith(null);
       expect(fixture.endSession).toHaveBeenCalledTimes(1);
+      // 1-12H : invalidation post-commit, identifiants seuls.
+      expect(events.emitToOrganization).toHaveBeenCalledTimes(1);
+      expect(events.emitToOrganization).toHaveBeenCalledWith(
+        ORG_A,
+        'sale:updated',
+        { _id: SALE_OBJECT_ID, productId: PRODUCT_OBJECT_ID },
+      );
     });
 
     it('update étranger est indistinguable de l’absent et ne produit aucune écriture', async () => {
@@ -430,6 +442,7 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
       ).rejects.toThrow('update audit failure');
       expect(entity.populate).not.toHaveBeenCalled();
       expect(fixture.endSession).toHaveBeenCalledTimes(1);
+      expect(events.emitToOrganization).not.toHaveBeenCalled();
     });
 
     it('remove restaure le stock, supprime et audite avec la même session et la même org', async () => {
@@ -459,6 +472,16 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
         fixture.session,
       );
       expect(fixture.endSession).toHaveBeenCalledTimes(1);
+      // 1-12H : invalidation APRÈS le commit, identifiants seuls.
+      expect(events.emitToOrganization).toHaveBeenCalledTimes(1);
+      expect(events.emitToOrganization).toHaveBeenCalledWith(
+        ORG_A,
+        'sale:deleted',
+        { _id: SALE_OBJECT_ID, productId: PRODUCT_OBJECT_ID },
+      );
+      const endOrder = fixture.endSession.mock.invocationCallOrder[0];
+      const emitOrder = events.emitToOrganization.mock.invocationCallOrder[0];
+      expect(endOrder).toBeLessThan(emitOrder);
     });
 
     it('remove propage l’échec audit dans la transaction', async () => {
@@ -473,6 +496,7 @@ describe('SalesService — transaction atomique vente–stock–audit (0B.7B)', 
         service.remove(ORG_A, SALE_OBJECT_ID, 'actor-1'),
       ).rejects.toThrow('remove audit failure');
       expect(fixture.endSession).toHaveBeenCalledTimes(1);
+      expect(events.emitToOrganization).not.toHaveBeenCalled();
     });
 
     it('remove (1-7B) : scope sellerId ajouté au filtre — vente d’un AUTRE vendeur ⇒ même 404 que l’absent', async () => {

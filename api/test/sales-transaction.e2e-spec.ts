@@ -455,10 +455,9 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       expect(emitSpy).toHaveBeenCalledWith(
         TRADE_ORG_ID,
         'sale:created',
-        expect.objectContaining({
-          _id: expect.anything(),
-          organizationId: expect.anything(),
-        }),
+        // 1-12H : diffusion commune minimale (le tenant est porté par la
+        // room) — jamais prix, vendeur, acheteur ni coordonnées.
+        { _id: expect.any(String), productId: expect.any(String) },
       );
       emitSpy.mockClear();
 
@@ -655,10 +654,9 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       expect(emitSpy).toHaveBeenCalledWith(
         ORG_B_ID,
         'sale:created',
-        expect.objectContaining({
-          _id: expect.anything(),
-          organizationId: expect.anything(),
-        }),
+        // 1-12H : diffusion commune minimale (le tenant est porté par la
+        // room) — jamais prix, vendeur, acheteur ni coordonnées.
+        { _id: expect.any(String), productId: expect.any(String) },
       );
       emitSpy.mockClear();
 

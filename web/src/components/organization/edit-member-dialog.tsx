@@ -14,6 +14,8 @@ import { PermissionCheckboxes } from "@/components/organization/permission-check
 import {
   ASSIGNABLE_MEMBER_ROLES,
   ROLE_LABELS,
+  roleGrantsAllPermissions,
+  supplementaryOnly,
   type DelegablePermission,
 } from "@/lib/organization-permissions";
 import { describeOrganizationError } from "@/lib/organization-errors";
@@ -44,9 +46,13 @@ export function EditMemberDialog({
   const [role, setRole] = useState<(typeof ASSIGNABLE_MEMBER_ROLES)[number]>(
     member.role === "owner" ? "admin" : member.role,
   );
-  const [permissions, setPermissions] = useState<DelegablePermission[]>(
-    member.permissions,
+  // Sélection « vendeur » initialisée UNE fois (droits standard retirés :
+  // toujours accordés par le serveur) et conservée si l'on bascule vers
+  // Administrateur puis revient — jamais réinitialisée par un rendu.
+  const [permissions, setPermissions] = useState<DelegablePermission[]>(() =>
+    supplementaryOnly(member.permissions),
   );
+  const allGranted = roleGrantsAllPermissions(role);
   const [status, setStatus] = useState<(typeof STATUS_OPTIONS)[number]>(
     member.status,
   );
@@ -60,7 +66,8 @@ export function EditMemberDialog({
     try {
       const updated = await updateMember(member.membershipId, {
         role,
-        permissions,
+        // 1-12H : administrateur → droits complets par le rôle.
+        permissions: allGranted ? [] : permissions,
         status,
       });
       onUpdated(updated);
@@ -106,6 +113,7 @@ export function EditMemberDialog({
               onChange={setPermissions}
               assignable={assignablePermissions}
               disabled={saving}
+              allGranted={allGranted}
             />
           </div>
           <div className="space-y-2">

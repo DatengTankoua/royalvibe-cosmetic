@@ -28,6 +28,8 @@ import {
 } from "@/contexts/offline-sales-context";
 import { hasPermission } from "@/lib/organization-permissions";
 import { fmtXof } from "@/lib/currency";
+import { productInfoItems } from "@/lib/product-info";
+import { useSaleInvalidation } from "@/hooks/use-sale-invalidation";
 
 const fmt = fmtXof;
 
@@ -120,19 +122,31 @@ export default function ProductDetailPage() {
   // 1-11C.3 : début de la dernière requête réussie (voir `reservesStock`).
   const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
 
-  const load = useCallback(async () => {
-    setIsLoading(true);
-    const requestedAt = Date.now();
-    try {
-      const data = await fetchProduct(params.id);
-      setDetail(data);
-      setLoadedAt(requestedAt);
-    } catch (err) {
-      setError(getApiErrorMessage(err));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [params.id]);
+  const load = useCallback(
+    async (options: { silent?: boolean } = {}) => {
+      if (!options.silent) setIsLoading(true);
+      const requestedAt = Date.now();
+      try {
+        const data = await fetchProduct(params.id);
+        setDetail(data);
+        setLoadedAt(requestedAt);
+      } catch (err) {
+        // Un rechargement silencieux en échec conserve la fiche affichée.
+        if (!options.silent) setError(getApiErrorMessage(err));
+      } finally {
+        if (!options.silent) setIsLoading(false);
+      }
+    },
+    [params.id],
+  );
+  const reload = useCallback(() => load(), [load]);
+
+  // 1-12H (correctif) : vente d'un collègue (ou la sienne) sur ce produit →
+  // stock, agrégats autorisés et historique scopé rechargés via l'API.
+  useSaleInvalidation(
+    (productId) => productId === params.id,
+    () => void load({ silent: true }),
+  );
 
   useEffect(() => {
     void load();
@@ -212,7 +226,9 @@ export default function ProductDetailPage() {
                       : "Épuisé"}
                 </Badge>
               </div>
-              <ProfitIndicator profit={detail.actualProfit} />
+              {detail.actualProfit !== undefined && (
+                <ProfitIndicator profit={detail.actualProfit} />
+              )}
               {canRecordSale && (
                 <RecordSaleDialog
                   productId={detail._id}
@@ -220,54 +236,26 @@ export default function ProductDetailPage() {
                   targetPrice={detail.salePrice}
                   remainingStock={detail.remainingQuantity}
                   serverLoadedAt={loadedAt}
-                  onSaleRecorded={load}
+                  onSaleRecorded={reload}
                 />
               )}
             </div>
           </div>
 
-          {/* Metrics grid */}
+          {/* Metrics grid — 1-12H : champs projetés par l'API selon les
+              permissions effectives, jamais complétés ici. */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {[
-              {
-                label: "Prix d'achat unitaire",
-                value: fmt(detail.purchasePrice),
-              },
-              { label: "Prix de vente cible", value: fmt(detail.salePrice) },
-              { label: "Stock initial", value: detail.initialQuantity },
-              indicative.hasReservation
-                ? {
-                    label: "Stock indicatif",
-                    value: `${indicative.value} (serveur : ${detail.remainingQuantity})`,
-                  }
-                : { label: "Stock restant", value: detail.remainingQuantity },
-              { label: "Unités vendues", value: detail.unitsSold },
-              {
-                label: "Coût total d'achat",
-                value: fmt(detail.totalPurchaseCost),
-              },
-              { label: "CA réel", value: fmt(detail.actualRevenue) },
-              {
-                label: "Bénéfice réel",
-                value: fmt(detail.actualProfit),
-                highlight: detail.actualProfit >= 0 ? "green" : "red",
-              },
-              {
-                label: "Marge",
-                value:
-                  detail.actualRevenue > 0
-                    ? `${((detail.actualProfit / detail.actualRevenue) * 100).toFixed(1)}%`
-                    : "—",
-              },
-            ].map((m) => (
-              <Card key={m.label}>
+            {productInfoItems(detail, indicative, {
+              showServerStock: true,
+            }).map((m) => (
+              <Card key={m.key}>
                 <CardContent className="pt-4 pb-3">
                   <p className="text-xs text-muted-foreground">{m.label}</p>
                   <p
                     className={`text-lg font-bold ${
-                      m.highlight === "green"
+                      m.tone === "positive"
                         ? "text-green-600"
-                        : m.highlight === "red"
+                        : m.tone === "negative"
                           ? "text-red-600"
                           : ""
                     }`}
@@ -355,8 +343,8 @@ export default function ProductDetailPage() {
         onOpenChange={(v) => {
           if (!v) setEditSale(null);
         }}
-        onUpdated={load}
-        onDeleted={load}
+        onUpdated={reload}
+        onDeleted={reload}
       />
     </div>
   );

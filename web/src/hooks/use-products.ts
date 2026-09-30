@@ -1,16 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchProducts,
   createProduct,
   updateProduct,
   deleteProduct,
+  flattenProductEvent,
   getApiErrorMessage,
   isNetworkError,
   type ApiProduct,
 } from "@/lib/api";
 import { useSocket } from "@/contexts/socket-context";
+import { useOrganizationShell } from "@/contexts/organization-shell-context";
+import { hasPermission } from "@/lib/organization-permissions";
+import { useSaleInvalidation } from "@/hooks/use-sale-invalidation";
+
+// 1-12H : les diffusions Socket.IO ne portent que les champs standard. Un
+// membre qui voit davantage recharge ses champs étendus via l'API autorisée
+// (rechargement silencieux, sans état « Chargement… »).
+const EVENT_REFRESH_DELAY_MS = 300;
 
 export function useProducts(sectionId?: string) {
   const [products, setProducts] = useState<ApiProduct[]>([]);
@@ -20,27 +29,38 @@ export function useProducts(sectionId?: string) {
   // réponse HTTP (401/403/404/5xx) — seule éligible au repli hors ligne.
   const [isOffline, setIsOffline] = useState(false);
   const socket = useSocket();
+  const { authContext } = useOrganizationShell();
+  const seesExtendedFields =
+    hasPermission(authContext, "products.view_stock_details") ||
+    hasPermission(authContext, "products.view_financials");
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 1-11C.3 : début de la dernière requête RÉUSSIE — une vente locale
   // confirmée après cet instant n'est pas encore reflétée dans `products`.
   const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
 
-  const load = useCallback(async () => {
-    setIsLoading(true);
-    const requestedAt = Date.now();
-    try {
-      const data = await fetchProducts(sectionId);
-      setProducts(data);
-      setLoadedAt(requestedAt);
-      setError(null);
-      setIsOffline(false);
-    } catch (err) {
-      setError(getApiErrorMessage(err));
-      setIsOffline(isNetworkError(err));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [sectionId]);
+  const load = useCallback(
+    async (options: { silent?: boolean } = {}) => {
+      if (!options.silent) setIsLoading(true);
+      const requestedAt = Date.now();
+      try {
+        const data = await fetchProducts(sectionId);
+        setProducts(data);
+        setLoadedAt(requestedAt);
+        setError(null);
+        setIsOffline(false);
+      } catch (err) {
+        // Un rechargement silencieux en échec conserve la liste affichée.
+        if (!options.silent) {
+          setError(getApiErrorMessage(err));
+          setIsOffline(isNetworkError(err));
+        }
+      } finally {
+        if (!options.silent) setIsLoading(false);
+      }
+    },
+    [sectionId],
+  );
 
   useEffect(() => {
     void load();
@@ -48,21 +68,31 @@ export function useProducts(sectionId?: string) {
 
   useEffect(() => {
     if (!socket) return;
-    const onCreated = (p: ApiProduct) =>
+    const scheduleRefresh = () => {
+      if (!seesExtendedFields) return;
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      refreshTimer.current = setTimeout(
+        () => void load({ silent: true }),
+        EVENT_REFRESH_DELAY_MS,
+      );
+    };
+    // Payload standard `{ product, status }` : jamais de champ restreint.
+    const onCreated = (data: Parameters<typeof flattenProductEvent>[0]) => {
+      const p = flattenProductEvent(data);
+      if (sectionId && p.sectionId !== sectionId) return;
       setProducts((prev) =>
         prev.some((x) => x._id === p._id) ? prev : [p, ...prev],
       );
-    const onUpdated = (data: {
-      product: ApiProduct;
-      unitsSold: number;
-      status: string;
-      totalPurchaseCost: number;
-      estimatedRevenue: number;
-      estimatedProfit: number;
-    }) => {
-      const { product, ...metrics } = data;
-      const flat = { ...product, ...metrics } as ApiProduct;
-      setProducts((prev) => prev.map((x) => (x._id === flat._id ? flat : x)));
+      scheduleRefresh();
+    };
+    const onUpdated = (data: Parameters<typeof flattenProductEvent>[0]) => {
+      const common = flattenProductEvent(data);
+      // Fusion des seuls champs standard : les champs étendus déjà chargés
+      // sont conservés jusqu'au rechargement autorisé.
+      setProducts((prev) =>
+        prev.map((x) => (x._id === common._id ? { ...x, ...common } : x)),
+      );
+      scheduleRefresh();
     };
     const onDeleted = (id: string) =>
       setProducts((prev) => prev.filter((x) => x._id !== id));
@@ -73,8 +103,9 @@ export function useProducts(sectionId?: string) {
       socket.off("product:created", onCreated);
       socket.off("product:updated", onUpdated);
       socket.off("product:deleted", onDeleted);
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
     };
-  }, [socket]);
+  }, [socket, sectionId, seesExtendedFields, load]);
 
   const addProduct = useCallback(
     async (payload: {
@@ -122,12 +153,22 @@ export function useProducts(sectionId?: string) {
     setProducts((prev) => prev.filter((x) => x._id !== id));
   }, []);
 
+  const reload = useCallback(() => load(), [load]);
+
+  // 1-12H (correctif) : vente enregistrée, modifiée ou supprimée (par
+  // n'importe quel membre) sur un produit affiché → stock restant et, si
+  // autorisé, agrégats rechargés silencieusement via l'API.
+  useSaleInvalidation(
+    (productId) => products.some((p) => p._id === productId),
+    () => void load({ silent: true }),
+  );
+
   return {
     products,
     isLoading,
     error,
     isOffline,
-    reload: load,
+    reload,
     loadedAt,
     addProduct,
     editProduct,

@@ -11,6 +11,9 @@ import type { User } from '../users/schemas/user.schema';
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const PRODUCT_ID = '223344556677889900112233';
 const SECTION_QUERY = '112233445566778899001122';
+// 1-12H : visibilité produit calculée par le contrôleur depuis le contexte.
+const FULL = { stockDetails: true, financials: true };
+const STANDARD = { stockDetails: false, financials: false };
 
 /**
  * Le contexte est celui BRANCHÉ par `OrganizationGuard` sur `request` :
@@ -106,6 +109,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       dto,
       'http://s3-e2e/key.png',
       actorId,
+      FULL,
     );
     expect(s3Stub.deleteFile).not.toHaveBeenCalled();
   });
@@ -146,10 +150,14 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
   it('findAll : transmet l’org du contexte + sectionId de la query inchangée', async () => {
     await controller.findAll(SECTION_QUERY, ctxA);
     expect(serviceStub.findAll).toHaveBeenCalledTimes(1);
-    expect(serviceStub.findAll).toHaveBeenCalledWith(ORG_A, SECTION_QUERY);
+    expect(serviceStub.findAll).toHaveBeenCalledWith(
+      ORG_A,
+      SECTION_QUERY,
+      FULL,
+    );
 
     await controller.findAll(undefined, ctxA);
-    expect(serviceStub.findAll).toHaveBeenCalledWith(ORG_A, undefined);
+    expect(serviceStub.findAll).toHaveBeenCalledWith(ORG_A, undefined, FULL);
   });
 
   it('findOne : transmet l’org du contexte + l’id du paramètre + le scope calculé', async () => {
@@ -159,7 +167,51 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       PRODUCT_ID,
       { kind: 'all' },
       true,
+      FULL,
     );
+  });
+
+  describe('visibilité produit (1-12H) : groupes indépendants, jamais depuis User.role', () => {
+    it.each([
+      ['seller sans délégation', [], STANDARD],
+      [
+        'seller + détail du stock',
+        ['products.view_stock_details'],
+        { stockDetails: true, financials: false },
+      ],
+      [
+        'seller + finances',
+        ['products.view_financials'],
+        { stockDetails: false, financials: true },
+      ],
+      [
+        'seller + deux groupes',
+        ['products.view_stock_details', 'products.view_financials'],
+        FULL,
+      ],
+      ['seller + sales.view_all seul', ['sales.view_all'], STANDARD],
+      ['seller + analytics.read seul', ['analytics.read'], STANDARD],
+    ] as const)('%s', async (_label, permissions, expected) => {
+      const ctx = makeContext(ORG_A, OrganizationRole.SELLER, [...permissions]);
+      await controller.findAll(undefined, ctx);
+      expect(serviceStub.findAll).toHaveBeenLastCalledWith(
+        ORG_A,
+        undefined,
+        expected,
+      );
+    });
+
+    it('admin : les deux groupes par défaut', async () => {
+      await controller.findAll(
+        undefined,
+        makeContext(ORG_A, OrganizationRole.ADMIN, []),
+      );
+      expect(serviceStub.findAll).toHaveBeenLastCalledWith(
+        ORG_A,
+        undefined,
+        FULL,
+      );
+    });
   });
 
   describe('findOne — scope ventes + gate audit.read (1-7B correctif : jamais interrogé hors scope)', () => {
@@ -170,6 +222,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
         PRODUCT_ID,
         { kind: 'all' },
         true,
+        FULL,
       );
     });
 
@@ -181,6 +234,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
         PRODUCT_ID,
         { kind: 'own', sellerId: sellerCtx.userId },
         false,
+        STANDARD,
       );
     });
 
@@ -194,6 +248,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
         PRODUCT_ID,
         { kind: 'all' },
         false,
+        STANDARD,
       );
     });
 
@@ -207,10 +262,11 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
         PRODUCT_ID,
         { kind: 'own', sellerId: sellerCtx.userId },
         true,
+        STANDARD,
       );
     });
 
-    it('rôle fictif sans aucune des deux permissions ventes : scope «none»', async () => {
+    it('rôle hors table (1-12H) : droits standard → scope «own», jamais «all»', async () => {
       const noScopeCtx = makeContext(
         ORG_A,
         'guest' as unknown as OrganizationRole,
@@ -220,8 +276,9 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       expect(serviceStub.findOne).toHaveBeenCalledWith(
         ORG_A,
         PRODUCT_ID,
-        { kind: 'none' },
+        { kind: 'own', sellerId: noScopeCtx.userId },
         false,
+        STANDARD,
       );
     });
 
@@ -246,6 +303,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       dto,
       actorId,
       undefined,
+      FULL,
     );
   });
 
@@ -262,6 +320,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       dto,
       actorId,
       'http://s3-e2e/key.png',
+      FULL,
     );
     expect(s3Stub.deleteFile).not.toHaveBeenCalled();
   });
@@ -427,15 +486,24 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
 
   it('remove : transmet l’org du contexte AVANT id et actorId', async () => {
     await controller.remove(PRODUCT_ID, user, ctxA);
-    expect(serviceStub.remove).toHaveBeenCalledWith(ORG_A, PRODUCT_ID, actorId);
+    expect(serviceStub.remove).toHaveBeenCalledWith(
+      ORG_A,
+      PRODUCT_ID,
+      actorId,
+      FULL,
+    );
   });
 
   it('restore / permanentDelete : transmettent l’org du contexte AVANT l’id', async () => {
     await controller.restore(PRODUCT_ID, ctxA);
-    expect(serviceStub.restore).toHaveBeenCalledWith(ORG_A, PRODUCT_ID);
+    expect(serviceStub.restore).toHaveBeenCalledWith(ORG_A, PRODUCT_ID, FULL);
 
     await controller.permanentDelete(PRODUCT_ID, ctxA);
-    expect(serviceStub.permanentDelete).toHaveBeenCalledWith(ORG_A, PRODUCT_ID);
+    expect(serviceStub.permanentDelete).toHaveBeenCalledWith(
+      ORG_A,
+      PRODUCT_ID,
+      FULL,
+    );
   });
 
   it('aucune opération ne reçoit une org du body falsifié : seul l’org du contexte part', async () => {

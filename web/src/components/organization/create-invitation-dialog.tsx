@@ -17,6 +17,7 @@ import { useOrganizationShell } from "@/contexts/organization-shell-context";
 import {
   INVITABLE_ROLES,
   ROLE_LABELS,
+  roleGrantsAllPermissions,
   type DelegablePermission,
 } from "@/lib/organization-permissions";
 import { describeOrganizationError } from "@/lib/organization-errors";
@@ -76,7 +77,13 @@ export function CreateInvitationDialog({
     setSaving(true);
     setError(null);
     try {
-      const result = await createInvitation({ email, role, permissions });
+      // 1-12H : administrateur → toutes les permissions par défaut côté
+      // serveur ; la sélection vendeur conservée n'est pas envoyée.
+      const result = await createInvitation({
+        email,
+        role,
+        permissions: roleGrantsAllPermissions(role) ? [] : permissions,
+      });
       onCreated(result.invitation);
       setCreated(result);
       toast.success("Invitation créée");
@@ -222,6 +229,7 @@ export function CreateInvitationDialog({
                   onChange={setPermissions}
                   assignable={authContext?.effectivePermissions ?? []}
                   disabled={saving}
+                  allGranted={roleGrantsAllPermissions(role)}
                 />
               </div>
               {error && (

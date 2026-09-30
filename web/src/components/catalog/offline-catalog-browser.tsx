@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import {
   ArrowLeftIcon,
   FolderIcon,
@@ -22,10 +22,11 @@ import {
   useIndicativeStock,
   useOfflineSales,
 } from "@/contexts/offline-sales-context";
-import { fmtXof } from "@/lib/currency";
+import { productInfoItems } from "@/lib/product-info";
 import {
   scopeKey,
   type CatalogScope,
+  type OfflineCatalogProduct,
   type OfflineCatalogSnapshot,
 } from "@/lib/offline-catalog-db";
 
@@ -181,22 +182,10 @@ export function OfflineCatalogBrowser({
                   {STATUS_LABEL[openProduct.status]}
                 </Badge>
               </div>
-              <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
-                <span className="text-muted-foreground">Achat unitaire</span>
-                <span className="text-right font-medium">
-                  {fmtXof(openProduct.purchasePrice)}
-                </span>
-                <span className="text-muted-foreground">Vente unitaire</span>
-                <span className="text-right font-medium">
-                  {fmtXof(openProduct.salePrice)}
-                </span>
-                <OfflineStockRows
-                  productId={openProduct._id}
-                  remaining={openProduct.remainingQuantity}
-                  loadedAt={snapshotUpdatedAt}
-                  initial={openProduct.initialQuantity}
-                />
-              </div>
+              <OfflineProductInfo
+                product={openProduct}
+                loadedAt={snapshotUpdatedAt}
+              />
               {canRecordSales && (
                 <OfflineSaleButton
                   productId={openProduct._id}
@@ -233,27 +222,29 @@ export function OfflineCatalogBrowser({
   );
 }
 
-function OfflineStockRows({
-  productId,
-  remaining,
-  initial,
+// 1-12H : modal hors ligne — informations standard seulement, via la même
+// source que la fiche en ligne (stock indicatif conservé).
+function OfflineProductInfo({
+  product,
   loadedAt,
 }: {
-  productId: string;
-  remaining: number;
-  initial: number;
+  product: OfflineCatalogProduct;
   loadedAt?: number;
 }) {
-  const indicative = useIndicativeStock(productId, remaining, loadedAt);
+  const indicative = useIndicativeStock(
+    product._id,
+    product.remainingQuantity,
+    loadedAt,
+  );
   return (
-    <>
-      <span className="text-muted-foreground">
-        {indicative.hasReservation ? "Stock indicatif" : "Stock restant"}
-      </span>
-      <span className="text-right">
-        {indicative.value} / {initial}
-      </span>
-    </>
+    <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+      {productInfoItems(product, indicative).map((item) => (
+        <Fragment key={item.key}>
+          <span className="text-muted-foreground">{item.label}</span>
+          <span className="text-right font-medium">{item.value}</span>
+        </Fragment>
+      ))}
+    </div>
   );
 }
 

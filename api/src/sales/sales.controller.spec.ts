@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { SalesController } from './sales.controller';
@@ -208,20 +208,15 @@ describe('SalesController — scope own/all (1-7B)', () => {
     expect(serviceStub.findAll).toHaveBeenCalledWith(ORG_A, undefined);
   });
 
-  it('findAll : ni sales.view_own ni sales.view_all → 403 PERMISSION_DENIED, service jamais appelé', () => {
-    let thrown: unknown;
-    try {
-      // Lève SYNCHRONEMENT avant tout retour de Promise (branche refusée).
-      void controller.findAll(undefined, noScopeCtx);
-    } catch (e) {
-      thrown = e;
-    }
-    expect(thrown).toBeInstanceOf(ForbiddenException);
-    expect((thrown as ForbiddenException).getResponse()).toEqual({
-      code: 'PERMISSION_DENIED',
-      message: 'Permission insuffisante.',
-    });
-    expect(serviceStub.findAll).not.toHaveBeenCalled();
+  it('findAll : rôle sans aucune permission ventes (1-12H) → droits standard, scope own (jamais all)', async () => {
+    // 1-12H : `sales.view_own` est un droit STANDARD de tout membre actif,
+    // ajouté par le calcul central — même pour un rôle hors table.
+    await controller.findAll(undefined, noScopeCtx);
+    expect(serviceStub.findAll).toHaveBeenCalledWith(
+      ORG_A,
+      undefined,
+      noScopeCtx.userId,
+    );
   });
 
   it('update : seller par défaut → scope sellerId = userId du contexte (vente d’un autre seller ⇒ 404 côté service)', async () => {

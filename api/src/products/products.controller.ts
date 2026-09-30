@@ -30,6 +30,7 @@ import {
 } from '../organizations/permissions';
 import { User } from '../users/schemas/user.schema';
 import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
+import { productVisibility } from './product-projection';
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
@@ -99,6 +100,7 @@ export class ProductsController {
         dto,
         imageUrl,
         user._id.toString(),
+        productVisibility(organizationContext),
       );
     } catch (err) {
       // Mutation échouée après upload : la nouvelle image ne doit jamais
@@ -115,9 +117,11 @@ export class ProductsController {
     @Query('sectionId') sectionId = undefined,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
+    // 1-12H : projection selon les permissions effectives du demandeur.
     return this.productsService.findAll(
       organizationContext.organizationId,
       sectionId,
+      productVisibility(organizationContext),
     );
   }
 
@@ -142,6 +146,7 @@ export class ProductsController {
       id,
       salesScope,
       includeAudit,
+      productVisibility(organizationContext),
     );
   }
 
@@ -182,6 +187,7 @@ export class ProductsController {
         dto,
         user._id.toString(),
         newImageUrl,
+        productVisibility(organizationContext),
       );
     } catch (err) {
       // Mutation échouée après upload : la nouvelle image ne doit jamais
@@ -197,7 +203,11 @@ export class ProductsController {
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.productsService.restore(organizationContext.organizationId, id);
+    return this.productsService.restore(
+      organizationContext.organizationId,
+      id,
+      productVisibility(organizationContext),
+    );
   }
 
   @Delete(':id')
@@ -211,6 +221,7 @@ export class ProductsController {
       organizationContext.organizationId,
       id,
       user._id.toString(),
+      productVisibility(organizationContext),
     );
   }
 
@@ -223,6 +234,7 @@ export class ProductsController {
     return this.productsService.permanentDelete(
       organizationContext.organizationId,
       id,
+      productVisibility(organizationContext),
     );
   }
 }

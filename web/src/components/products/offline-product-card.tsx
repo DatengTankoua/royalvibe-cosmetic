@@ -6,7 +6,8 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { fmtXof } from "@/lib/currency";
+import { Fragment } from "react";
+import { productInfoItems } from "@/lib/product-info";
 import type { OfflineCatalogProduct } from "@/lib/offline-catalog-db";
 import { useIndicativeStock } from "@/contexts/offline-sales-context";
 
@@ -79,21 +80,15 @@ export function OfflineProductCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
+        {/* 1-12H : informations standard uniquement (même source que la
+            fiche en ligne). */}
         <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
-          <span className="text-muted-foreground">Achat unitaire</span>
-          <span className="text-right font-medium">
-            {fmtXof(product.purchasePrice)}
-          </span>
-          <span className="text-muted-foreground">Vente unitaire</span>
-          <span className="text-right font-medium">
-            {fmtXof(product.salePrice)}
-          </span>
-          <span className="text-muted-foreground">
-            {indicative.hasReservation ? "Stock indicatif" : "Stock restant"}
-          </span>
-          <span className="text-right">
-            {indicative.value} / {product.initialQuantity}
-          </span>
+          {productInfoItems(product, indicative).map((item) => (
+            <Fragment key={item.key}>
+              <span className="text-muted-foreground">{item.label}</span>
+              <span className="text-right font-medium">{item.value}</span>
+            </Fragment>
+          ))}
         </div>
       </CardContent>
     </Card>

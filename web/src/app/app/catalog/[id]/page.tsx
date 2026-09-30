@@ -103,13 +103,12 @@ export default function CatalogSectionPage() {
       writeSectionScope(
         params.id,
         subSections.map(toOfflineSection),
+        // 1-12H : informations standard uniquement (allowlist v3).
         products.map((p) => ({
           _id: p._id,
           sectionId: p.sectionId,
           name: p.name,
-          purchasePrice: p.purchasePrice,
           salePrice: p.salePrice,
-          initialQuantity: p.initialQuantity,
           remainingQuantity: p.remainingQuantity,
           status: p.status,
         })),

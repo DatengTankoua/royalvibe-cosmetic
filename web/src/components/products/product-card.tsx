@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import {
@@ -23,9 +23,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { fmtXof } from "@/lib/currency";
 import { useIndicativeStock } from "@/contexts/offline-sales-context";
 import type { ApiProduct } from "@/lib/api";
+import { productInfoItems, type ProductInfoKey } from "@/lib/product-info";
 
 const STATUS_CONFIG = {
   in_stock: {
@@ -45,7 +45,16 @@ const STATUS_CONFIG = {
   },
 };
 
-const fmt = fmtXof;
+// 1-12H : sous-ensemble compact de la fiche, même source de calcul ; seuls
+// les champs présents dans la réponse projetée sont rendus.
+const CARD_KEYS: readonly ProductInfoKey[] = [
+  "salePrice",
+  "stock",
+  "initialQuantity",
+  "unitsSold",
+  "purchasePrice",
+  "actualProfit",
+];
 
 interface ProductCardProps {
   product: ApiProduct;
@@ -117,28 +126,24 @@ export function ProductCard({
 
         <CardContent className="space-y-2 text-sm">
           <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
-            <span className="text-muted-foreground">Achat unitaire</span>
-            <span className="text-right font-medium">
-              {fmt(product.purchasePrice)}
-            </span>
-            <span className="text-muted-foreground">Vente unitaire</span>
-            <span className="text-right font-medium">
-              {fmt(product.salePrice)}
-            </span>
-            <span className="text-muted-foreground">
-              {indicative.hasReservation ? "Stock indicatif" : "Stock restant"}
-            </span>
-            <span className="text-right">
-              {indicative.value} / {product.initialQuantity}
-            </span>
-            <span className="text-muted-foreground">Vendus</span>
-            <span className="text-right">{product.unitsSold ?? 0}</span>
-            <span className="text-muted-foreground">Bénéfice estimé</span>
-            <span
-              className={`text-right font-semibold ${product.estimatedProfit >= 0 ? "text-green-600" : "text-red-600"}`}
-            >
-              {fmt(product.estimatedProfit)}
-            </span>
+            {productInfoItems(product, indicative)
+              .filter((item) => CARD_KEYS.includes(item.key))
+              .map((item) => (
+                <Fragment key={item.key}>
+                  <span className="text-muted-foreground">{item.label}</span>
+                  <span
+                    className={`text-right font-medium ${
+                      item.tone === "positive"
+                        ? "text-green-600"
+                        : item.tone === "negative"
+                          ? "text-red-600"
+                          : ""
+                    }`}
+                  >
+                    {item.value}
+                  </span>
+                </Fragment>
+              ))}
           </div>
 
           {(canEdit || canDelete) && (

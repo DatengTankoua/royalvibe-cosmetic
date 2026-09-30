@@ -9,6 +9,8 @@ export const DELEGABLE_PERMISSIONS = [
   "sales.record",
   "sales.view_own",
   "sales.view_all",
+  "products.view_stock_details",
+  "products.view_financials",
   "analytics.read",
   "audit.read",
   "trash.manage",
@@ -18,6 +20,26 @@ export const DELEGABLE_PERMISSIONS = [
 ] as const;
 
 export type DelegablePermission = (typeof DELEGABLE_PERMISSIONS)[number];
+
+// 1-12H — miroir de STANDARD_MEMBER_PERMISSIONS (backend) : droits de tout
+// membre actif, ajoutés par le calcul serveur, jamais proposés ni retirables
+// dans les « Permissions supplémentaires ».
+export const STANDARD_MEMBER_PERMISSIONS: readonly DelegablePermission[] = [
+  "sales.record",
+  "sales.view_own",
+];
+
+// Cases « Permissions supplémentaires » : délégables hors droits standard.
+export const SUPPLEMENTARY_PERMISSIONS: readonly DelegablePermission[] =
+  DELEGABLE_PERMISSIONS.filter((p) => !STANDARD_MEMBER_PERMISSIONS.includes(p));
+
+// Retire les droits standard d'une liste stockée (memberships historiques) :
+// ils restent accordés par le serveur quoi qu'il arrive.
+export function supplementaryOnly(
+  permissions: readonly DelegablePermission[],
+): DelegablePermission[] {
+  return permissions.filter((p) => SUPPLEMENTARY_PERMISSIONS.includes(p));
+}
 
 // Structural type (pas d'import d'ApiAuthContext ici, éviterait un cycle
 // avec lib/api.ts) : toute décision UI passe par `effectivePermissions`,
@@ -37,6 +59,8 @@ export const PERMISSION_LABELS: Record<DelegablePermission, string> = {
   "sales.record": "Enregistrer des ventes",
   "sales.view_own": "Voir ses propres ventes",
   "sales.view_all": "Voir toutes les ventes",
+  "products.view_stock_details": "Voir le détail du stock",
+  "products.view_financials": "Voir les coûts et résultats financiers",
   "analytics.read": "Voir les analyses",
   "audit.read": "Voir l'historique d'audit",
   "trash.manage": "Gérer la corbeille",
@@ -53,6 +77,13 @@ export const ASSIGNABLE_MEMBER_ROLES = ["admin", "seller"] as const;
 
 // Rôles invitables via POST /organizations/invitations — jamais `owner`.
 export const INVITABLE_ROLES = ["admin", "seller"] as const;
+
+// 1-12H — un administrateur reçoit TOUTES les permissions délégables par
+// défaut (backend : DEFAULT_PERMISSIONS_BY_ROLE.admin, union non réductible).
+// Ses cases supplémentaires sont donc toutes cochées et non modifiables.
+export function roleGrantsAllPermissions(role: OrganizationRole): boolean {
+  return role === "owner" || role === "admin";
+}
 
 export const ROLE_LABELS: Record<OrganizationRole, string> = {
   owner: "Propriétaire",

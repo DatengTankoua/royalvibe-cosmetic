@@ -527,8 +527,11 @@ export default function TrashPage() {
                             {p.name}
                           </CardTitle>
                           <CardDescription className="text-xs">
-                            Achat : {fmtXof(p.purchasePrice)} · Vente :{" "}
-                            {fmtXof(p.salePrice)}
+                            {/* 1-12H : prix d'achat seulement s'il est
+                                projeté (products.view_financials). */}
+                            {p.purchasePrice !== undefined &&
+                              `Achat : ${fmtXof(p.purchasePrice)} · `}
+                            Vente : {fmtXof(p.salePrice)}
                           </CardDescription>
                         </div>
                       </div>

@@ -220,7 +220,8 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     findOneAndDelete: jest.Mock;
   };
   let sectionModel: { findOne: jest.Mock; countDocuments: jest.Mock };
-  let saleModel: { find: jest.Mock };
+  let saleModel: { find: jest.Mock; aggregate: jest.Mock };
+  let aggregateChain: { exec: jest.Mock };
   let s3Service: { deleteFile: jest.Mock; uploadFile: jest.Mock };
   let auditService: { log: jest.Mock; findByProduct: jest.Mock };
   let eventsGateway: { emitToOrganization: jest.Mock };
@@ -301,7 +302,11 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       findOne: jest.fn(() => sectionOneChain),
       countDocuments: jest.fn(() => countChain),
     };
-    saleModel = { find: jest.fn(() => saleChain) };
+    aggregateChain = { exec: jest.fn().mockResolvedValue([]) };
+    saleModel = {
+      find: jest.fn(() => saleChain),
+      aggregate: jest.fn(() => aggregateChain),
+    };
     s3Service = { deleteFile: jest.fn(), uploadFile: jest.fn() };
     auditService = { log: jest.fn(), findByProduct: jest.fn() };
     auditService.findByProduct.mockResolvedValue([]);
@@ -486,7 +491,228 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
 
     expect(saleModel.find).not.toHaveBeenCalled();
     expect(res.sales).toEqual([]);
-    expect(res.actualRevenue).toBe(0);
+    // 1-12H : sans `products.view_financials` (visibilité par défaut), aucun
+    // agrégat n'est lu ni exposé.
+    expect(res).not.toHaveProperty('actualRevenue');
+    expect(saleModel.aggregate).not.toHaveBeenCalled();
+  });
+
+  // ---- 1-12H : agrégats produit indépendants des ventes consultables ----
+
+  const FULL = { stockDetails: true, financials: true };
+  const STANDARD = { stockDetails: false, financials: false };
+  const FINANCIAL_KEYS = [
+    'actualProfit',
+    'actualRevenue',
+    'margin',
+    'totalPurchaseCost',
+  ];
+
+  it('findOne (1-12H) : scope «own» + finances → CA réel = agrégat de TOUTES les ventes du produit dans l’org, jamais la liste filtrée', async () => {
+    await build();
+    // Produit : 10 initial, 5 restants → 5 vendus ; achat 5.
+    productOneChain.exec.mockResolvedValue(
+      productDoc({ initialQuantity: 10, remainingQuantity: 5 }),
+    );
+    // Historique scopé du vendeur A : 2 × 1 500 seulement.
+    saleChain.exec.mockResolvedValue([{ quantity: 2, salePrice: 1500 }]);
+    // Agrégat serveur : A (3 000) + B (6 000).
+    aggregateChain.exec.mockResolvedValue([
+      { _id: new Types.ObjectId(PRODUCT_ID), revenue: 9000 },
+    ]);
+
+    const res = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'own', sellerId: SELLER_ID },
+      false,
+      FULL,
+    );
+
+    expect(saleModel.find).toHaveBeenCalledWith({
+      productId: new Types.ObjectId(PRODUCT_ID),
+      sellerId: new Types.ObjectId(SELLER_ID),
+    });
+    const [pipeline] = saleModel.aggregate.mock.calls[0] as [
+      Record<string, unknown>[],
+    ];
+    expect(pipeline[0]).toEqual({
+      $match: {
+        organizationId: new Types.ObjectId(ORG_A),
+        productId: { $in: [new Types.ObjectId(PRODUCT_ID)] },
+      },
+    });
+    expect(JSON.stringify(pipeline)).not.toContain('sellerId');
+    expect(res.actualRevenue).toBe(9000);
+    expect(res.unitsSold).toBe(5);
+    expect(res.actualProfit).toBe(9000 - 5 * 5);
+    expect(res.margin).toBeCloseTo(((9000 - 25) / 9000) * 100);
+    expect(res.totalPurchaseCost).toBe(5 * 10);
+    expect(res.product.purchasePrice).toBe(5);
+    expect(res.product.initialQuantity).toBe(10);
+    expect(res.sales).toHaveLength(1);
+  });
+
+  it('findOne (1-12H) : sans finances → aucun agrégat lu, champs financiers et prix d’achat ABSENTS (jamais 0)', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+
+    const res = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'own', sellerId: SELLER_ID },
+      false,
+      STANDARD,
+    );
+
+    expect(saleModel.aggregate).not.toHaveBeenCalled();
+    for (const key of [...FINANCIAL_KEYS, 'unitsSold']) {
+      expect(res).not.toHaveProperty(key);
+    }
+    expect(res.product).not.toHaveProperty('purchasePrice');
+    expect(res.product).not.toHaveProperty('initialQuantity');
+    expect(res.product).not.toHaveProperty('organizationId');
+    expect(res.product.salePrice).toBe(10);
+    expect(res.product.remainingQuantity).toBe(10);
+    expect(res.status).toBe('in_stock');
+  });
+
+  it('findOne (1-12H) : détail du stock seul → stock initial et unités vendues, aucune donnée financière', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(
+      productDoc({ initialQuantity: 10, remainingQuantity: 4 }),
+    );
+
+    const res = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'own', sellerId: SELLER_ID },
+      false,
+      { stockDetails: true, financials: false },
+    );
+
+    expect(res.unitsSold).toBe(6);
+    expect(res.product.initialQuantity).toBe(10);
+    for (const key of FINANCIAL_KEYS) expect(res).not.toHaveProperty(key);
+    expect(res.product).not.toHaveProperty('purchasePrice');
+    expect(saleModel.aggregate).not.toHaveBeenCalled();
+  });
+
+  it('findOne (1-12H) : historique d’audit projeté (prix d’achat, stock initial, quantité ajoutée retirés sans droit)', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+    const log = (details: Record<string, unknown>) => ({
+      toObject: () => ({ action: 'x', details }),
+    });
+    auditService.findByProduct.mockResolvedValue([
+      log({ name: 'P', purchasePrice: 5, salePrice: 10, initialQuantity: 3 }),
+      log({ purchasePrice: { from: 5, to: 6 } }),
+      log({ added: 4 }),
+    ]);
+
+    const res = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'all' },
+      true,
+      STANDARD,
+    );
+    expect(res.auditLogs).toEqual([
+      { action: 'x', details: { name: 'P', salePrice: 10 } },
+      { action: 'x', details: {} },
+      { action: 'x', details: {} },
+    ]);
+    const full = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'all' },
+      true,
+      FULL,
+    );
+    expect(full.auditLogs[0]).toEqual({
+      action: 'x',
+      details: {
+        name: 'P',
+        purchasePrice: 5,
+        salePrice: 10,
+        initialQuantity: 3,
+      },
+    });
+  });
+
+  it('findAll (1-12H) : un seul agrégat pour tous les produits listés ; produit sans vente → CA 0, marge null', async () => {
+    await build();
+    const other = '334455667788990011223344';
+    findChain.exec.mockResolvedValue([
+      productDoc({ initialQuantity: 10, remainingQuantity: 5 }),
+      productDoc({
+        _id: new Types.ObjectId(other),
+        initialQuantity: 3,
+        remainingQuantity: 3,
+      }),
+    ]);
+    aggregateChain.exec.mockResolvedValue([
+      { _id: new Types.ObjectId(PRODUCT_ID), revenue: 9000 },
+    ]);
+
+    const res = await service.findAll(ORG_A, undefined, FULL);
+
+    expect(saleModel.aggregate).toHaveBeenCalledTimes(1);
+    expect(res[0].actualRevenue).toBe(9000);
+    expect(res[1].actualRevenue).toBe(0);
+    expect(res[1].actualProfit).toBe(0);
+    expect(res[1].margin).toBeNull();
+
+    const standard = await service.findAll(ORG_A, undefined, STANDARD);
+    expect(saleModel.aggregate).toHaveBeenCalledTimes(1); // pas de 2e lecture
+    for (const key of [...FINANCIAL_KEYS, 'unitsSold']) {
+      expect(standard[0]).not.toHaveProperty(key);
+    }
+  });
+
+  it('diffusions Socket.IO (1-12H) : create/update/restore → champs standard uniquement, quel que soit le demandeur', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+    sectionOneChain.exec.mockResolvedValue(sectionDoc());
+    countChain.exec.mockResolvedValue(0);
+    productModel.create.mockResolvedValue(productDoc());
+    const created = await service.create(
+      ORG_A,
+      DTO,
+      'http://s3/x.png',
+      'actor',
+      FULL,
+    );
+    expect(created.purchasePrice).toBe(5); // réponse du demandeur autorisé
+
+    productOneChain.exec.mockResolvedValue(productDoc());
+    await service.update(
+      ORG_A,
+      PRODUCT_ID,
+      { name: 'N' },
+      'actor',
+      undefined,
+      FULL,
+    );
+    updateChain.exec.mockResolvedValue(productDoc());
+    await service.restore(ORG_A, PRODUCT_ID, FULL);
+
+    const payloads = eventsGateway.emitToOrganization.mock.calls.map((call) =>
+      JSON.stringify(call[2]),
+    );
+    expect(payloads).toHaveLength(3);
+    for (const payload of payloads) {
+      for (const key of [
+        'purchasePrice',
+        'initialQuantity',
+        'unitsSold',
+        'organizationId',
+        ...FINANCIAL_KEYS,
+      ]) {
+        expect(payload).not.toContain(`"${key}"`);
+      }
+    }
+    expect(saleModel.aggregate).toHaveBeenCalledTimes(1); // update, pour le demandeur
   });
 
   it('findOne (correctif 1-7B) : audit.read absent → AUCUNE lecture d’audit (jamais interrogé ni vidé après coup)', async () => {
@@ -672,7 +898,9 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     deleteChain.exec.mockResolvedValue(doc);
 
     const res = await service.permanentDelete(ORG_A, PRODUCT_ID);
-    expect(res).toBe(doc);
+    // 1-12H : réponse projetée (visibilité standard par défaut).
+    expect(res).toMatchObject({ _id: PRODUCT_ID, name: 'Prod' });
+    expect(res).not.toHaveProperty('purchasePrice');
     expect(s3Service.deleteFile).toHaveBeenCalledTimes(1);
     expect(s3Service.deleteFile).toHaveBeenCalledWith(
       doc.imageUrl,

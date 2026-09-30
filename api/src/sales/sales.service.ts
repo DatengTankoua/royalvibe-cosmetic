@@ -282,11 +282,13 @@ export class SalesService {
     // n'émettrait de toute façon plus rien). Aucune garantie « exactement
     // une émission » en cas de crash entre le commit et cette ligne.
     try {
-      this.eventsGateway.emitToOrganization(
-        organizationId,
-        'sale:created',
-        populated,
-      );
+      // 1-12H — diffusion commune à toute l'organisation : identifiants
+      // seuls, jamais la vente d'un collègue (prix, vendeur, acheteur,
+      // coordonnées). Un client intéressé recharge via l'API autorisée.
+      this.eventsGateway.emitToOrganization(organizationId, 'sale:created', {
+        _id: String(populated._id),
+        productId: String(populated.productId),
+      });
     } catch {
       this.logger.warn('sale:created non émis (best effort).');
     }
@@ -370,7 +372,32 @@ export class SalesService {
       throw new Error('Sale transaction completed without updating a sale');
     }
     saved.$session(null);
+    // 1-12H (correctif) — APRÈS le commit : invalidation minimale pour
+    // rafraîchir stock et agrégats chez les autres membres (rechargement via
+    // l'API, qui applique leurs permissions).
+    this.emitSaleInvalidation(organizationId, 'sale:updated', {
+      _id: id,
+      productId: String(saved.productId),
+    });
     return saved.populate('sellerId', 'name email');
+  }
+
+  /**
+   * 1-12H — diffusion commune à toute l'organisation : identifiants seuls,
+   * jamais le prix, le vendeur, l'acheteur ni ses coordonnées. Best effort :
+   * une panne d'émission ne transforme jamais une mutation commitée en
+   * erreur.
+   */
+  private emitSaleInvalidation(
+    organizationId: string,
+    event: 'sale:updated' | 'sale:deleted',
+    payload: { _id: string; productId: string },
+  ): void {
+    try {
+      this.eventsGateway.emitToOrganization(organizationId, event, payload);
+    } catch {
+      this.logger.warn(`${event} non émis (best effort).`);
+    }
   }
 
   async remove(
@@ -380,6 +407,7 @@ export class SalesService {
     scopeSellerId?: string,
   ): Promise<void> {
     const session = await this.connection.startSession();
+    let removedProductId: string | undefined;
     try {
       await session.withTransaction(async () => {
         const filter: Record<string, Types.ObjectId> = {
@@ -393,6 +421,7 @@ export class SalesService {
         if (!sale) throw new NotFoundException(`Sale ${id} not found`);
 
         const productId = sale.productId.toString();
+        removedProductId = productId;
         const { quantity, salePrice } = sale;
         await this.productsService.adjustStock(
           organizationId,
@@ -412,6 +441,13 @@ export class SalesService {
       });
     } finally {
       await session.endSession();
+    }
+    // Après le commit uniquement (un rollback lève avant d'arriver ici).
+    if (removedProductId) {
+      this.emitSaleInvalidation(organizationId, 'sale:deleted', {
+        _id: id,
+        productId: removedProductId,
+      });
     }
   }
 }

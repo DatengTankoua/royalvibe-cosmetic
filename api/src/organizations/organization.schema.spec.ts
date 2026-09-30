@@ -152,8 +152,8 @@ describe('permissions (phase 1-1A)', () => {
     expect([...seller].sort()).toEqual(['sales.record', 'sales.view_own']);
   });
 
-  it('liste délégable : 12 permissions, aucune opération owner-only', () => {
-    expect(ALL_DELEGABLE_PERMISSIONS).toHaveLength(12);
+  it('liste délégable : 14 permissions, aucune opération owner-only', () => {
+    expect(ALL_DELEGABLE_PERMISSIONS).toHaveLength(14);
     for (const op of OWNER_ONLY_OPERATIONS) {
       expect(ALL_DELEGABLE_PERMISSIONS).not.toContain(
         op as (typeof ALL_DELEGABLE_PERMISSIONS)[number],
@@ -182,6 +182,8 @@ describe('permissions (phase 1-1A)', () => {
       'members.invite',
       'members.manage',
       'products.manage',
+      'products.view_financials',
+      'products.view_stock_details',
       'sales.record',
       'sales.view_all',
       'sales.view_own',
@@ -201,7 +203,7 @@ describe('permissions (phase 1-1A)', () => {
     expect(setOf(DEFAULT_PERMISSIONS_BY_ROLE[OrganizationRole.SELLER])).toEqual(
       new Set(['sales.record', 'sales.view_own']),
     );
-    expect(ALL_DELEGABLE_PERMISSIONS).toHaveLength(12);
+    expect(ALL_DELEGABLE_PERMISSIONS).toHaveLength(14);
     expect([...OWNER_ONLY_OPERATIONS].sort()).toEqual([
       'billing.identity',
       'organization.delete',

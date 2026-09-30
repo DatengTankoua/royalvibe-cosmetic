@@ -4,6 +4,7 @@ import { ProductsService } from '../products/products.service';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
 import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
+import { productVisibility } from '../products/product-projection';
 
 @Controller('trash')
 @RequirePermissions('trash.manage')
@@ -21,7 +22,11 @@ export class TrashController {
     // l'org est celle du contexte branché par la garde, jamais du client.
     const [sections, products] = await Promise.all([
       this.sectionsService.findTrashed(organizationContext.organizationId),
-      this.productsService.findTrashed(organizationContext.organizationId),
+      // 1-12H : même projection que le catalogue (prix d'achat, stock initial).
+      this.productsService.findTrashed(
+        organizationContext.organizationId,
+        productVisibility(organizationContext),
+      ),
     ]);
     return { sections, products };
   }

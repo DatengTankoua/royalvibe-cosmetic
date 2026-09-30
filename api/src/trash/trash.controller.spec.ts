@@ -32,6 +32,9 @@ describe('TrashController — tenant du contexte (1-4D)', () => {
       products: ['product'],
     });
     expect(sections.findTrashed).toHaveBeenCalledWith(ORG_A);
-    expect(products.findTrashed).toHaveBeenCalledWith(ORG_A);
+    expect(products.findTrashed).toHaveBeenCalledWith(ORG_A, {
+      stockDetails: true,
+      financials: true,
+    });
   });
 });

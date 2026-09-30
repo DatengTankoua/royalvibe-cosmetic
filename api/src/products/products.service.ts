@@ -17,21 +17,19 @@ import { EventsGateway } from '../events/events.gateway';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/schemas/audit-log.schema';
 import { Section, SectionDocument } from '../sections/schemas/section.schema';
+import {
+  COMMON_VISIBILITY,
+  ProductMetricsView,
+  ProductView,
+  ProductVisibility,
+  projectAuditDetails,
+  toProductMetricsView,
+  toProductView,
+} from './product-projection';
 
-export type ProductStatus = 'in_stock' | 'low_stock' | 'out_of_stock';
+export type { ProductStatus } from './product-projection';
 
-export interface ProductWithMetrics {
-  product: ProductDocument;
-  status: ProductStatus;
-  unitsSold: number;
-  totalPurchaseCost: number;
-  estimatedRevenue: number;
-  estimatedProfit: number;
-}
-
-export interface ProductDetail extends ProductWithMetrics {
-  actualRevenue: number;
-  actualProfit: number;
+export interface ProductDetail extends ProductMetricsView {
   sales: SaleDocument[];
   auditLogs: unknown[];
 }
@@ -43,12 +41,6 @@ export interface ProductDetail extends ProductWithMetrics {
  */
 export type SalesHistoryScope =
   { kind: 'all' } | { kind: 'own'; sellerId: string } | { kind: 'none' };
-
-function computeStatus(remaining: number, initial: number): ProductStatus {
-  if (remaining === 0) return 'out_of_stock';
-  if (remaining / initial <= 0.2) return 'low_stock';
-  return 'in_stock';
-}
 
 // Session transactionnelle Mongoose (`mongodb.ClientSession`). Le type est
 // dérivé de `Connection.startSession` car le driver `mongodb` n'est pas
@@ -92,12 +84,67 @@ export class ProductsService {
     }
   }
 
+  /**
+   * 1-12H — CA réel par produit : agrégat serveur sur TOUTES les ventes
+   * existantes du produit dans l'organisation (Σ prix appliqué × quantité),
+   * indépendant du vendeur connecté et de toute liste filtrée ou paginée.
+   * Une vente modifiée compte avec ses valeurs courantes ; une vente
+   * supprimée (suppression physique + stock restauré) n'est plus comptée.
+   */
+  private async actualRevenueByProduct(
+    organizationId: string,
+    productIds: Types.ObjectId[],
+  ): Promise<Map<string, number>> {
+    if (productIds.length === 0) return new Map();
+    const rows = await this.saleModel
+      .aggregate<{ _id: Types.ObjectId; revenue: number }>([
+        {
+          $match: {
+            organizationId: new Types.ObjectId(organizationId),
+            productId: { $in: productIds },
+          },
+        },
+        {
+          $group: {
+            _id: '$productId',
+            revenue: { $sum: { $multiply: ['$salePrice', '$quantity'] } },
+          },
+        },
+      ])
+      .exec();
+    return new Map(rows.map((r) => [r._id.toString(), r.revenue]));
+  }
+
+  /** Projection pour le demandeur ; l'agrégat n'est lu que si `financials`. */
+  private async toMetricsViews(
+    organizationId: string,
+    products: ProductDocument[],
+    visibility: ProductVisibility,
+  ): Promise<ProductMetricsView[]> {
+    const revenues = visibility.financials
+      ? await this.actualRevenueByProduct(
+          organizationId,
+          products.map((p) => p._id),
+        )
+      : new Map<string, number>();
+    return products.map((p) =>
+      toProductMetricsView(
+        p,
+        visibility,
+        visibility.financials
+          ? (revenues.get(p._id.toString()) ?? 0)
+          : undefined,
+      ),
+    );
+  }
+
   async create(
     organizationId: string,
     dto: CreateProductDto,
     imageUrl: string,
     actorId: string,
-  ): Promise<ProductDocument> {
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductView> {
     // §5 — la section cible doit être une section ACTIVE de la MÊME
     // organisation. Filtre composite tenant : une section étrangère/absente
     // est indistinguable d'une section absente (même 404, pas de fuite).
@@ -151,18 +198,20 @@ export class ProductsService {
         initialQuantity: dto.initialQuantity,
       },
     );
+    // 1-12H — diffusion commune : champs standard uniquement.
     this.eventsGateway.emitToOrganization(
       organizationId,
       'product:created',
-      product,
+      toProductMetricsView(product, COMMON_VISIBILITY),
     );
-    return product;
+    return toProductView(product, visibility);
   }
 
   async findAll(
     organizationId: string,
     sectionId?: string,
-  ): Promise<ProductWithMetrics[]> {
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductMetricsView[]> {
     const filter: Record<string, unknown> = {
       organizationId: new Types.ObjectId(organizationId),
       deletedAt: null,
@@ -172,7 +221,7 @@ export class ProductsService {
       .find(filter)
       .sort({ createdAt: -1 })
       .exec();
-    return products.map((p) => this.withMetrics(p));
+    return this.toMetricsViews(organizationId, products, visibility);
   }
 
   async findOne(
@@ -180,6 +229,7 @@ export class ProductsService {
     id: string,
     salesScope: SalesHistoryScope,
     includeAudit: boolean,
+    visibility: ProductVisibility = COMMON_VISIBILITY,
   ): Promise<ProductDetail> {
     // §4 — filtre composite tenant : un produit d'une autre org est
     // indistinguable d'un produit absent (même 404).
@@ -210,24 +260,29 @@ export class ProductsService {
 
     // Correctif 1-7B — `audit.read` absent : aucune lecture, jamais un vidage
     // après coup (l'historique n'est même pas interrogé).
+    // 1-12H — détails d'audit projetés selon la même visibilité.
     const auditLogs = includeAudit
-      ? await this.auditService.findByProduct(organizationId, id)
+      ? (await this.auditService.findByProduct(organizationId, id)).map(
+          (log) => {
+            const plain = log.toObject();
+            return {
+              ...plain,
+              details: projectAuditDetails(plain.details, visibility),
+            };
+          },
+        )
       : [];
 
-    const actualRevenue = sales.reduce(
-      (sum, s) => sum + s.salePrice * s.quantity,
-      0,
+    // 1-12H (correctif) — les agrégats ne dépendent JAMAIS de `sales`
+    // (historique scopé own/all) : agrégat serveur sur toutes les ventes du
+    // produit, uniquement pour `products.view_financials`.
+    const [metrics] = await this.toMetricsViews(
+      organizationId,
+      [product],
+      visibility,
     );
-    const unitsSold = product.initialQuantity - product.remainingQuantity;
-    const actualProfit = actualRevenue - product.purchasePrice * unitsSold;
 
-    return {
-      ...this.withMetrics(product),
-      actualRevenue,
-      actualProfit,
-      sales,
-      auditLogs,
-    };
+    return { ...metrics, sales, auditLogs };
   }
 
   async update(
@@ -236,7 +291,8 @@ export class ProductsService {
     dto: UpdateProductDto,
     actorId: string,
     newImageUrl?: string,
-  ): Promise<ProductWithMetrics> {
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductMetricsView> {
     // §4 — relecture composite tenant : produit étranger = 404, pas de fuite.
     const product = await this.productModel
       .findOne({
@@ -339,20 +395,27 @@ export class ProductsService {
         `organizations/${organizationId}/products`,
       );
     }
-    const enriched = this.withMetrics(saved);
+    // 1-12H — diffusion commune (standard seul) ; chaque client recharge
+    // ses champs étendus via l'API selon ses propres permissions.
     this.eventsGateway.emitToOrganization(
       organizationId,
       'product:updated',
-      enriched,
+      toProductMetricsView(saved, COMMON_VISIBILITY),
     );
-    return enriched;
+    const [view] = await this.toMetricsViews(
+      organizationId,
+      [saved],
+      visibility,
+    );
+    return view;
   }
 
   async remove(
     organizationId: string,
     id: string,
     actorId: string,
-  ): Promise<ProductDocument> {
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductView> {
     // §4 — suppression douce composite tenant : le filtre inclut l'org ; un
     // produit étranger est indistinguable d'un produit absent (même 404).
     const product = await this.productModel
@@ -378,20 +441,28 @@ export class ProductsService {
       'product:deleted',
       id,
     );
-    return product;
+    return toProductView(product, visibility);
   }
 
-  async findTrashed(organizationId: string): Promise<ProductDocument[]> {
-    return this.productModel
+  async findTrashed(
+    organizationId: string,
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductView[]> {
+    const products = await this.productModel
       .find({
         organizationId: new Types.ObjectId(organizationId),
         deletedAt: { $ne: null },
       })
       .sort({ deletedAt: -1 })
       .exec();
+    return products.map((p) => toProductView(p, visibility));
   }
 
-  async restore(organizationId: string, id: string): Promise<ProductDocument> {
+  async restore(
+    organizationId: string,
+    id: string,
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductView> {
     // §4 — MÊME filtre composite que `remove` : seul un produit de l'org
     // demandée est restaurable ; l'étranger est indistinguable de l'absent.
     const product = await this.productModel
@@ -406,15 +477,16 @@ export class ProductsService {
     this.eventsGateway.emitToOrganization(
       organizationId,
       'product:created',
-      product,
+      toProductMetricsView(product, COMMON_VISIBILITY),
     );
-    return product;
+    return toProductView(product, visibility);
   }
 
   async permanentDelete(
     organizationId: string,
     id: string,
-  ): Promise<ProductDocument> {
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductView> {
     // §6 — le produit est d'abord localisé par filtre composite tenant :
     // un produit étranger/absent provoque un 404 AVANT tout traitement,
     // donc `s3Service.deleteFile` n'est JAMAIS appelé sur une ressource
@@ -433,7 +505,7 @@ export class ProductsService {
         organizationId: new Types.ObjectId(organizationId),
       })
       .exec();
-    return deleted ?? product;
+    return toProductView(deleted ?? product, visibility);
   }
 
   /** Adjusts remainingQuantity by delta (positive = restore, negative = consume) */
@@ -535,25 +607,5 @@ export class ProductsService {
       });
     }
     return product;
-  }
-
-  private withMetrics(p: ProductDocument): ProductWithMetrics {
-    // Guard against NaN if prices are missing (malformed documents)
-    const buyPrice = Number(p.purchasePrice) || 0;
-    const sellPrice = Number(p.salePrice) || 0;
-    const initQty = Number(p.initialQuantity) || 0;
-    const remQty = Number(p.remainingQuantity) || 0;
-    const unitsSold = initQty - remQty;
-    const totalPurchaseCost = buyPrice * initQty;
-    const estimatedRevenue = sellPrice * unitsSold;
-    const estimatedProfit = estimatedRevenue - buyPrice * unitsSold;
-    return {
-      product: p,
-      status: computeStatus(remQty, initQty),
-      unitsSold,
-      totalPurchaseCost,
-      estimatedRevenue,
-      estimatedProfit,
-    };
   }
 }
