@@ -46,19 +46,31 @@ services:
       S3_BUCKET: royalvibe-objects
       S3_FORCE_PATH_STYLE: "true"
       S3_PUBLIC_URL: ${S3_PUBLIC_URL}
+      # Email d'invitation (optionnel) : sans ces 3 variables, l'API démarre et
+      # retombe sur le partage manuel du lien (statut `manual`).
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
+      # Inscription publique fermée par défaut (seule la valeur exacte `true` l'ouvre).
+      PUBLIC_REGISTRATION_ENABLED: ${PUBLIC_REGISTRATION_ENABLED:-false}
+      # 0 = aucun proxy approuvé. À mesurer avant le déploiement : 1 uniquement
+      # si l'API n'est joignable QUE via un unique proxy nginx de confiance.
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
 
   web:
     build:
-      context: ./web
-      dockerfile: Dockerfile
+      # Contexte racine (1-12E) : lockfile et workspace pnpm disponibles.
+      context: .
+      dockerfile: web/Dockerfile
       args:
+        # Variables publiques uniquement (inlinées au build).
         NEXT_PUBLIC_API_URL: ${API_URL}
+        NEXT_PUBLIC_REGISTRATION_ENABLED: ${NEXT_PUBLIC_REGISTRATION_ENABLED:-false}
+        S3_HOSTNAME: ${S3_HOSTNAME:-}
     container_name: royalvibe-web
     restart: always
     depends_on:
       - api
-    environment:
-      NEXT_PUBLIC_API_URL: ${API_URL}
 
   nginx:
     image: nginx:alpine
