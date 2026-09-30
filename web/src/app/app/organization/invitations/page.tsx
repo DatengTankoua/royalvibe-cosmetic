@@ -171,7 +171,7 @@ export default function OrganizationInvitationsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Révoquer cette invitation ?</AlertDialogTitle>
             <AlertDialogDescription>
-              L&apos;invitation envoyée à <strong>{revoking?.email}</strong> ne
+              L&apos;invitation destinée à <strong>{revoking?.email}</strong> ne
               pourra plus être acceptée.
             </AlertDialogDescription>
           </AlertDialogHeader>

@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { EyeIcon, EyeOffIcon } from "lucide-react";
+import axios from "axios";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NewPasswordFields } from "@/components/auth/new-password-fields";
 import { USER_NAME_HINT, USER_NAME_MAX_LENGTH } from "@/lib/name-limits";
+import { validateNewPassword } from "@/lib/password-policy";
 import {
   acceptInvitation,
   getApiErrorCode,
@@ -16,57 +18,112 @@ import Link from "next/link";
 
 type Step = "loading" | "needsDetails" | "success" | "error";
 
+const MISSING_TOKEN_MESSAGE =
+  "Lien d'invitation incomplet. Ouvre à nouveau le lien reçu, en entier.";
+
+/** Erreur réseau (aucune réponse du serveur) : invitation non consommée. */
+function isNetworkError(err: unknown): boolean {
+  return axios.isAxiosError(err) && !err.response;
+}
+
 export default function AcceptInvitationPage() {
-  // Lu une seule fois au montage (pas d'effet de mirroring) — jamais loggé
-  // ni persisté ailleurs qu'en mémoire du composant.
-  const [token] = useState<string | null>(() =>
-    typeof window === "undefined"
-      ? null
-      : new URLSearchParams(window.location.search).get("token"),
-  );
-  const [step, setStep] = useState<Step>(token ? "loading" : "error");
-  const [message, setMessage] = useState<string>("Lien d'invitation invalide.");
+  // 1-12G : page prérendue statiquement — le token n'est JAMAIS lu pendant
+  // le rendu (sinon HTML serveur « lien invalide » ≠ rendu client, erreur
+  // d'hydratation et message d'erreur affiché tant que le JS n'a pas pris
+  // la main). Lu une seule fois au montage, retiré de l'URL, conservé
+  // uniquement en mémoire (ref) — jamais journalisé ni persisté.
+  const tokenRef = useRef<string | null>(null);
+  const started = useRef(false);
+  const submitting = useRef(false);
+  const [step, setStep] = useState<Step>("loading");
+  const [message, setMessage] = useState<string>(MISSING_TOKEN_MESSAGE);
+  const [canRetry, setCanRetry] = useState(false);
+  const [organizationName, setOrganizationName] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+  const [confirmation, setConfirmation] = useState("");
   const [loading, setLoading] = useState(false);
-  const attempted = useRef(false);
 
-  // Retire le token de l'URL affichée (il reste en mémoire pour l'appel API).
+  const finish = (orgName: string) => {
+    tokenRef.current = null;
+    setPassword("");
+    setConfirmation("");
+    setOrganizationName(orgName);
+    setStep("success");
+  };
+
+  const fail = (err: unknown) => {
+    setCanRetry(isNetworkError(err));
+    setMessage(getApiErrorMessage(err));
+    setStep("error");
+  };
+
+  // Premier POST { token } : un compte existant est rattaché directement ;
+  // sinon ACCOUNT_DETAILS_REQUIRED (invitation NON consommée côté serveur).
+  // Aucune relance automatique : « Réessayer » reste une action explicite.
+  const checkInvitation = async () => {
+    const token = tokenRef.current;
+    if (!token || submitting.current) return;
+    submitting.current = true;
+    setStep("loading");
+    try {
+      const result = await acceptInvitation({ token });
+      finish(result.organization.name);
+    } catch (err: unknown) {
+      if (getApiErrorCode(err) === "ACCOUNT_DETAILS_REQUIRED") {
+        setStep("needsDetails");
+      } else {
+        fail(err);
+      }
+    } finally {
+      submitting.current = false;
+    }
+  };
+
   useEffect(() => {
-    if (typeof window !== "undefined" && window.location.search) {
+    // Garde : un seul démarrage, même si l'effet est rejoué (StrictMode).
+    if (started.current) return;
+    started.current = true;
+    tokenRef.current = new URLSearchParams(window.location.search).get("token");
+    if (window.location.search || window.location.hash) {
       window.history.replaceState(null, "", window.location.pathname);
     }
+    if (!tokenRef.current) {
+      // Token absent : aucun appel d'acceptation.
+      setMessage(MISSING_TOKEN_MESSAGE);
+      setStep("error");
+      return;
+    }
+    void checkInvitation();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- montage unique
   }, []);
-
-  useEffect(() => {
-    if (!token || attempted.current) return;
-    attempted.current = true;
-    acceptInvitation({ token })
-      .then(() => setStep("success"))
-      .catch((err: unknown) => {
-        if (getApiErrorCode(err) === "ACCOUNT_DETAILS_REQUIRED") {
-          setStep("needsDetails");
-        } else {
-          setMessage(getApiErrorMessage(err));
-          setStep("error");
-        }
-      });
-  }, [token]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token) return;
+    const token = tokenRef.current;
+    if (!token || submitting.current) return;
+    // Contrôles avant soumission : aucune requête si la confirmation diffère.
+    const passwordError = validateNewPassword(password, confirmation);
+    if (passwordError) {
+      setFormError(passwordError);
+      return;
+    }
+    submitting.current = true;
     setLoading(true);
     setFormError(null);
     try {
-      await acceptInvitation({ token, name, password });
-      setPassword("");
-      setStep("success");
+      // Seul `password` part à l'API ; la confirmation reste locale.
+      const result = await acceptInvitation({ token, name, password });
+      finish(result.organization.name);
     } catch (err: unknown) {
-      setFormError(getApiErrorMessage(err));
+      if (getApiErrorCode(err) === "INVITATION_INVALID_OR_EXPIRED") {
+        fail(err);
+      } else {
+        setFormError(getApiErrorMessage(err));
+      }
     } finally {
+      submitting.current = false;
       setLoading(false);
     }
   };
@@ -77,7 +134,7 @@ export default function AcceptInvitationPage() {
         <Wordmark className="mx-auto" size="large" />
 
         {step === "loading" && (
-          <p className="text-sm text-muted-foreground">
+          <p role="status" className="text-sm text-muted-foreground">
             Vérification de l&apos;invitation…
           </p>
         )}
@@ -87,20 +144,32 @@ export default function AcceptInvitationPage() {
             <p role="alert" className="text-sm text-destructive">
               {message}
             </p>
-            <Link
-              href="/auth/login"
-              className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
-            >
-              Se connecter
-            </Link>
+            <div className="flex flex-col items-center gap-2">
+              {canRetry && (
+                <Button type="button" onClick={() => void checkInvitation()}>
+                  Réessayer
+                </Button>
+              )}
+              <Link
+                href="/auth/login"
+                className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+              >
+                Se connecter
+              </Link>
+            </div>
           </>
         )}
 
         {step === "success" && (
           <>
-            <p className="text-sm text-muted-foreground">
-              Invitation acceptée. Tu peux te connecter.
-            </p>
+            <div className="space-y-1">
+              <h1 className="text-lg font-semibold">Invitation acceptée</h1>
+              <p className="text-sm text-muted-foreground">
+                {organizationName
+                  ? `Tu as rejoint ${organizationName}. Connecte-toi pour continuer.`
+                  : "Connecte-toi pour continuer."}
+              </p>
+            </div>
             <Link
               href="/auth/login"
               className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
@@ -129,46 +198,28 @@ export default function AcceptInvitationPage() {
                 autoComplete="name"
                 maxLength={USER_NAME_MAX_LENGTH}
                 aria-describedby="inv-name-hint"
+                disabled={loading}
               />
               <p id="inv-name-hint" className="text-xs text-muted-foreground">
                 {USER_NAME_HINT}
               </p>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="inv-password">Mot de passe</Label>
-              <div className="relative">
-                <Input
-                  id="inv-password"
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  minLength={6}
-                  autoComplete="new-password"
-                  className="pr-9"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  aria-label={
-                    showPassword
-                      ? "Masquer le mot de passe"
-                      : "Afficher le mot de passe"
-                  }
-                  aria-pressed={showPassword}
-                  className="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-muted-foreground hover:text-foreground"
-                >
-                  {showPassword ? (
-                    <EyeOffIcon className="h-4 w-4" />
-                  ) : (
-                    <EyeIcon className="h-4 w-4" />
-                  )}
-                </button>
-              </div>
-            </div>
+            <NewPasswordFields
+              idPrefix="inv-"
+              password={password}
+              confirmation={confirmation}
+              onPasswordChange={setPassword}
+              onConfirmationChange={setConfirmation}
+              errorId={formError ? "inv-error" : undefined}
+              disabled={loading}
+            />
 
             {formError && (
-              <p role="alert" className="text-sm text-destructive">
+              <p
+                id="inv-error"
+                role="alert"
+                className="text-sm text-destructive"
+              >
                 {formError}
               </p>
             )}

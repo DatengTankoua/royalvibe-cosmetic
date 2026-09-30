@@ -17,6 +17,8 @@ const ORGANIZATION_ERROR_MESSAGES: Record<string, string> = {
     "Cet email appartient déjà à un membre actif de cette organisation.",
   INVITATION_ALREADY_PENDING:
     "Une invitation est déjà en attente pour cet email.",
+  INVITATION_LINK_UNAVAILABLE:
+    "Le lien d'invitation ne peut pas être généré pour le moment. Contacte l'administrateur de l'application.",
   EMPTY_BRANDING_UPDATE: "Au moins un champ (nom, couleur, logo) est requis.",
   PERMISSION_DENIED: "Permission insuffisante pour cette action.",
 };

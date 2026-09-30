@@ -373,27 +373,25 @@ export async function fetchInvitations(): Promise<ApiInvitation[]> {
   return data;
 }
 
-// POST /organizations/invitations — `members.invite`. `token` est le
-// jeton brut, renvoyé UNE SEULE fois : jamais persisté ni journalisé
-// côté appelant (aucun stockage local/session, aucun log).
-// `delivery.status` (1-10B) : "sent" (email transmis au provider),
-// "manual" (config email absente, partage manuel du lien) ou "failed"
-// (provider en échec/time-out — l'invitation reste valable, le lien
-// doit être copié manuellement). Jamais une garantie de remise réelle.
+// POST /organizations/invitations — `members.invite`. 1-12G : aucun email
+// envoyé ; `invitationUrl` (construit par l'API depuis PUBLIC_APP_URL) porte
+// le jeton brut, renvoyé UNE SEULE fois : jamais persisté ni journalisé côté
+// appelant (aucun stockage local/session, aucun log), jamais relisible via
+// la liste.
+export interface CreatedInvitation {
+  invitation: ApiInvitation;
+  invitationUrl: string;
+}
+
 export async function createInvitation(payload: {
   email: string;
   role: "admin" | "seller";
   permissions?: DelegablePermission[];
-}): Promise<{
-  invitation: ApiInvitation;
-  token: string;
-  delivery: { status: "sent" | "manual" | "failed" };
-}> {
-  const { data } = await apiClient.post<{
-    invitation: ApiInvitation;
-    token: string;
-    delivery: { status: "sent" | "manual" | "failed" };
-  }>("/organizations/invitations", payload);
+}): Promise<CreatedInvitation> {
+  const { data } = await apiClient.post<CreatedInvitation>(
+    "/organizations/invitations",
+    payload,
+  );
   return data;
 }
 

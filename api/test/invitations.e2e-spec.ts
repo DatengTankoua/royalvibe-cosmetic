@@ -43,6 +43,15 @@ const OWNER_B_EMAIL = 'owner-b-16b1@royalvibe.test';
 const ADMIN_A_EMAIL = 'admin-a-16b1@royalvibe.test';
 const SELLER_A_EMAIL = 'seller-a-16b1@royalvibe.test';
 const PASSWORD = 'owner-16b1-pw-!1x';
+// 1-12G : origine publique des liens d'invitation (jamais l'en-tête Host).
+const E2E_PUBLIC_APP_URL = 'https://app.invitations-e2e.test';
+
+/** Token brut extrait du lien renvoyé à la création (1-12G). */
+function tokenOf(res: { body: { invitationUrl?: unknown } }): string {
+  return (
+    new URL(String(res.body.invitationUrl)).searchParams.get('token') ?? ''
+  );
+}
 
 describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', () => {
   let moduleFixture: TestingModule;
@@ -98,6 +107,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       process.env.S3_BUCKET = 'e2e-local';
       process.env.S3_FORCE_PATH_STYLE = 'true';
       process.env.CORS_ORIGIN = E2E_CORS_ORIGIN;
+      process.env.PUBLIC_APP_URL = E2E_PUBLIC_APP_URL;
       process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
 
       moduleFixture = await Test.createTestingModule({
@@ -300,17 +310,13 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
   });
 
   describe('Émission (POST) — cycle du token', () => {
-    it('owner : 201, réponse exacte { invitation, token }, hash SHA-256 exact en base, jamais le clair', async () => {
+    it('owner : 201, réponse exacte { invitation, invitationUrl }, lien PUBLIC_APP_URL, hash SHA-256 exact en base, jamais le clair', async () => {
       const email = `invite-ok-${Date.now()}@royalvibe.test`;
       const res = await invite(ownerAToken, { email, role: 'admin' });
       expect(res.status).toBe(201);
 
       const body = res.body as Record<string, unknown>;
-      expect(Object.keys(body).sort()).toEqual([
-        'delivery',
-        'invitation',
-        'token',
-      ]);
+      expect(Object.keys(body).sort()).toEqual(['invitation', 'invitationUrl']);
       expect(Object.keys(body.invitation as object).sort()).toEqual([
         '_id',
         'email',
@@ -321,9 +327,12 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       ]);
       expect(res.body.invitation.email).toBe(email);
       expect(res.body.invitation.status).toBe('pending');
-      // 1-10B : aucun RESEND_API_KEY/EMAIL_FROM/PUBLIC_APP_URL dans cette
-      // suite → configuration absente, jamais d'appel réseau, lien manuel.
-      expect(res.body.delivery).toEqual({ status: 'manual' });
+      // 1-12G : lien construit depuis PUBLIC_APP_URL, jamais depuis Host.
+      const token = tokenOf(res);
+      expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(res.body.invitationUrl).toBe(
+        `${E2E_PUBLIC_APP_URL}/auth/invitations/accept?token=${encodeURIComponent(token)}`,
+      );
       expect(JSON.stringify(res.body)).not.toContain('tokenHash');
 
       // Le hash en base (select:false) correspond exactement au token brut.
@@ -332,11 +341,33 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
         .select('+tokenHash')
         .exec();
       expect(stored).toBeTruthy();
-      expect(stored!.tokenHash).not.toBe(res.body.token);
+      expect(stored!.tokenHash).not.toBe(token);
       expect(stored!.tokenHash).toBe(
-        createHash('sha256')
-          .update(res.body.token as string)
-          .digest('hex'),
+        createHash('sha256').update(token).digest('hex'),
+      );
+      // Token brut jamais persisté ni relisible : ni en base, ni en liste.
+      expect(JSON.stringify(stored!.toObject())).not.toContain(token);
+      const listed = await request(app.getHttpServer())
+        .get('/organizations/invitations')
+        .set('Authorization', `Bearer ${ownerAToken}`);
+      expect(listed.status).toBe(200);
+      expect(JSON.stringify(listed.body)).not.toContain(token);
+      expect(JSON.stringify(listed.body)).not.toContain('invitationUrl');
+    });
+
+    it('en-tête Host forgé : le lien garde l’origine PUBLIC_APP_URL', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/organizations/invitations')
+        .set('Authorization', `Bearer ${ownerAToken}`)
+        .set('Host', 'evil.example.com')
+        .set('X-Forwarded-Host', 'evil.example.com')
+        .send({
+          email: `invite-host-${Date.now()}@royalvibe.test`,
+          role: 'seller',
+        });
+      expect(res.status).toBe(201);
+      expect(new URL(res.body.invitationUrl as string).origin).toBe(
+        E2E_PUBLIC_APP_URL,
       );
     });
 
@@ -684,6 +715,62 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
     });
 
+    it('parcours du lien (1-12G), inscription publique fermée : { token } → ACCOUNT_DETAILS_REQUIRED sans consommer, puis compte créé, rejeu refusé, mot de passe non trimé', async () => {
+      delete process.env.PUBLIC_REGISTRATION_ENABLED;
+      try {
+        const email = `link-flow-${Date.now()}@royalvibe.test`;
+        const issued = await invite(ownerAToken, {
+          email,
+          role: 'seller',
+          permissions: ['analytics.read'],
+        });
+        expect(issued.status).toBe(201);
+        const token = tokenOf(issued);
+
+        const first = await accept({ token });
+        expect(first.status).toBe(400);
+        expect(first.body.code).toBe('ACCOUNT_DETAILS_REQUIRED');
+        const pending = await invitationModel.findOne({ email }).exec();
+        expect(pending!.status).toBe('pending');
+        expect(await userModel.countDocuments({ email })).toBe(0);
+
+        // Espaces de bord conservés : le mot de passe n'est jamais trimé.
+        const password = '  link-flow pw !1  ';
+        const second = await accept({ token, name: '  Lien  ', password });
+        expect(second.status).toBe(200);
+        expect(second.body.user).toMatchObject({ email, name: 'Lien' });
+        expect(second.body.organization._id).toBe(orgAId);
+        expect(second.body.membership).toEqual({
+          role: 'seller',
+          status: 'active',
+        });
+        const membership = await membershipModel
+          .findOne({
+            userId: new Types.ObjectId(second.body.user._id as string),
+          })
+          .exec();
+        expect(membership!.permissions).toEqual(['analytics.read']);
+
+        const replay = await accept({ token, name: 'Autre', password });
+        expect(replay.status).toBe(400);
+        expect(replay.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
+        expect(await userModel.countDocuments({ email })).toBe(1);
+
+        const trimmed = await request(app.getHttpServer())
+          .post('/auth/login')
+          .send({ email, password: password.trim() });
+        expect(trimmed.status).toBe(401);
+        const login = await request(app.getHttpServer())
+          .post('/auth/login')
+          .send({ email, password });
+        expect(login.status).toBe(201);
+        const payload = jwtService.decode(String(login.body.access_token));
+        expect(String(payload.orgId)).toBe(orgAId);
+      } finally {
+        process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+      }
+    });
+
     it('token inconnu → 400 générique, zéro écriture', async () => {
       const usersBefore = await userModel.countDocuments();
       const res = await accept({ token: 'totally-unknown-token' });
@@ -702,7 +789,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       expect(issued.status).toBe(201);
 
       const res = await accept({
-        token: issued.body.token as string,
+        token: tokenOf(issued),
         name: 'New User',
         password: 'accept-pw-!1x',
       });
@@ -769,7 +856,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       });
       expect(issued.status).toBe(201);
 
-      const res = await accept({ token: issued.body.token as string });
+      const res = await accept({ token: tokenOf(issued) });
       expect(res.status).toBe(200);
       expect(res.body.user.name).toBe(before!.name);
       expect(res.body.organization._id).toBe(orgBId);
@@ -805,7 +892,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       );
       const usersBefore = await userModel.countDocuments();
       const resExp = await accept({
-        token: issuedExp.body.token as string,
+        token: tokenOf(issuedExp),
         name: 'X',
         password: 'accept-pw-!1x',
       });
@@ -821,7 +908,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       });
       await revoke(ownerAToken, issuedRev.body.invitation._id as string);
       const resRev = await accept({
-        token: issuedRev.body.token as string,
+        token: tokenOf(issuedRev),
         name: 'X',
         password: 'accept-pw-!1x',
       });
@@ -835,13 +922,13 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
         role: 'seller',
       });
       const firstAccept = await accept({
-        token: issuedAcc.body.token as string,
+        token: tokenOf(issuedAcc),
         name: 'Y',
         password: 'accept-pw-!1x',
       });
       expect(firstAccept.status).toBe(200);
       const secondAccept = await accept({
-        token: issuedAcc.body.token as string,
+        token: tokenOf(issuedAcc),
         name: 'Y2',
         password: 'accept-pw-!1x',
       });
@@ -858,7 +945,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       );
       try {
         const res = await accept({
-          token: issued.body.token as string,
+          token: tokenOf(issued),
           name: 'Z',
           password: 'accept-pw-!1x',
         });
@@ -890,7 +977,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       const issued = await invite(ownerAToken, { email, role: 'admin' });
       expect(issued.status).toBe(201);
 
-      const res = await accept({ token: issued.body.token as string });
+      const res = await accept({ token: tokenOf(issued) });
       expect(res.status).toBe(409);
       expect(res.body.code).toBe('MEMBERSHIP_ALREADY_EXISTS');
 
@@ -926,7 +1013,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       let res: request.Response;
       try {
         res = await accept({
-          token: issued.body.token as string,
+          token: tokenOf(issued),
           name: 'Rollback',
           password: 'accept-pw-!1x',
         });
@@ -947,7 +1034,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       const email = `accept-race-${Date.now()}@royalvibe.test`;
       const issued = await invite(ownerAToken, { email, role: 'seller' });
       const body = {
-        token: issued.body.token as string,
+        token: tokenOf(issued),
         name: 'Race',
         password: 'accept-pw-!1x',
       };
@@ -984,7 +1071,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       const password = 'accept-pw-!1x';
       const issued = await invite(ownerAToken, { email, role: 'seller' });
       const acc = await accept({
-        token: issued.body.token as string,
+        token: tokenOf(issued),
         name: 'Login Test',
         password,
       });
@@ -1003,7 +1090,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       const issued = await invite(ownerAToken, { email, role: 'seller' });
       const usersBefore = await userModel.countDocuments();
       const res = await accept({
-        token: issued.body.token as string,
+        token: tokenOf(issued),
         name: 'F',
         password: 'accept-pw-!1x',
         role: 'owner',

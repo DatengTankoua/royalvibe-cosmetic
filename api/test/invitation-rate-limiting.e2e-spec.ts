@@ -31,10 +31,9 @@ import {
 /**
  * E2E (correction sécurité 1-10B) — rate limiting de
  * `POST /organizations/invitations` (fenêtre `invitation-create`,
- * 5 créations / 60 s, tracker utilisateur+organisation). Config email
- * ABSENTE dans cette suite (delivery toujours `manual`) ; `global.fetch`
- * est quand même systématiquement mocké par défense — AUCUN accès réseau
- * réel, jamais Resend.
+ * 5 créations / 60 s, tracker utilisateur+organisation). 1-12G : aucun
+ * envoi d'email ; `global.fetch` reste mocké pour PROUVER qu'aucune
+ * création (autorisée ou bloquée) ne sort sur le réseau.
  */
 
 const TEST_JWT_SECRET = 'invitation-rate-limit-e2e-only-secret';
@@ -88,11 +87,7 @@ describe('Rate limiting invitations (e2e 1-10B) — POST /organizations/invitati
       process.env.S3_FORCE_PATH_STYLE = 'true';
       process.env.CORS_ORIGIN = E2E_CORS_ORIGIN;
       process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
-      // Config email volontairement ABSENTE : hors périmètre de cette
-      // suite (delivery = 'manual' partout, zéro réseau de toute façon).
-      delete process.env.RESEND_API_KEY;
-      delete process.env.EMAIL_FROM;
-      delete process.env.PUBLIC_APP_URL;
+      process.env.PUBLIC_APP_URL = 'https://app.rl-e2e.test';
 
       moduleFixture = await Test.createTestingModule({
         imports: [AppModule],
@@ -215,7 +210,8 @@ describe('Rate limiting invitations (e2e 1-10B) — POST /organizations/invitati
     expect(await invitationModel.countDocuments({ email: blockedEmail })).toBe(
       0,
     );
-    // Zéro appel EmailService/fetch pour une requête throttlée :
+    // Zéro appel réseau (1-12G : aucun email, ni pour les 5 créations
+    // autorisées ni pour la requête throttlée) :
     expect(fetchMock).not.toHaveBeenCalled();
     // Aucun secret/donnée d'invitation dans le corps 429 :
     expect(JSON.stringify(blocked.body)).not.toContain(blockedEmail);

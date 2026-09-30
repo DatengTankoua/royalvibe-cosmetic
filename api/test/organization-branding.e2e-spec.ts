@@ -125,6 +125,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       process.env.S3_BUCKET = 'e2e-local';
       process.env.S3_FORCE_PATH_STYLE = 'true';
       process.env.CORS_ORIGIN = E2E_CORS_ORIGIN;
+      process.env.PUBLIC_APP_URL = 'https://app.branding-e2e.test';
       process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
 
       moduleFixture = await Test.createTestingModule({
@@ -562,7 +563,10 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
           .set('Authorization', `Bearer ${ownerAToken}`)
           .send({ email: to, role: 'seller' });
         expect(res.status).toBe(201);
-        return res.body.token as string;
+        return (
+          new URL(res.body.invitationUrl as string).searchParams.get('token') ??
+          ''
+        );
       };
       const accept = (token: string, name: string) =>
         request(app.getHttpServer())

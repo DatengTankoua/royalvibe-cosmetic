@@ -1,15 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NewPasswordFields } from "@/components/auth/new-password-fields";
 import {
   ORGANIZATION_NAME_HINT,
   ORGANIZATION_NAME_MAX_LENGTH,
   USER_NAME_HINT,
   USER_NAME_MAX_LENGTH,
 } from "@/lib/name-limits";
+import { validateNewPassword } from "@/lib/password-policy";
 import { authRegister, getApiErrorCode, getApiErrorMessage } from "@/lib/api";
 import { Wordmark } from "@/components/brand/wordmark";
 import Link from "next/link";
@@ -18,10 +20,12 @@ export default function RegisterPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
   const [organizationName, setOrganizationName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const submitting = useRef(false);
   // 0B.5 : parcours d'inscription fermé — par défaut, un accès direct à la
   // route affiche un court message (affichage seulement ; le backend est
   // l'autorité finale et refuse déjà côté API).
@@ -72,11 +76,21 @@ export default function RegisterPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting.current) return;
+    // 1-12G : aucune requête si le mot de passe ne respecte pas la politique
+    // ou si la confirmation diffère ; seul `password` part à l'API.
+    const passwordError = validateNewPassword(password, confirmation);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
+    submitting.current = true;
     setLoading(true);
     setError(null);
     try {
       await authRegister({ name, email, password, organizationName });
       setPassword("");
+      setConfirmation("");
       setDone(true);
     } catch (err: unknown) {
       const code = getApiErrorCode(err);
@@ -86,6 +100,7 @@ export default function RegisterPage() {
           : getApiErrorMessage(err),
       );
     } finally {
+      submitting.current = false;
       setLoading(false);
     }
   };
@@ -148,19 +163,15 @@ export default function RegisterPage() {
               autoComplete="email"
             />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="password">Mot de passe</Label>
-            <Input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={6}
-              autoComplete="new-password"
-              aria-describedby={error ? "register-error" : undefined}
-            />
-          </div>
+          <NewPasswordFields
+            idPrefix=""
+            password={password}
+            confirmation={confirmation}
+            onPasswordChange={setPassword}
+            onConfirmationChange={setConfirmation}
+            errorId={error ? "register-error" : undefined}
+            disabled={loading}
+          />
 
           {error && (
             <p

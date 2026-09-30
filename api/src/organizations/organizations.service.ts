@@ -4,7 +4,9 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { Connection } from 'mongoose';
@@ -40,7 +42,7 @@ import { UpdateBrandingDto } from './dto/update-branding.dto';
 import { AcceptInvitationDto } from '../auth/dto/accept-invitation.dto';
 import { SocketRegistryService } from './socket-registry.service';
 import { S3Service } from '../s3/s3.service';
-import { EmailService, EmailDeliveryStatus } from '../email/email.service';
+import { buildInvitationUrl, parsePublicAppOrigin } from './invitation-link';
 import {
   ORGANIZATION_NAME_MAX_LENGTH,
   ORGANIZATION_NAME_MESSAGE,
@@ -185,7 +187,7 @@ export class OrganizationsService {
     @InjectConnection() private connection: Connection,
     private socketRegistry: SocketRegistryService,
     private s3Service: S3Service,
-    private emailService: EmailService,
+    private configService: ConfigService,
   ) {}
 
   /**
@@ -347,17 +349,18 @@ export class OrganizationsService {
    * AVANT toute lecture/écriture d'invitation. `owner` contourne cette
    * borne (ses permissions effectives sont déjà l'ensemble complet, même
    * convention que `updateMembership`).
+   *
+   * 1-12G : aucun envoi d'email. La réponse porte `invitationUrl`, construit
+   * depuis `PUBLIC_APP_URL` (jamais l'en-tête `Host`) ; le créateur le
+   * transmet lui-même. Le token brut n'existe que dans ce lien, renvoyé une
+   * seule fois — seul son hash SHA-256 est stocké.
    */
   async createInvitation(
     organizationId: string,
     invitedById: string,
     dto: CreateInvitationDto,
     now: Date = new Date(),
-  ): Promise<{
-    invitation: InvitationView;
-    token: string;
-    delivery: { status: EmailDeliveryStatus };
-  }> {
+  ): Promise<{ invitation: InvitationView; invitationUrl: string }> {
     const orgOid = new Types.ObjectId(organizationId);
 
     const actor = await this.membershipModel
@@ -381,6 +384,19 @@ export class OrganizationsService {
       if (!isPermissionSubset(invitedEffective, actorEffective)) {
         throw new ForbiddenException(PERMISSION_DENIED_RESPONSE);
       }
+    }
+
+    // Origine vérifiée AVANT toute lecture/écriture d'invitation : sans lien
+    // utilisable, aucune invitation n'est créée (jamais d'invitation orpheline).
+    const appOrigin = parsePublicAppOrigin(
+      this.configService.get<string>('PUBLIC_APP_URL'),
+    );
+    if (!appOrigin) {
+      throw new ServiceUnavailableException({
+        code: 'INVITATION_LINK_UNAVAILABLE',
+        message:
+          "Le lien d'invitation ne peut pas être généré : configuration du serveur incomplète.",
+      });
     }
 
     const email = dto.email.trim().toLowerCase();
@@ -450,54 +466,10 @@ export class OrganizationsService {
       throw err;
     }
 
-    // Email hors transaction Mongo (1-10B) : l'invitation est déjà
-    // persistée et RESTE ACQUISE quel que soit le résultat de l'envoi —
-    // jamais de second document créé, jamais un échec provider en 500.
-    let delivery: EmailDeliveryStatus;
-    try {
-      delivery = await this.sendInvitationEmail(
-        orgOid,
-        invitation,
-        dto,
-        rawToken,
-      );
-    } catch {
-      // Toute panne inattendue APRÈS la création (ex. lecture du nom
-      // d'organisation) reste un échec de LIVRAISON, jamais un 500 —
-      // l'invitation est déjà acquise, seul le statut change.
-      delivery = 'failed';
-    }
-
     return {
       invitation: this.toInvitationView(invitation),
-      token: rawToken,
-      delivery: { status: delivery },
+      invitationUrl: buildInvitationUrl(appOrigin, rawToken),
     };
-  }
-
-  /**
-   * Nom d'organisation relu ici (jamais mis en cache dans le contexte) :
-   * seul appel réseau/DB additionnel de ce flux, effectué APRÈS la création
-   * de l'invitation — un échec de lecture du nom ne doit jamais faire
-   * échouer la création (fallback chaîne vide, jamais une valeur inventée).
-   */
-  private async sendInvitationEmail(
-    organizationId: Types.ObjectId,
-    invitation: OrganizationInvitationDocument,
-    dto: CreateInvitationDto,
-    rawToken: string,
-  ): Promise<EmailDeliveryStatus> {
-    const organization = await this.organizationModel
-      .findById(organizationId)
-      .select('name')
-      .exec();
-    return this.emailService.sendInvitationEmail({
-      to: invitation.email,
-      organizationName: organization?.name ?? '',
-      role: dto.role,
-      token: rawToken,
-      expiresAt: invitation.expiresAt,
-    });
   }
 
   /** Invitations de l'organisation courante uniquement, jamais `tokenHash`. */

@@ -19,14 +19,12 @@ import { OrganizationBrandingController } from './organization-branding.controll
 import { SocketRegistryService } from './socket-registry.service';
 import { UsersModule } from '../users/users.module';
 import { S3Module } from '../s3/s3.module';
-import { EmailModule } from '../email/email.module';
 import { InvitationCreateThrottlerGuard } from '../common/invitation-rate-limiting';
 
 @Module({
   imports: [
     UsersModule,
     S3Module,
-    EmailModule,
     MongooseModule.forFeature([
       { name: Organization.name, schema: OrganizationSchema },
       {

@@ -208,8 +208,7 @@ export default function OrganizationBrandingPage() {
         </form>
       ) : (
         <p className="text-sm text-muted-foreground">
-          Lecture seule — la modification du branding nécessite la permission «
-          Gérer le branding ».
+          Voir le branding et la couleur de marque de l&apos;organisation.
         </p>
       )}
     </div>

@@ -1,14 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
-import {
-  CheckCircle2Icon,
-  CopyIcon,
-  InfoIcon,
-  PlusIcon,
-  TriangleAlertIcon,
-} from "lucide-react";
+import { CheckIcon, CopyIcon, PlusIcon } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -26,15 +20,30 @@ import {
   type DelegablePermission,
 } from "@/lib/organization-permissions";
 import { describeOrganizationError } from "@/lib/organization-errors";
-import { createInvitation, type ApiInvitation } from "@/lib/api";
+import {
+  createInvitation,
+  type ApiInvitation,
+  type CreatedInvitation,
+} from "@/lib/api";
 
 interface CreateInvitationDialogProps {
   onCreated: (invitation: ApiInvitation) => void;
 }
 
-// Le jeton brut n'est renvoyé qu'UNE SEULE fois par la réponse de création
-// (jamais reconstruit après fermeture/rechargement) — jamais persisté dans
-// localStorage/sessionStorage, jamais journalisé.
+type CopyState = "idle" | "copied" | "manual";
+
+function formatExpiry(iso: string): string {
+  return new Date(iso).toLocaleString("fr-FR", {
+    dateStyle: "long",
+    timeStyle: "short",
+  });
+}
+
+// 1-12G : aucun email envoyé — le créateur copie le lien et le transmet
+// lui-même. Le lien (jeton brut inclus) n'est renvoyé qu'UNE SEULE fois par
+// la réponse de création : uniquement en mémoire (état React), jamais
+// persisté dans localStorage/sessionStorage, jamais journalisé, jamais
+// reconstruit après fermeture/rechargement.
 export function CreateInvitationDialog({
   onCreated,
 }: CreateInvitationDialogProps) {
@@ -45,55 +54,56 @@ export function CreateInvitationDialog({
   const [permissions, setPermissions] = useState<DelegablePermission[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [acceptLink, setAcceptLink] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [deliveryStatus, setDeliveryStatus] = useState<
-    "sent" | "manual" | "failed" | null
-  >(null);
+  const [created, setCreated] = useState<CreatedInvitation | null>(null);
+  const [copyState, setCopyState] = useState<CopyState>("idle");
+  const submitting = useRef(false);
+  const linkInput = useRef<HTMLInputElement>(null);
 
   const reset = () => {
     setEmail("");
     setRole("seller");
     setPermissions([]);
     setError(null);
-    setAcceptLink(null);
-    setCopied(false);
-    setDeliveryStatus(null);
+    setCreated(null);
+    setCopyState("idle");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Garde synchrone : un double clic ne crée jamais deux invitations.
+    if (submitting.current) return;
+    submitting.current = true;
     setSaving(true);
     setError(null);
     try {
-      const { invitation, token, delivery } = await createInvitation({
-        email,
-        role,
-        permissions,
-      });
-      onCreated(invitation);
-      // Jeton brut : uniquement en mémoire (état React), jamais persisté
-      // (localStorage/sessionStorage) ni journalisé.
-      setAcceptLink(
-        `${window.location.origin}/auth/invitations/accept?token=${token}`,
-      );
-      setDeliveryStatus(delivery.status);
-      if (delivery.status === "sent") {
-        toast.success("Invitation créée et email envoyé");
-      } else {
-        toast.success("Invitation créée");
-      }
+      const result = await createInvitation({ email, role, permissions });
+      onCreated(result.invitation);
+      setCreated(result);
+      toast.success("Invitation créée");
     } catch (err) {
       setError(describeOrganizationError(err));
     } finally {
+      submitting.current = false;
       setSaving(false);
     }
   };
 
+  const selectLink = () => {
+    linkInput.current?.focus();
+    linkInput.current?.select();
+  };
+
+  // Copie seulement : ne rappelle jamais l'API. En cas d'échec du
+  // presse-papiers, le lien est sélectionné pour une copie manuelle.
   const handleCopy = async () => {
-    if (!acceptLink) return;
-    await navigator.clipboard.writeText(acceptLink);
-    setCopied(true);
+    if (!created) return;
+    try {
+      await navigator.clipboard.writeText(created.invitationUrl);
+      setCopyState("copied");
+    } catch {
+      setCopyState("manual");
+      selectLink();
+    }
   };
 
   return (
@@ -111,48 +121,60 @@ export function CreateInvitationDialog({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Nouvelle invitation</DialogTitle>
+            <DialogTitle>
+              {created ? "Invitation créée" : "Nouvelle invitation"}
+            </DialogTitle>
           </DialogHeader>
 
-          {acceptLink ? (
+          {created ? (
             <div className="space-y-3">
-              {deliveryStatus === "sent" && (
-                <p className="flex items-start gap-2 text-sm text-muted-foreground">
-                  <CheckCircle2Icon className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
-                  Email envoyé à l&apos;invité(e). Le lien reste disponible
-                  ci-dessous si besoin de le partager toi-même.
-                </p>
-              )}
-              {deliveryStatus === "manual" && (
-                <p className="flex items-start gap-2 text-sm text-muted-foreground">
-                  <InfoIcon className="mt-0.5 h-4 w-4 shrink-0" />
-                  L&apos;envoi automatique d&apos;email n&apos;est pas configuré
-                  : partage ce lien manuellement avec l&apos;invité(e).
-                </p>
-              )}
-              {deliveryStatus === "failed" && (
-                <p className="flex items-start gap-2 text-sm text-destructive">
-                  <TriangleAlertIcon className="mt-0.5 h-4 w-4 shrink-0" />
-                  L&apos;email n&apos;a pas pu être envoyé. L&apos;invitation
-                  reste valable : partage ce lien manuellement.
-                </p>
-              )}
               <p className="text-sm text-muted-foreground">
-                Lien d&apos;invitation — affiché une seule fois, transmets-le
-                dès maintenant.
+                Copie ce lien et transmets-le à {created.invitation.email}. Il
+                n&apos;est affiché qu&apos;une seule fois.
               </p>
-              <div className="flex items-center gap-2">
-                <Input readOnly value={acceptLink} className="text-xs" />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void handleCopy()}
+              <div className="space-y-2">
+                <Label htmlFor="invite-link">Lien d&apos;invitation</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="invite-link"
+                    ref={linkInput}
+                    readOnly
+                    value={created.invitationUrl}
+                    onFocus={(e) => e.currentTarget.select()}
+                    aria-describedby="invite-link-status"
+                    className="text-xs"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handleCopy()}
+                  >
+                    {copyState === "copied" ? (
+                      <CheckIcon className="mr-1 h-3.5 w-3.5" />
+                    ) : (
+                      <CopyIcon className="mr-1 h-3.5 w-3.5" />
+                    )}
+                    Copier le lien
+                  </Button>
+                </div>
+                <p
+                  id="invite-link-status"
+                  role="status"
+                  className={
+                    copyState === "manual"
+                      ? "text-sm text-destructive"
+                      : "text-sm text-muted-foreground"
+                  }
                 >
-                  <CopyIcon className="mr-1 h-3.5 w-3.5" />
-                  {copied ? "Copié" : "Copier"}
-                </Button>
+                  {copyState === "copied" && "Lien copié"}
+                  {copyState === "manual" &&
+                    "Copie automatique impossible : le lien est sélectionné, copie-le manuellement."}
+                </p>
               </div>
+              <p className="text-xs text-muted-foreground">
+                Expire le {formatExpiry(created.invitation.expiresAt)}.
+              </p>
               <Button
                 type="button"
                 className="w-full"
@@ -208,7 +230,7 @@ export function CreateInvitationDialog({
                 </p>
               )}
               <Button type="submit" className="w-full" disabled={saving}>
-                {saving ? "Envoi…" : "Créer l'invitation"}
+                {saving ? "Création…" : "Créer l'invitation"}
               </Button>
             </form>
           )}
