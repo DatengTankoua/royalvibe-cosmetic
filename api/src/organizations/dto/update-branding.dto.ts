@@ -19,7 +19,7 @@ import {
  * (`forbidNonWhitelisted`), jamais un champ ignoré silencieusement.
  */
 export class UpdateBrandingDto {
-  // 1-12C : trim avant validation, 1 à 60 caractères (même règle que
+  // 1-12C/1-12D : trim avant validation, 1 à 20 caractères (même règle que
   // l'inscription). Absent = nom inchangé (organisation historique au nom
   // plus long conservée telle quelle).
   @IsOptional()

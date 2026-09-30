@@ -9,7 +9,8 @@ import {
   UseInterceptors,
   BadRequestException,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+// 1-12D : FileInterceptor + limites multipart durcies (GHSA-535w).
+import { SafeFileInterceptor } from '../common/upload/safe-file-interceptor';
 import { ObjectsService } from './objects.service';
 import { S3Service } from '../s3/s3.service';
 import { CreateObjectDto } from './dto/create-object.dto';
@@ -29,7 +30,7 @@ export class ObjectsController {
 
   @Post()
   @UseInterceptors(
-    FileInterceptor('image', {
+    SafeFileInterceptor('image', {
       limits: { fileSize: MAX_IMAGE_SIZE_BYTES },
       fileFilter: (_req, file, callback) => {
         if (!file.mimetype.startsWith('image/')) {

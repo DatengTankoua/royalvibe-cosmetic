@@ -138,7 +138,7 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
         status: 'suspended',
       });
       const activeOrgWithSuspendedMembership = await organizationModel.create({
-        name: 'Active Org Suspended Membership 19B',
+        name: 'Active Susp Memb 19B',
         slug: 'active-org-suspended-membership-19b',
         status: 'active',
       });
@@ -224,14 +224,14 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
           name: 'Stranded Owner',
           email: STRANDED_OWNER_EMAIL,
           password: PASSWORD,
-          organizationName: 'Stranded Current Org 19B',
+          organizationName: 'Stranded Current 19B',
         });
       expect(regStranded.status).toBe(201);
       const strandedCurrentOrgId = regStranded.body.organization._id as string;
       const strandedUserId = regStranded.body.user._id as string;
 
       const strandedFallbackOrg = await organizationModel.create({
-        name: 'Stranded Fallback Org 19B',
+        name: 'Stranded Fallbk 19B',
         slug: 'stranded-fallback-org-19b',
         status: 'active',
       });
@@ -313,7 +313,7 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
     expect(res.body).toEqual([
       {
         organizationId: strandedFallbackOrgId,
-        name: 'Stranded Fallback Org 19B',
+        name: 'Stranded Fallbk 19B',
       },
     ]);
   });

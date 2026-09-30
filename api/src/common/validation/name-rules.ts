@@ -8,8 +8,10 @@ import type { TransformFnParams } from 'class-transformer';
  * Unicode et accents autorisés ; aucune troncature silencieuse : un
  * dépassement est un 400.
  */
-export const ORGANIZATION_NAME_MAX_LENGTH = 60;
-export const USER_NAME_MAX_LENGTH = 80;
+// 1-12D : décision produit définitive, identique au frontend
+// (web/src/lib/name-limits.ts) — 20 caractères pour les deux.
+export const ORGANIZATION_NAME_MAX_LENGTH = 20;
+export const USER_NAME_MAX_LENGTH = 20;
 
 export const ORGANIZATION_NAME_MESSAGE = `Le nom de l'organisation doit contenir entre 1 et ${ORGANIZATION_NAME_MAX_LENGTH} caractères.`;
 export const USER_NAME_MESSAGE = `Le nom doit contenir entre 1 et ${USER_NAME_MAX_LENGTH} caractères.`;

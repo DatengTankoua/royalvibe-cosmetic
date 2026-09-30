@@ -4,6 +4,7 @@ import {
   LOGO_MAX_DIMENSION,
   validateLogoFile,
 } from './logo-validation';
+import { configureSharpSecurityPolicy } from '../../common/image/sharp-security-policy';
 
 /**
  * 1-12C — contrat du logo tenant. Fixtures RÉELLES produites en mémoire par
@@ -40,11 +41,13 @@ async function expectCode(input: Fixture & { size: number }, code: string) {
   });
 }
 
-describe('validateLogoFile (1-12C)', () => {
+describe('validateLogoFile (1-12C/1-12D)', () => {
   let png: Buffer;
   let webp: Buffer;
 
   beforeAll(async () => {
+    // Même politique Sharp que le processus API (appliquée au bootstrap).
+    configureSharpSecurityPolicy();
     png = await image(64, 32).png().toBuffer();
     webp = await image(64, 32).webp().toBuffer();
   });
@@ -198,16 +201,55 @@ describe('validateLogoFile (1-12C)', () => {
     await expectCode(file(svg, 'logo.png', 'image/png'), 'LOGO_INVALID_FILE');
   });
 
-  it('JPEG et GIF (réels) → refusés, déclarés tels quels ou déguisés', async () => {
-    const jpeg = await image(16, 16).jpeg().toBuffer();
+  it('GIF (même statique) → refusé, déclaré tel quel ou déguisé', async () => {
     const gif = await image(16, 16).gif().toBuffer();
-    await expectCode(
-      file(jpeg, 'logo.jpg', 'image/jpeg'),
-      'LOGO_INVALID_FORMAT',
-    );
     await expectCode(file(gif, 'logo.gif', 'image/gif'), 'LOGO_INVALID_FORMAT');
-    await expectCode(file(jpeg, 'logo.png', 'image/png'), 'LOGO_INVALID_FILE');
     await expectCode(file(gif, 'logo.webp', 'image/webp'), 'LOGO_INVALID_FILE');
+    await expectCode(file(gif, 'logo.jpg', 'image/jpeg'), 'LOGO_INVALID_FILE');
+  });
+
+  it('AVIF, HEIF, TIFF, BMP, ICO, JPEG XL, SVG → refusés (déclarés ou déguisés en JPEG)', async () => {
+    const refused: Array<[string, string, Buffer]> = [
+      ['logo.avif', 'image/avif', await image(8, 8).avif().toBuffer()],
+      [
+        'logo.heic',
+        'image/heic',
+        await image(8, 8).heif({ compression: 'av1' }).toBuffer(),
+      ],
+      [
+        'logo.heif',
+        'image/heif',
+        await image(8, 8).heif({ compression: 'av1' }).toBuffer(),
+      ],
+      ['logo.tif', 'image/tiff', await image(8, 8).tiff().toBuffer()],
+      [
+        'logo.bmp',
+        'image/bmp',
+        Buffer.concat([Buffer.from('BM'), Buffer.alloc(60)]),
+      ],
+      [
+        'logo.ico',
+        'image/x-icon',
+        Buffer.concat([Buffer.from([0, 0, 1, 0]), Buffer.alloc(60)]),
+      ],
+      [
+        'logo.jxl',
+        'image/jxl',
+        Buffer.concat([Buffer.from([0xff, 0x0a]), Buffer.alloc(60)]),
+      ],
+      [
+        'logo.svg',
+        'image/svg+xml',
+        Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
+      ],
+    ];
+    for (const [name, mime, buffer] of refused) {
+      await expectCode(file(buffer, name, mime), 'LOGO_INVALID_FORMAT');
+      await expectCode(
+        file(buffer, 'logo.jpg', 'image/jpeg'),
+        'LOGO_INVALID_FILE',
+      );
+    }
   });
 
   it('sans extension ou nom de fichier avec chemin → seul l’extname compte, jamais le reste', async () => {
@@ -230,8 +272,160 @@ describe('validateLogoFile (1-12C)', () => {
     }
   });
 
-  it('chargeurs libvips non PNG/WebP bloqués (défense en profondeur)', async () => {
-    const jpeg = await image(8, 8).jpeg().toBuffer();
-    await expect(sharp(jpeg).metadata()).rejects.toThrow();
+  it('validations parallèles PNG, WebP et JPEG : aucune interférence', async () => {
+    const jpeg = await image(64, 32).jpeg().toBuffer();
+    const results = await Promise.all([
+      validateLogoFile(file(png, 'a.png', 'image/png')),
+      validateLogoFile(file(webp, 'b.webp', 'image/webp')),
+      validateLogoFile(file(jpeg, 'c.jpeg', 'image/jpeg')),
+      validateLogoFile(file(png, 'd.png', 'image/png')),
+    ]);
+    expect(results.map((r) => r.extension)).toEqual([
+      'png',
+      'webp',
+      'jpg',
+      'png',
+    ]);
+  });
+});
+
+describe('validateLogoFile — JPEG (1-12D)', () => {
+  let jpeg: Buffer;
+  let png: Buffer;
+  let webp: Buffer;
+
+  beforeAll(async () => {
+    configureSharpSecurityPolicy();
+    jpeg = await image(64, 32).jpeg().toBuffer();
+    png = await image(64, 32).png().toBuffer();
+    webp = await image(64, 32).webp().toBuffer();
+  });
+
+  it('.jpg et .jpeg (toute casse) → format jpeg, ContentType image/jpeg, extension canonique .jpg', async () => {
+    for (const name of ['logo.jpg', 'logo.jpeg', 'LOGO.JPG', 'Logo.JPEG']) {
+      await expect(
+        validateLogoFile(file(jpeg, name, 'image/jpeg')),
+      ).resolves.toEqual({
+        format: 'jpeg',
+        extension: 'jpg',
+        contentType: 'image/jpeg',
+      });
+    }
+  });
+
+  it('exactement 2048 × 2048 → accepté', async () => {
+    const max = await image(LOGO_MAX_DIMENSION, LOGO_MAX_DIMENSION)
+      .jpeg()
+      .toBuffer();
+    await expect(
+      validateLogoFile(file(max, 'max.jpg', 'image/jpeg')),
+    ).resolves.toMatchObject({
+      format: 'jpeg',
+    });
+  });
+
+  it('fichier texte déclaré image/jpeg → LOGO_INVALID_FILE', async () => {
+    await expectCode(
+      file(Buffer.from('this is not a jpeg'), 'logo.jpg', 'image/jpeg'),
+      'LOGO_INVALID_FILE',
+    );
+  });
+
+  it('PNG renommé .jpg, WebP renommé .jpeg → LOGO_INVALID_FORMAT', async () => {
+    await expectCode(
+      file(png, 'logo.jpg', 'image/jpeg'),
+      'LOGO_INVALID_FORMAT',
+    );
+    await expectCode(
+      file(webp, 'logo.jpeg', 'image/jpeg'),
+      'LOGO_INVALID_FORMAT',
+    );
+  });
+
+  it('mauvais MIME (image/png, image/jpg non standard) ou mauvaise extension → LOGO_INVALID_FORMAT', async () => {
+    await expectCode(
+      file(jpeg, 'logo.jpg', 'image/png'),
+      'LOGO_INVALID_FORMAT',
+    );
+    await expectCode(
+      file(jpeg, 'logo.jpg', 'image/jpg'),
+      'LOGO_INVALID_FORMAT',
+    );
+    await expectCode(
+      file(jpeg, 'logo.png', 'image/jpeg'),
+      'LOGO_INVALID_FORMAT',
+    );
+    await expectCode(
+      file(jpeg, 'logo.jfif', 'image/jpeg'),
+      'LOGO_INVALID_FORMAT',
+    );
+  });
+
+  it('polyglotte (JPEG suivi d’un PNG complet, déclaré PNG) → LOGO_INVALID_FORMAT', async () => {
+    const polyglot = Buffer.concat([jpeg, png]);
+    await expectCode(
+      file(polyglot, 'logo.png', 'image/png'),
+      'LOGO_INVALID_FORMAT',
+    );
+  });
+
+  it('JPEG tronqué → LOGO_INVALID_FILE', async () => {
+    await expectCode(
+      file(
+        jpeg.subarray(0, Math.floor(jpeg.length / 2)),
+        'logo.jpg',
+        'image/jpeg',
+      ),
+      'LOGO_INVALID_FILE',
+    );
+  });
+
+  it('JPEG corrompu (données de scan altérées, en-têtes intacts) → LOGO_INVALID_FILE', async () => {
+    const corrupted = Buffer.from(jpeg);
+    const sos = corrupted.indexOf(Buffer.from([0xff, 0xda]));
+    for (let i = sos + 20; i < corrupted.length - 10; i++) corrupted[i] ^= 0x5a;
+    await expectCode(
+      file(corrupted, 'logo.jpg', 'image/jpeg'),
+      'LOGO_INVALID_FILE',
+    );
+  });
+
+  it('JPEG 2049 × 1 et 2049 × 2049 → LOGO_INVALID_DIMENSIONS', async () => {
+    const wide = await image(LOGO_MAX_DIMENSION + 1, 1)
+      .jpeg()
+      .toBuffer();
+    const huge = await image(LOGO_MAX_DIMENSION + 1, LOGO_MAX_DIMENSION + 1)
+      .jpeg()
+      .toBuffer();
+    await expectCode(
+      file(wide, 'logo.jpg', 'image/jpeg'),
+      'LOGO_INVALID_DIMENSIONS',
+    );
+    await expectCode(
+      file(huge, 'logo.jpg', 'image/jpeg'),
+      'LOGO_INVALID_DIMENSIONS',
+    );
+  });
+
+  it('JPEG > 2 Mio → 413 LOGO_TOO_LARGE', async () => {
+    const big = Buffer.concat([jpeg, Buffer.alloc(LOGO_MAX_BYTES)]);
+    await expect(
+      validateLogoFile(file(big, 'logo.jpg', 'image/jpeg')),
+    ).rejects.toMatchObject({
+      status: 413,
+      response: { code: 'LOGO_TOO_LARGE' },
+    });
+  });
+
+  it('aucun message Sharp/libvips exposé', async () => {
+    try {
+      await validateLogoFile(
+        file(jpeg.subarray(0, 40), 'logo.jpg', 'image/jpeg'),
+      );
+      throw new Error('should have thrown');
+    } catch (err) {
+      const body = JSON.stringify((err as { response: unknown }).response);
+      expect(body).not.toMatch(/vips|sharp|jpeg|premature|marker|huffman/i);
+    }
   });
 });

@@ -4,6 +4,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import * as bcrypt from 'bcryptjs';
+import * as http from 'http';
 import request from 'supertest';
 import sharp from 'sharp';
 import { App } from 'supertest/types';
@@ -16,6 +17,7 @@ import { OrganizationMembership } from './../src/organizations/schemas/membershi
 import type { OrganizationMembershipDocument } from './../src/organizations/schemas/membership.schema';
 import { S3Service } from './../src/s3/s3.service';
 import { OrganizationsService } from './../src/organizations/organizations.service';
+import { isSharpSecurityPolicyConfigured } from './../src/common/image/sharp-security-policy';
 import {
   startEphemeralMongo,
   stopEphemeralMongoSafe,
@@ -483,28 +485,28 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       const ok = await register({
         name: 'Awa',
         email: email(),
-        organizationName: 'o'.repeat(60),
+        organizationName: 'o'.repeat(20),
       });
       expect(ok.status).toBe(201);
-      expect(ok.body.organization.name).toBe('o'.repeat(60));
+      expect(ok.body.organization.name).toBe('o'.repeat(20));
       const ko = await register({
         name: 'Awa',
         email: email(),
-        organizationName: 'o'.repeat(61),
+        organizationName: 'o'.repeat(21),
       });
       expect(ko.status).toBe(400);
     });
 
     it('inscription : utilisateur 80 → 201 ; 81 → 400', async () => {
       const ok = await register({
-        name: 'u'.repeat(80),
+        name: 'u'.repeat(20),
         email: email(),
         organizationName: 'Org 80',
       });
       expect(ok.status).toBe(201);
-      expect(ok.body.user.name).toBe('u'.repeat(80));
+      expect(ok.body.user.name).toBe('u'.repeat(20));
       const ko = await register({
-        name: 'u'.repeat(81),
+        name: 'u'.repeat(21),
         email: email(),
         organizationName: 'Org 81',
       });
@@ -516,7 +518,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       const res = await register({
         name: '  Zoé   Ñandú  ',
         email: addr,
-        organizationName: '  Épicerie du Coin — 李小龙  ',
+        organizationName: '  Épicerie 李小龙 №1  ',
       });
       expect(res.status).toBe(201);
       const user = await userModel.findOne({ email: addr }).exec();
@@ -524,7 +526,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       const org = await organizationModel
         .findById(res.body.organization._id as string)
         .exec();
-      expect(org!.name).toBe('Épicerie du Coin — 李小龙');
+      expect(org!.name).toBe('Épicerie 李小龙 №1');
     });
 
     it('inscription : espaces seuls → 400 (nom et organisation), aucun compte créé', async () => {
@@ -568,28 +570,28 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
           .send({ token, name, password: PASSWORD });
 
       const t81 = await issue(email());
-      expect((await accept(t81, 'u'.repeat(81))).status).toBe(400);
+      expect((await accept(t81, 'u'.repeat(21))).status).toBe(400);
       const tBlank = await issue(email());
       expect((await accept(tBlank, '    ')).status).toBe(400);
 
       const addr = email();
       const t80 = await issue(addr);
-      const ok = await accept(t80, `  ${'é'.repeat(80)}  `);
+      const ok = await accept(t80, `  ${'é'.repeat(20)}  `);
       expect(ok.status).toBe(200);
       const user = await userModel.findOne({ email: addr }).exec();
-      expect(user!.name).toBe('é'.repeat(80));
+      expect(user!.name).toBe('é'.repeat(20));
     });
 
     it('branding : 60 → 200 trimé ; 61 → 400 ; nom inchangé après refus', async () => {
       const ok = await patchBranding(adminAToken, {
-        name: `  ${'A'.repeat(60)}  `,
+        name: `  ${'A'.repeat(20)}  `,
       });
       expect(ok.status).toBe(200);
-      expect(ok.body.name).toBe('A'.repeat(60));
-      const ko = await patchBranding(adminAToken, { name: 'A'.repeat(61) });
+      expect(ok.body.name).toBe('A'.repeat(20));
+      const ko = await patchBranding(adminAToken, { name: 'A'.repeat(21) });
       expect(ko.status).toBe(400);
       const stored = await organizationModel.findById(orgAId).exec();
-      expect(stored!.name).toBe('A'.repeat(60));
+      expect(stored!.name).toBe('A'.repeat(20));
       await patchBranding(adminAToken, { name: 'Org A 18A' });
     });
   });
@@ -667,7 +669,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
 
     it('renommer une organisation historique : le NOUVEAU nom reste soumis à la limite de 60', async () => {
       expect(
-        (await patchBranding(adminAToken, { name: 'N'.repeat(61) })).status,
+        (await patchBranding(adminAToken, { name: 'N'.repeat(21) })).status,
       ).toBe(400);
       const stored = await organizationModel.findById(orgAId).exec();
       expect(stored!.name).toBe(LEGACY_ORG_NAME);
@@ -756,6 +758,121 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       expect(del.Key).toBe(before);
       // Au moment de la suppression, la DB pointe DÉJÀ vers le nouveau logo.
       expect(logoKeyAtDelete).toBe(put.Key);
+    });
+
+    it('politique Sharp du processus appliquée au bootstrap Nest (app.init) : GIF bloqué, JPEG lisible', async () => {
+      expect(isSharpSecurityPolicyConfigured()).toBe(true);
+      await expect(
+        sharp(await fixture(8, 8).gif().toBuffer()).metadata(),
+      ).rejects.toThrow();
+      await expect(
+        sharp(await fixture(8, 8).jpeg().toBuffer()).metadata(),
+      ).resolves.toHaveProperty('format', 'jpeg');
+    });
+
+    const storageCases: Array<{
+      label: string;
+      filename: string;
+      mime: string;
+      ext: string;
+      build: () => Promise<Buffer>;
+    }> = [
+      {
+        label: 'PNG',
+        filename: 'Mon Logo.png',
+        mime: 'image/png',
+        ext: 'png',
+        build: () => fixture(48, 24).png().toBuffer(),
+      },
+      {
+        label: 'WebP statique',
+        filename: 'Mon Logo.webp',
+        mime: 'image/webp',
+        ext: 'webp',
+        build: () => fixture(48, 24).webp().toBuffer(),
+      },
+      {
+        label: 'JPEG .jpg',
+        filename: 'Mon Logo.jpg',
+        mime: 'image/jpeg',
+        ext: 'jpg',
+        build: () => fixture(48, 24).jpeg().toBuffer(),
+      },
+      {
+        label: 'JPEG .jpeg → clé .jpg',
+        filename: 'Mon Logo.JPEG',
+        mime: 'image/jpeg',
+        ext: 'jpg',
+        build: () => fixture(48, 24).jpeg().toBuffer(),
+      },
+    ];
+
+    it.each(storageCases)(
+      'stockage $label : clé tenant `<uuid>.$ext`, ContentType serveur, octets identiques, logoUrl dérivée, logoKey jamais exposée',
+      async ({ filename, mime, ext, build }) => {
+        const body = await build();
+        const res = await upload(body, filename, mime);
+        expect(res.status).toBe(200);
+        const [put] = commandInputs();
+        expect(put.Key).toMatch(
+          new RegExp(`^organizations/${orgAId}/branding/${UUID}\\.${ext}$`),
+        );
+        expect(String(put.Key)).not.toMatch(/Mon|Logo|jpeg$/);
+        expect(put.ContentType).toBe(mime);
+        expect(Buffer.compare(put.Body as Buffer, body)).toBe(0);
+        expect(JSON.stringify(res.body)).not.toContain('logoKey');
+        expect(res.body.logoUrl).toBe(
+          `http://127.0.0.1:65535/e2e-local/${String(put.Key)}`,
+        );
+        const stored = await organizationModel.findById(orgAId).exec();
+        expect(stored!.logoKey).toBe(put.Key);
+      },
+    );
+
+    it('JPEG remplaçant : l’ancien logo est supprimé APRÈS la mutation DB', async () => {
+      const before = (await organizationModel.findById(orgAId).exec())!.logoKey;
+      expect(before).toBeTruthy();
+      let logoKeyAtDelete: string | null | undefined;
+      send.mockImplementation(async (command: unknown) => {
+        if (
+          (command as { constructor: { name: string } }).constructor.name ===
+          'DeleteObjectCommand'
+        ) {
+          logoKeyAtDelete = (await organizationModel.findById(orgAId).exec())!
+            .logoKey;
+        }
+        return {};
+      });
+      const res = await upload(
+        await fixture(20, 20).jpeg().toBuffer(),
+        'nouveau.jpeg',
+        'image/jpeg',
+      );
+      expect(res.status).toBe(200);
+      const [put, del] = commandInputs();
+      expect(String(put.Key)).toMatch(/\.jpg$/);
+      expect(del.Key).toBe(before);
+      expect(logoKeyAtDelete).toBe(put.Key);
+    });
+
+    it('JPEG + échec DB → le NOUVEAU fichier est supprimé, l’ancien conservé', async () => {
+      const before = (await organizationModel.findById(orgAId).exec())!.logoKey;
+      const failing = jest
+        .spyOn(OrganizationsService.prototype, 'updateBranding')
+        .mockRejectedValueOnce(new Error('db down'));
+      const res = await upload(
+        await fixture(20, 20).jpeg().toBuffer(),
+        'logo.jpg',
+        'image/jpeg',
+      );
+      expect(res.status).toBe(500);
+      const [put, del] = commandInputs();
+      expect(del.Key).toBe(put.Key);
+      expect(del.Key).not.toBe(before);
+      expect((await organizationModel.findById(orgAId).exec())!.logoKey).toBe(
+        before,
+      );
+      failing.mockRestore();
     });
 
     it('échec DB après upload → le NOUVEAU fichier est supprimé, l’ancien conservé', async () => {
@@ -851,14 +968,49 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
         ],
       },
       {
-        label: 'JPEG réel',
+        label: 'AVIF réel',
         status: 400,
         code: 'LOGO_INVALID_FORMAT',
         build: async () => [
-          await fixture(8, 8).jpeg().toBuffer(),
+          await fixture(8, 8).avif().toBuffer(),
+          'logo.avif',
+          'image/avif',
+        ],
+      },
+      {
+        label: 'HEIF réel déguisé en JPEG',
+        status: 400,
+        code: 'LOGO_INVALID_FILE',
+        build: async () => [
+          await fixture(8, 8).heif({ compression: 'av1' }).toBuffer(),
           'logo.jpg',
           'image/jpeg',
         ],
+      },
+      {
+        label: 'TIFF réel',
+        status: 400,
+        code: 'LOGO_INVALID_FORMAT',
+        build: async () => [
+          await fixture(8, 8).tiff().toBuffer(),
+          'logo.tif',
+          'image/tiff',
+        ],
+      },
+      {
+        label: 'PNG renommé .jpg',
+        status: 400,
+        code: 'LOGO_INVALID_FORMAT',
+        build: () => [pngFixture, 'logo.jpg', 'image/jpeg'],
+      },
+      {
+        label: 'JPEG tronqué',
+        status: 400,
+        code: 'LOGO_INVALID_FILE',
+        build: async () => {
+          const jpeg = await fixture(32, 32).jpeg().toBuffer();
+          return [jpeg.subarray(0, jpeg.length - 40), 'logo.jpg', 'image/jpeg'];
+        },
       },
       {
         label: 'GIF réel',
@@ -873,7 +1025,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       {
         label: 'JPEG déguisé en PNG',
         status: 400,
-        code: 'LOGO_INVALID_FILE',
+        code: 'LOGO_INVALID_FORMAT',
         build: async () => [
           await fixture(8, 8).jpeg().toBuffer(),
           'logo.png',
@@ -972,6 +1124,293 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       expect(String(put.Key)).toMatch(/photo\.jpg$/);
       uploadFile.mockRestore();
       validated.mockRestore();
+    });
+  });
+
+  // ─── 1-12D : multipart malformé (Multer 2.4.0) + logos animés ─────────────
+  describe('1-12D — multipart malformé et logos animés (aucun crash, aucune écriture)', () => {
+    type SendSpy = jest.SpyInstance<Promise<unknown>, [unknown]>;
+    let send: SendSpy;
+    let uncaught: unknown[] = [];
+    const onUncaught = (err: unknown) => uncaught.push(err);
+    const BOUNDARY = '----stockmaster112d';
+    const CRLF = '\r\n';
+
+    const part = (
+      name: string,
+      value: Buffer | string,
+      file?: { filename: string; contentType: string },
+    ) =>
+      Buffer.concat([
+        Buffer.from(
+          `--${BOUNDARY}${CRLF}Content-Disposition: form-data; name="${name}"` +
+            (file ? `; filename="${file.filename}"` : '') +
+            CRLF +
+            (file ? `Content-Type: ${file.contentType}${CRLF}` : '') +
+            CRLF,
+        ),
+        Buffer.isBuffer(value) ? value : Buffer.from(value),
+        Buffer.from(CRLF),
+      ]);
+    const close = Buffer.from(`--${BOUNDARY}--${CRLF}`);
+    const rawPatch = (body: Buffer) =>
+      request(app.getHttpServer())
+        .patch('/organizations/current/branding')
+        .set('Authorization', `Bearer ${adminAToken}`)
+        .set('Content-Type', `multipart/form-data; boundary=${BOUNDARY}`)
+        .send(body);
+    const png = () => ({ filename: 'logo.png', contentType: 'image/png' });
+
+    let snapshot: { logoKey: string | null; updatedAt: unknown; name: string };
+    const takeSnapshot = async () => {
+      const doc = await organizationModel.findById(orgAId).lean().exec();
+      snapshot = {
+        logoKey: doc!.logoKey,
+        updatedAt: doc!.updatedAt,
+        name: doc!.name,
+      };
+    };
+    const expectNoWrite = async () => {
+      expect(send).not.toHaveBeenCalled();
+      const doc = await organizationModel.findById(orgAId).lean().exec();
+      expect({
+        logoKey: doc!.logoKey,
+        updatedAt: doc!.updatedAt,
+        name: doc!.name,
+      }).toEqual(snapshot);
+    };
+    const expectServerAlive = async () => {
+      const res = await getCurrent(adminAToken);
+      expect(res.status).toBe(200);
+      expect(uncaught).toEqual([]);
+    };
+
+    beforeAll(() => process.on('uncaughtException', onUncaught));
+    afterAll(() => process.off('uncaughtException', onUncaught));
+    beforeEach(async () => {
+      uncaught = [];
+      send = jest
+        .spyOn(
+          (
+            s3Service as unknown as {
+              s3Client: { send: () => Promise<unknown> };
+            }
+          ).s3Client,
+          'send',
+        )
+        .mockResolvedValue({}) as unknown as SendSpy;
+      await takeSnapshot();
+    });
+    afterEach(() => send.mockRestore());
+
+    it('champ fichier `logo` vide (0 octet) → 400 LOGO_INVALID_FILE', async () => {
+      const res = await rawPatch(
+        Buffer.concat([part('logo', Buffer.alloc(0), png()), close]),
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('LOGO_INVALID_FILE');
+      await expectNoWrite();
+      await expectServerAlive();
+    });
+
+    it('fichier sous un nom de champ inattendu → 400 contrôlé', async () => {
+      const res = await rawPatch(
+        Buffer.concat([part('avatar', pngFixture, png()), close]),
+      );
+      expect(res.status).toBe(400);
+      await expectNoWrite();
+      await expectServerAlive();
+    });
+
+    it('fichier sous un nom de champ VIDE → 400 contrôlé', async () => {
+      const res = await rawPatch(
+        Buffer.concat([part('', pngFixture, png()), close]),
+      );
+      expect(res.status).toBe(400);
+      await expectNoWrite();
+      await expectServerAlive();
+    });
+
+    it('champ texte inattendu → 400 (whitelist globale), rien écrit', async () => {
+      const res = await rawPatch(
+        Buffer.concat([
+          part('slug', 'forged'),
+          part('brandColor', '#111111'),
+          close,
+        ]),
+      );
+      expect(res.status).toBe(400);
+      await expectNoWrite();
+    });
+
+    it('multipart tronqué (fin de formulaire absente) → 400 contrôlé', async () => {
+      const body = Buffer.concat([part('logo', pngFixture, png())]).subarray(
+        0,
+        60,
+      );
+      const res = await rawPatch(body);
+      expect(res.status).toBe(400);
+      await expectNoWrite();
+      await expectServerAlive();
+    });
+
+    it('champs profondément imbriqués → 400 rapide, aucune boucle CPU', async () => {
+      const deep = `a${'[b]'.repeat(500)}`;
+      const t0 = Date.now();
+      const res = await rawPatch(
+        Buffer.concat([part(deep, 'x'), part('brandColor', '#111111'), close]),
+      );
+      expect(res.status).toBe(400);
+      expect(Date.now() - t0).toBeLessThan(5000);
+      await expectNoWrite();
+      await expectServerAlive();
+    });
+
+    it('index de tableau démesuré (GHSA-535w-7cp7-47q4) → 400 rapide, processus vivant', async () => {
+      const t0 = Date.now();
+      const res = await rawPatch(
+        Buffer.concat([
+          part('items[4294967294]', 'x'),
+          part('items[key]', 'y'),
+          close,
+        ]),
+      );
+      expect(res.status).toBe(400);
+      expect(Date.now() - t0).toBeLessThan(5000);
+      await expectNoWrite();
+      await expectServerAlive();
+    });
+
+    it('longueur de tableau hors limite (`a[4294967295]`, GHSA-wc9g) → 400, aucune exception non interceptée', async () => {
+      const t0 = Date.now();
+      const res = await rawPatch(
+        Buffer.concat([
+          part('a[4294967295]', 'x'),
+          part('a[4294967296]', 'y'),
+          close,
+        ]),
+      );
+      expect(res.status).toBe(400);
+      expect(Date.now() - t0).toBeLessThan(5000);
+      await expectNoWrite();
+      await expectServerAlive();
+    });
+
+    it('même charge GHSA-535w sur POST /products (route produit durcie aussi) → 400 rapide, zéro S3', async () => {
+      const t0 = Date.now();
+      const res = await request(app.getHttpServer())
+        .post('/products')
+        .set('Authorization', `Bearer ${adminAToken}`)
+        .set('Content-Type', `multipart/form-data; boundary=${BOUNDARY}`)
+        .send(
+          Buffer.concat([
+            part('items[4294967294]', 'x'),
+            part('items[key]', 'y'),
+            close,
+          ]),
+        );
+      expect(res.status).toBe(400);
+      expect(Date.now() - t0).toBeLessThan(5000);
+      expect(send).not.toHaveBeenCalled();
+      await expectServerAlive();
+    });
+
+    it('deux fichiers `logo` alors qu’un seul est autorisé → 400 contrôlé', async () => {
+      const res = await rawPatch(
+        Buffer.concat([
+          part('logo', pngFixture, png()),
+          part('logo', pngFixture, png()),
+          close,
+        ]),
+      );
+      expect(res.status).toBe(400);
+      await expectNoWrite();
+      await expectServerAlive();
+    });
+
+    it('dépassement de taille → 413 LOGO_TOO_LARGE', async () => {
+      const big = Buffer.concat([pngFixture, Buffer.alloc(2 * 1024 * 1024)]);
+      const res = await rawPatch(
+        Buffer.concat([part('logo', big, png()), close]),
+      );
+      expect(res.status).toBe(413);
+      expect(res.body.code).toBe('LOGO_TOO_LARGE');
+      await expectNoWrite();
+      await expectServerAlive();
+    });
+
+    it('connexion interrompue en plein upload → aucun crash, aucune écriture', async () => {
+      const server = app.getHttpServer();
+      const listening = server.listening;
+      if (!listening) {
+        await new Promise<void>((resolve) => server.listen(0, resolve));
+      }
+      const { port } = server.address() as { port: number };
+      const head = part('logo', pngFixture, png());
+      await new Promise<void>((resolve) => {
+        const req = http.request({
+          host: '127.0.0.1',
+          port,
+          method: 'PATCH',
+          path: '/organizations/current/branding',
+          headers: {
+            Authorization: `Bearer ${adminAToken}`,
+            'Content-Type': `multipart/form-data; boundary=${BOUNDARY}`,
+            'Content-Length': String(head.length + 10_000),
+          },
+        });
+        req.on('error', () => resolve());
+        req.write(head.subarray(0, Math.floor(head.length / 2)));
+        setTimeout(() => {
+          req.destroy();
+          resolve();
+        }, 200);
+      });
+      await new Promise((r) => setTimeout(r, 300));
+      if (!listening) {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+      await expectNoWrite();
+      await expectServerAlive();
+    });
+
+    it('WebP animé → 400 LOGO_INVALID_FILE « statique », zéro S3/DB', async () => {
+      const frame = (c: string) =>
+        sharp({ create: { width: 16, height: 16, channels: 4, background: c } })
+          .png()
+          .toBuffer();
+      const animated = await sharp(
+        [await frame('#ff0000'), await frame('#0000ff')],
+        {
+          join: { animated: true },
+        },
+      )
+        .webp({ loop: 0 })
+        .toBuffer();
+      const res = await rawPatch(
+        Buffer.concat([
+          part('logo', animated, {
+            filename: 'anim.webp',
+            contentType: 'image/webp',
+          }),
+          close,
+        ]),
+      );
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({
+        statusCode: 400,
+        code: 'LOGO_INVALID_FILE',
+        message: 'Le logo doit être une image PNG ou WebP statique valide.',
+      });
+      await expectNoWrite();
+    });
+
+    it('contrôle : un logo PNG statique valide passe toujours (le spy S3 reçoit un seul PUT)', async () => {
+      const res = await rawPatch(
+        Buffer.concat([part('logo', pngFixture, png()), close]),
+      );
+      expect(res.status).toBe(200);
+      expect(send).toHaveBeenCalled();
     });
   });
 

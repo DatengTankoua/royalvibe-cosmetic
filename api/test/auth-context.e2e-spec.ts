@@ -187,7 +187,7 @@ describe('GET /auth/context (e2e 1-9C)', () => {
           name: 'Stranded Owner',
           email: STRANDED_OWNER_EMAIL,
           password: PASSWORD,
-          organizationName: 'Stranded Context Org 19C',
+          organizationName: 'Stranded Context 19C',
         });
       expect(regStranded.status).toBe(201);
       const strandedOrgId = regStranded.body.organization._id as string;

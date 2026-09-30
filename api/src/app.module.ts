@@ -14,10 +14,13 @@ import { AnalyticsModule } from './analytics/analytics.module';
 import { AuditModule } from './audit/audit.module';
 import { TrashModule } from './trash/trash.module';
 import { OrganizationsModule } from './organizations/organizations.module';
+import { ImageSecurityModule } from './common/image/image-security.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // 1-12D : politique Sharp du processus appliquée au bootstrap.
+    ImageSecurityModule,
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

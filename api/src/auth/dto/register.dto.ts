@@ -15,7 +15,7 @@ import {
 } from '../../common/validation/name-rules';
 
 export class RegisterDto {
-  // 1-12C : trim avant validation, 1 à 80 caractères.
+  // 1-12C/1-12D : trim avant validation, 1 à 20 caractères.
   @Transform(trimString)
   @IsString()
   @IsNotEmpty({ message: USER_NAME_MESSAGE })
@@ -34,7 +34,7 @@ export class RegisterDto {
   // champ organisationnel n'est accepté ici (whitelist + forbidNonWhitelisted
   // globaux rejettent organizationId/slug/role/permissions/status/currency/
   // brandColor/ownerId avec 400, avant toute logique).
-  // 1-12C : trim avant validation, 1 à 60 caractères.
+  // 1-12C/1-12D : trim avant validation, 1 à 20 caractères.
   @Transform(trimString)
   @IsString()
   @IsNotEmpty({ message: ORGANIZATION_NAME_MESSAGE })

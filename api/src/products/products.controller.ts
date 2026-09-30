@@ -12,7 +12,8 @@ import {
   UseInterceptors,
   BadRequestException,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+// 1-12D : FileInterceptor + limites multipart durcies (GHSA-535w).
+import { SafeFileInterceptor } from '../common/upload/safe-file-interceptor';
 import { ProductsService } from './products.service';
 import type { SalesHistoryScope } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
@@ -71,7 +72,7 @@ export class ProductsController {
   @Post()
   @RequirePermissions('products.manage')
   @UseInterceptors(
-    FileInterceptor('image', {
+    SafeFileInterceptor('image', {
       limits: { fileSize: MAX_IMAGE_SIZE },
       fileFilter: (_req, file, cb) => {
         if (!file.mimetype.startsWith('image/')) {
@@ -146,7 +147,7 @@ export class ProductsController {
 
   @Patch(':id')
   @UseInterceptors(
-    FileInterceptor('image', {
+    SafeFileInterceptor('image', {
       limits: { fileSize: MAX_IMAGE_SIZE },
       fileFilter: (_req, file, cb) => {
         if (!file.mimetype.startsWith('image/')) {

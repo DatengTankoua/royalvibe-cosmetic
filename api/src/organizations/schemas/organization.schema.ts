@@ -8,8 +8,8 @@ export type OrganizationDocument = HydratedDocument<Organization>;
 @Schema({ timestamps: true })
 export class Organization {
   /**
-   * Nom affiché (identité de l'organisation). Non vide après trim, 60
-   * caractères max (1-12C, ex-100). Aucune migration : un nom historique plus
+   * Nom affiché (identité de l'organisation). Non vide après trim, 20
+   * caractères max (1-12D ; 60 en 1-12C, ex-100). Aucune migration : un nom historique plus
    * long reste lisible, et les sauvegardes de branding ne revalident que les
    * chemins MODIFIÉS (`validateModifiedOnly`), jamais ce nom s'il est
    * inchangé.

@@ -22,7 +22,7 @@ export class AcceptInvitationDto {
   @IsNotEmpty()
   token: string;
 
-  // 1-12C : trim avant validation, 1 à 80 caractères (même règle que
+  // 1-12C/1-12D : trim avant validation, 1 à 20 caractères (même règle que
   // l'inscription).
   @IsOptional()
   @Transform(trimString)

@@ -3,35 +3,53 @@ import { extname } from 'path';
 import sharp from 'sharp';
 
 /**
- * Contrat du logo d'organisation (1-12C) — logo tenant UNIQUEMENT, jamais
- * les images produits. Toute la validation a lieu AVANT le moindre appel
+ * Contrat du logo d'organisation (1-12C, étendu en 1-12D) — logo tenant
+ * UNIQUEMENT, jamais les images produits. Formats : PNG, WebP statique,
+ * JPEG (`.jpg`/`.jpeg`). Toute la validation a lieu AVANT le moindre appel
  * S3 ou écriture DB : un refus ne laisse aucune trace.
  *
  * Ordre : présence/non vide → taille (2 Mio) → extension → MIME déclaré →
- * signature réelle → cohérence → métadonnées Sharp (format détecté,
- * dimensions ≤ 2048 × 2048) → décodage complet strict. Les dimensions
- * proviennent EXCLUSIVEMENT de Sharp (jamais d'une lecture d'en-tête
- * maison). Aucune transformation : l'image stockée est l'octet-près celle
- * reçue, seules sa clé et son `ContentType` sont canoniques côté serveur.
+ * signature réelle → cohérence → format détecté par Sharp → décodage
+ * complet strict → dimensions ≤ 2048 × 2048 → une seule page/frame. Les
+ * dimensions proviennent EXCLUSIVEMENT de Sharp (jamais d'une lecture
+ * d'en-tête maison). Aucune transformation : l'image stockée est
+ * l'octet-près celle reçue, seules sa clé et son `ContentType` sont
+ * canoniques côté serveur (`.jpeg` → `.jpg`).
+ *
+ * Aucun effet de bord à l'import : la politique globale de Sharp (chargeurs
+ * autorisés, cache) est appliquée UNE fois au bootstrap par
+ * `common/image/sharp-security-policy.ts`, jamais ici ni par requête.
  */
 
 export const LOGO_MAX_BYTES = 2 * 1024 * 1024;
 export const LOGO_MAX_DIMENSION = 2048;
 
-export type LogoFormat = 'png' | 'webp';
+/** Format tel que nommé par Sharp (`metadata().format`). */
+export type LogoFormat = 'png' | 'webp' | 'jpeg';
 
 export const LOGO_CONTENT_TYPES: Record<LogoFormat, string> = {
   png: 'image/png',
   webp: 'image/webp',
+  jpeg: 'image/jpeg',
+};
+
+/** Extension canonique de la clé S3 (`.jpeg` client → `.jpg`). */
+export const LOGO_CANONICAL_EXTENSIONS: Record<LogoFormat, string> = {
+  png: 'png',
+  webp: 'webp',
+  jpeg: 'jpg',
 };
 
 const EXTENSION_FORMAT: Record<string, LogoFormat> = {
   '.png': 'png',
   '.webp': 'webp',
+  '.jpg': 'jpeg',
+  '.jpeg': 'jpeg',
 };
 const MIME_FORMAT: Record<string, LogoFormat> = {
   'image/png': 'png',
   'image/webp': 'webp',
+  'image/jpeg': 'jpeg',
 };
 
 // Signature PNG officielle complète (8 octets).
@@ -39,21 +57,13 @@ const PNG_SIGNATURE = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ]);
 
-// Défense en profondeur (API documentée de Sharp) : seuls les chargeurs
-// PNG et WebP depuis un Buffer restent actifs dans ce processus — un SVG,
-// HEIF, TIFF, GIF… ne peut jamais atteindre libvips, même si un contrôle
-// amont était contourné. Sharp n'est utilisé nulle part ailleurs dans l'API.
-sharp.block({ operation: ['VipsForeignLoad'] });
-sharp.unblock({
-  operation: ['VipsForeignLoadPngBuffer', 'VipsForeignLoadWebpBuffer'],
-});
-// Aucun cache d'opérations libvips : rien du fichier validé n'est retenu
-// en mémoire après la validation.
-sharp.cache(false);
+// Marqueur SOI JPEG + premier marqueur (FF D8 FF). Indice seulement : le
+// fichier doit ensuite être réellement ouvert et décodé par Sharp.
+const JPEG_SIGNATURE = Buffer.from([0xff, 0xd8, 0xff]);
 
 export interface ValidatedLogo {
   format: LogoFormat;
-  extension: LogoFormat;
+  extension: string;
   contentType: string;
 }
 
@@ -64,15 +74,19 @@ type LogoErrorCode =
   | 'LOGO_INVALID_FILE';
 
 const MESSAGES: Record<LogoErrorCode, string> = {
-  LOGO_INVALID_FORMAT: 'Le logo doit être une image PNG ou WebP.',
+  LOGO_INVALID_FORMAT: 'Le logo doit être une image PNG, WebP ou JPEG.',
   LOGO_TOO_LARGE: 'Le logo ne doit pas dépasser 2 Mo.',
   LOGO_INVALID_DIMENSIONS: `Le logo ne doit pas dépasser ${LOGO_MAX_DIMENSION} × ${LOGO_MAX_DIMENSION} pixels.`,
   LOGO_INVALID_FILE: 'Fichier image vide, corrompu ou illisible.',
 };
 
+/** 1-12D : logo animé ou multi-page (le logo tenant doit être statique). */
+export const LOGO_NOT_STATIC_MESSAGE =
+  'Le logo doit être une image PNG ou WebP statique valide.';
+
 /** Erreur stable `{ code, message }` — jamais de détail interne. */
-export function logoError(code: LogoErrorCode) {
-  const body = { code, message: MESSAGES[code] };
+export function logoError(code: LogoErrorCode, message = MESSAGES[code]) {
+  const body = { code, message };
   return code === 'LOGO_TOO_LARGE'
     ? new PayloadTooLargeException(body)
     : new BadRequestException(body);
@@ -96,6 +110,12 @@ function detectSignature(buffer: Buffer): LogoFormat | null {
   ) {
     return 'webp';
   }
+  if (
+    buffer.length >= JPEG_SIGNATURE.length &&
+    buffer.subarray(0, JPEG_SIGNATURE.length).equals(JPEG_SIGNATURE)
+  ) {
+    return 'jpeg';
+  }
   return null;
 }
 
@@ -118,9 +138,10 @@ export async function validateLogoFile(
   if (!byExtension || !byMime) throw logoError('LOGO_INVALID_FORMAT');
 
   const bySignature = detectSignature(buffer);
-  // Contenu non PNG/WebP (texte, SVG, JPEG, GIF… déguisés) : fichier falsifié.
+  // Contenu non PNG/WebP/JPEG (texte, SVG, GIF, AVIF… déguisés) : falsifié.
   if (!bySignature) throw logoError('LOGO_INVALID_FILE');
-  // PNG renommé .webp, MIME contradictoire… : incohérence déclarée.
+  // PNG renommé .jpg, WebP renommé .jpeg, MIME contradictoire, polyglotte
+  // dont les déclarations ne concordent pas… : incohérence déclarée.
   if (byExtension !== bySignature || byMime !== bySignature) {
     throw logoError('LOGO_INVALID_FORMAT');
   }
@@ -147,10 +168,19 @@ export async function validateLogoFile(
   // Format détecté par Sharp à partir du CONTENU : png ou webp uniquement,
   // et identique à la signature, l'extension et le MIME déclarés.
   const detected = metadata.format;
-  if (detected !== 'png' && detected !== 'webp') {
+  if (detected !== 'png' && detected !== 'webp' && detected !== 'jpeg') {
     throw logoError('LOGO_INVALID_FORMAT');
   }
   if (detected !== bySignature) throw logoError('LOGO_INVALID_FORMAT');
+
+  // Décodage COMPLET et strict de tous les pixels (`stats` parcourt l'image
+  // entière) sans produire ni conserver de nouvelle image : un fichier dont
+  // l'en-tête est valide mais les données corrompues ou tronquées est refusé.
+  try {
+    await open().stats();
+  } catch {
+    throw logoError('LOGO_INVALID_FILE');
+  }
 
   const { width, height } = metadata;
   if (!width || !height) throw logoError('LOGO_INVALID_FILE');
@@ -158,18 +188,18 @@ export async function validateLogoFile(
     throw logoError('LOGO_INVALID_DIMENSIONS');
   }
 
-  // Décodage COMPLET de tous les pixels (`stats` parcourt l'image entière)
-  // sans produire ni conserver de nouvelle image : un fichier dont
-  // l'en-tête est valide mais les données corrompues est refusé ici.
-  try {
-    await open().stats();
-  } catch {
-    throw logoError('LOGO_INVALID_FILE');
+  // 1-12D : logo STATIQUE uniquement. Plusieurs pages/frames (WebP animé,
+  // multi-page) ou un minutage d'animation dans les métadonnées Sharp →
+  // refus, avant tout appel S3/DB. Limite ACCEPTÉE : libvips 8.18 n'expose
+  // pas l'animation APNG (`pages` absent) ; aucun parseur PNG maison, voir
+  // docs/architecture/phase-1-12d-upload-dependency-security.md.
+  if ((metadata.pages ?? 1) > 1 || (metadata.delay?.length ?? 0) > 1) {
+    throw logoError('LOGO_INVALID_FILE', LOGO_NOT_STATIC_MESSAGE);
   }
 
   return {
     format: detected,
-    extension: detected,
+    extension: LOGO_CANONICAL_EXTENSIONS[detected],
     contentType: LOGO_CONTENT_TYPES[detected],
   };
 }

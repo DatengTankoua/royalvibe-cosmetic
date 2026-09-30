@@ -315,7 +315,8 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
             name,
             email,
             password,
-            organizationName: `${name} Org`,
+            // 1-12D : noms d'organisation limités à 20 caractères.
+            organizationName: `${name.slice(0, 16)} Org`,
           });
       const login = (
         email: string,

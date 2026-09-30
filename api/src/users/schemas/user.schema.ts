@@ -14,7 +14,7 @@ export class User {
   _id: Types.ObjectId;
 
   /**
-   * 1-12C : 1 à 80 caractères après trim (défense en profondeur ; le DTO
+   * 1-12C/1-12D : 1 à 20 caractères après trim (défense en profondeur ; le DTO
    * reste la première barrière). Aucune migration : un document historique
    * plus long reste lisible tel quel.
    */

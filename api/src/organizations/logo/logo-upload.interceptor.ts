@@ -6,17 +6,20 @@ import {
   PayloadTooLargeException,
   Type,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { SafeFileInterceptor } from '../../common/upload/safe-file-interceptor';
 import { Observable } from 'rxjs';
 import { LOGO_MAX_BYTES, logoError } from './logo-validation';
 
 // Multer arrête la lecture au-delà de 2 Mio (jamais un fichier plus gros
 // entièrement bufferisé) et un seul fichier `logo`. Aucun `fileFilter` :
 // le MIME déclaré n'est qu'une donnée parmi d'autres, contrôlée avec la
-// signature et le décodage par `validateLogoFile`.
-const BaseLogoFileInterceptor: Type<NestInterceptor> = FileInterceptor('logo', {
-  limits: { fileSize: LOGO_MAX_BYTES, files: 1 },
-});
+// signature et le décodage par `validateLogoFile`. 1-12D : limites
+// multipart durcies (imbrication, index de tableau) via
+// `SafeFileInterceptor`.
+const BaseLogoFileInterceptor: Type<NestInterceptor> = SafeFileInterceptor(
+  'logo',
+  { limits: { fileSize: LOGO_MAX_BYTES, files: 1 } },
+);
 
 /**
  * `FileInterceptor('logo')` dont le 413 générique de Multer

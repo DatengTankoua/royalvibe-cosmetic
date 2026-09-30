@@ -975,7 +975,7 @@ export class OrganizationsService {
     if (newLogoKey !== undefined) organization.logoKey = newLogoKey;
 
     // 1-12C : seuls les chemins modifiés sont revalidés — une organisation
-    // historique au nom > 60 caractères peut changer sa couleur ou son logo
+    // historique au nom > 20 caractères peut changer sa couleur ou son logo
     // sans être forcée à renommer (le nouveau nom, lui, est toujours
     // validé par le DTO puis par le schéma).
     await organization.save({ validateModifiedOnly: true });

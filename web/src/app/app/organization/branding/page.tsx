@@ -13,12 +13,14 @@ import {
   updateOrganizationBranding,
 } from "@/lib/api";
 import {
-  LOGO_ACCEPT,
-  LOGO_HINT,
-  LOGO_MAX_BYTES,
   ORGANIZATION_NAME_HINT,
   ORGANIZATION_NAME_MAX_LENGTH,
 } from "@/lib/name-limits";
+import {
+  LOGO_ACCEPT,
+  LOGO_HELP_TEXT,
+  LOGO_MAX_BYTES,
+} from "@/lib/logo-upload-policy";
 
 // /app/organization/branding (1-9C) : lecture pour tout membre actif,
 // édition réservée à `branding.manage`. Champs interdits (slug/currency/
@@ -197,7 +199,7 @@ export default function OrganizationBrandingPage() {
               }}
             />
             <p id="org-logo-hint" className="text-xs text-muted-foreground">
-              {LOGO_HINT}
+              {LOGO_HELP_TEXT}
             </p>
           </div>
           <Button type="submit" disabled={saving}>

@@ -584,7 +584,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       const email = escalationEmail('allowed-subset');
       const delegatedEmail = `invite-analytics-${Date.now()}@royalvibe.test`;
       const delegated = await userModel.create({
-        name: 'Invite + Analytics Seller',
+        name: 'Invite Analytics',
         email: delegatedEmail,
         password: await bcrypt.hash(PASSWORD, 10),
       });
