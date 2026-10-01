@@ -110,6 +110,8 @@ export const OWNER_ONLY_OPERATIONS = Object.freeze([
   'ownership.transfer',
   'organization.delete',
   'billing.identity',
+  // 1-14D.2B : demandes et confirmation des paiements d'abonnement.
+  'billing.payment',
   'owner.attribution',
 ] as const);
 

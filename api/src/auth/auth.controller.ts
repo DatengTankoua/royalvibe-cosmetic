@@ -16,6 +16,7 @@ import type { ResolvedOrganizationContext } from '../organizations/organizations
 import { effectivePermissions } from '../organizations/permissions';
 import { AllowInactiveSubscription } from '../subscriptions/subscription-access';
 import { AuthThrottlerGuard } from '../common/auth-rate-limiting';
+import { SKIP_PAYMENT_THROTTLERS } from '../common/subscription-payment-rate-limiting';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { SwitchOrganizationDto } from './dto/switch-organization.dto';
@@ -64,7 +65,8 @@ export function isPublicRegistrationEnabled(): boolean {
 // utilisateur+organisation, sans rapport avec ces routes publiques) —
 // jamais l'inverse (`OrganizationsController` exclut symétriquement les
 // fenêtres `login-short`/`login-long`).
-@SkipThrottle({ 'invitation-create': true })
+// 1-14D.2B : idem pour les fenêtres des paiements d'abonnement.
+@SkipThrottle({ 'invitation-create': true, ...SKIP_PAYMENT_THROTTLERS })
 @Controller('auth')
 export class AuthController {
   constructor(

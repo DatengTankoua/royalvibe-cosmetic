@@ -13,6 +13,7 @@ import { SalesController } from '../sales/sales.controller';
 import { SectionsController } from '../sections/sections.controller';
 import { TrashController } from '../trash/trash.controller';
 import { SubscriptionsController } from './subscriptions.controller';
+import { SubscriptionPaymentsController } from './payments/subscription-payments.controller';
 import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
 import { SKIP_ORGANIZATION_CONTEXT_KEY } from '../auth/decorators/skip-organization-context.decorator';
 import {
@@ -41,6 +42,7 @@ const CONTROLLERS = [
   SalesController,
   SectionsController,
   SubscriptionsController,
+  SubscriptionPaymentsController,
   TrashController,
 ];
 
@@ -126,10 +128,33 @@ describe('Matrice des routes — contrôle commercial (1-14C.1)', () => {
     );
   });
 
-  it('renouvellement propriétaire : lecture d’abonnement owner-only uniquement', () => {
-    expect(byCategory('owner-renewal')).toEqual([
-      'GET /organizations/current/subscription',
-    ]);
+  it('renouvellement propriétaire : lecture d’abonnement et paiements (1-14D.2B), owner-only uniquement', () => {
+    expect(byCategory('owner-renewal')).toEqual(
+      [
+        'GET /organizations/current/subscription',
+        'GET /organizations/current/subscription/payments',
+        'GET /organizations/current/subscription/payments/:paymentId',
+        'POST /organizations/current/subscription/payments',
+        'POST /organizations/current/subscription/payments/:paymentId/refresh',
+      ].sort((a, b) => a.localeCompare(b)),
+    );
+    // Paiements : opération owner-only DÉDIÉE, aucune permission délégable.
+    for (const name of ['create', 'list', 'get', 'refresh']) {
+      const paymentHandler = (
+        SubscriptionPaymentsController.prototype as unknown as Record<
+          string,
+          object
+        >
+      )[name];
+      expect(
+        Reflect.getMetadata(OWNER_ONLY_KEY, paymentHandler) ??
+          Reflect.getMetadata(OWNER_ONLY_KEY, SubscriptionPaymentsController),
+      ).toBe('billing.payment');
+      expect(
+        Reflect.getMetadata(PERMISSIONS_KEY, paymentHandler) ??
+          Reflect.getMetadata(PERMISSIONS_KEY, SubscriptionPaymentsController),
+      ).toBeUndefined();
+    }
     const handler = (
       SubscriptionsController.prototype as unknown as Record<string, object>
     ).current;

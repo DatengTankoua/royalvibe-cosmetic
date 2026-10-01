@@ -16,7 +16,6 @@ const TABS = [
     label: "Invitations",
     permission: "members.invite" as const,
   },
-  { href: "/app/organization/offline-data", label: "Hors connexion" },
   // 1-14C.2 : propriétaire RÉEL uniquement (rôle de la membership renvoyé
   // par le serveur) — jamais `User.role` ni une permission déléguée.
   {
@@ -24,6 +23,7 @@ const TABS = [
     label: "Abonnement",
     ownerOnly: true,
   },
+  { href: "/app/organization/offline-data", label: "Hors connexion" },
 ];
 
 // Sous-shell de la section « Organisation » (1-9C) : onglets filtrés par

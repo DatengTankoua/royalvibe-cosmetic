@@ -1,6 +1,6 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { Model, Types, mongo } from 'mongoose';
 import type { Connection } from 'mongoose';
 import {
   Organization,
@@ -29,8 +29,12 @@ import {
 } from './subscription-terms';
 import { subscriptionDuplicateKeyIndex } from './subscription-period-indexes';
 import type { SubscriptionAccessDecision } from './subscription-access';
-import { SUBSCRIPTION_CLOCK } from './subscription-clock';
-import type { SubscriptionClock } from './subscription-clock';
+import {
+  SUBSCRIPTION_CLOCK,
+  SUBSCRIPTION_MONOTONIC_CLOCK,
+  systemMonotonicClock,
+} from './subscription-clock';
+import type { MonotonicClock, SubscriptionClock } from './subscription-clock';
 
 export type MongooseSession = Awaited<ReturnType<Connection['startSession']>>;
 
@@ -48,6 +52,26 @@ const RETRYABLE_GRANT_INDEXES: ReadonlySet<string> = new Set([
   'organizationId_1_sequence_1',
 ]);
 
+/**
+ * 1-14D.2B — Expiration CSOT du driver (`timeoutMS`) : la transaction a été
+ * annulée par le driver (`abortTransaction`), aucune écriture n'est validée.
+ */
+export function isGrantTimeout(error: unknown): boolean {
+  return (
+    error instanceof mongo.MongoOperationTimeoutError ||
+    (error instanceof Error && error.name === 'MongoOperationTimeoutError')
+  );
+}
+
+export interface GrantTransactionOptions {
+  /**
+   * Budget GLOBAL (ms) de la phase transactionnelle : reprises applicatives
+   * ET reprises automatiques du driver. Absent : comportement 1-14D.2A
+   * (attribution manuelle inchangée).
+   */
+  budgetMs?: number;
+}
+
 export function isRetryableGrantCollision(error: unknown): boolean {
   const index = subscriptionDuplicateKeyIndex(error);
   return index !== null && RETRYABLE_GRANT_INDEXES.has(index);
@@ -59,6 +83,7 @@ export type SubscriptionGrantErrorCode =
   | 'SUBSCRIPTION_REFERENCE_CONFLICT'
   | 'TRIAL_ALREADY_GRANTED'
   | 'GRANT_CONTENTION'
+  | 'GRANT_TIMEOUT'
   | 'TRANSACTION_REQUIRED';
 
 /** Erreur métier d'attribution (CLI / code serveur), jamais une réponse HTTP. */
@@ -114,6 +139,12 @@ export interface GrantedPeriodView {
   replayed: boolean;
 }
 
+const grantTimeoutError = () =>
+  new SubscriptionGrantError(
+    'GRANT_TIMEOUT',
+    'Attribution non confirmée dans le délai imparti, réessayer.',
+  );
+
 const isStrictObjectId = (value: unknown): value is string =>
   typeof value === 'string' && /^[0-9a-fA-F]{24}$/.test(value);
 
@@ -144,6 +175,10 @@ export class SubscriptionsService {
     private organizationModel: Model<OrganizationDocument>,
     @InjectConnection() private connection: Connection,
     @Inject(SUBSCRIPTION_CLOCK) private clock: SubscriptionClock,
+    // Optionnel : le script CLI construit le service sans horloge monotone.
+    @Optional()
+    @Inject(SUBSCRIPTION_MONOTONIC_CLOCK)
+    private monotonic: MonotonicClock = systemMonotonicClock,
   ) {}
 
   /**
@@ -224,27 +259,57 @@ export class SubscriptionsService {
    * puis `GRANT_CONTENTION`. Toute autre erreur est relancée telle quelle,
    * transaction annulée.
    *
+   * 1-14D.2B — `budgetMs` : échéance UNIQUE calculée une fois sur l'horloge
+   * monotone. Chaque tentative reçoit uniquement le temps RESTANT comme
+   * `timeoutMS` de `withTransaction` (CSOT du driver) : il borne toutes les
+   * opérations de la session, le commit et les reprises automatiques du
+   * driver ; à l'échéance, le driver ANNULE la transaction (aucune écriture
+   * validée) et lève `MongoOperationTimeoutError` → `GRANT_TIMEOUT`. Budget
+   * épuisé avant une tentative → `GRANT_TIMEOUT` sans nouvelle tentative.
+   *
    * Contrat de `work` :
    * - toutes ses lectures/écritures utilisent la session reçue ;
    * - il ne capture JAMAIS une erreur de base pour continuer à écrire :
    *   une erreur d'écriture avorte la transaction ; elle doit remonter ;
-   * - aucun appel réseau ni effet externe : le callback peut être rejoué
-   *   (reprise ici, ou erreur transitoire gérée par `withTransaction`).
+   * - aucun appel réseau ni effet externe, aucune attente hors base : le
+   *   callback peut être rejoué, et seules les opérations MongoDB sont
+   *   bornées par le budget.
    */
   async runInGrantTransaction<T>(
     work: (session: MongooseSession) => Promise<T>,
+    options: GrantTransactionOptions = {},
   ): Promise<T> {
+    const { budgetMs } = options;
+    if (
+      budgetMs !== undefined &&
+      (!Number.isFinite(budgetMs) || budgetMs <= 0)
+    ) {
+      throw new Error('Budget transactionnel invalide.');
+    }
+    const deadline =
+      budgetMs === undefined ? null : this.monotonic() + budgetMs;
+
     for (let attempt = 1; attempt <= MAX_GRANT_ATTEMPTS; attempt++) {
+      // Temps RESTANT (jamais réinitialisé). `timeoutMS: 0` signifierait
+      // « sans limite » pour le driver : jamais transmis.
+      const remaining =
+        deadline === null ? null : Math.floor(deadline - this.monotonic());
+      if (remaining !== null && remaining < 1) throw grantTimeoutError();
+
       let outcome: { value: T } | undefined;
       const session = await this.connection.startSession();
       try {
-        await session.withTransaction(async () => {
-          // Rejoué par `withTransaction` (erreur transitoire) : seul le
-          // résultat de la dernière exécution validée est conservé.
-          outcome = undefined;
-          outcome = { value: await work(session) };
-        });
+        await session.withTransaction(
+          async () => {
+            // Rejoué par `withTransaction` (erreur transitoire) : seul le
+            // résultat de la dernière exécution validée est conservé.
+            outcome = undefined;
+            outcome = { value: await work(session) };
+          },
+          remaining === null ? undefined : { timeoutMS: remaining },
+        );
       } catch (error) {
+        if (isGrantTimeout(error)) throw grantTimeoutError();
         if (isRetryableGrantCollision(error)) continue;
         throw error;
       } finally {

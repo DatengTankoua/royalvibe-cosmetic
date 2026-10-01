@@ -206,6 +206,7 @@ describe('permissions (phase 1-1A)', () => {
     expect(ALL_DELEGABLE_PERMISSIONS).toHaveLength(14);
     expect([...OWNER_ONLY_OPERATIONS].sort()).toEqual([
       'billing.identity',
+      'billing.payment',
       'organization.delete',
       'owner.attribution',
       'ownership.transfer',

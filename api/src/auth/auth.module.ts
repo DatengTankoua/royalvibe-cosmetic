@@ -10,6 +10,7 @@ import {
   AuthThrottlerGuard,
 } from '../common/auth-rate-limiting';
 import { createInvitationThrottlerWindow } from '../common/invitation-rate-limiting';
+import { createPaymentThrottlerWindows } from '../common/subscription-payment-rate-limiting';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -58,6 +59,8 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
       throttlers: [
         ...AUTH_THROTTLER_WINDOWS,
         createInvitationThrottlerWindow(),
+        // 1-14D.2B : paiements d'abonnement (tracker utilisateur+organisation).
+        ...createPaymentThrottlerWindows(),
       ],
     }),
   ],

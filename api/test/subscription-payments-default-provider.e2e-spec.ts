@@ -1,0 +1,225 @@
+import 'reflect-metadata';
+import { randomUUID } from 'crypto';
+import { Connection, Model, Types } from 'mongoose';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
+import { ThrottlerStorage } from '@nestjs/throttler';
+import request from 'supertest';
+import { App } from 'supertest/types';
+import { AppModule } from './../src/app.module';
+import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
+import { ensureSubscriptionPeriodIndexes } from './../src/subscriptions/subscription-period-indexes';
+import { SUBSCRIPTION_CLOCK } from './../src/subscriptions/subscription-clock';
+import { SubscriptionTerm } from './../src/subscriptions/subscription-terms';
+import {
+  SubscriptionPayment,
+  SubscriptionPaymentDocument,
+  SubscriptionPaymentStatus,
+} from './../src/subscriptions/payments/schemas/subscription-payment.schema';
+import { ensureSubscriptionPaymentIndexes } from './../src/subscriptions/payments/subscription-payment-indexes';
+import {
+  PAYMENT_PROVIDER,
+  UnavailablePaymentProvider,
+} from './../src/subscriptions/payments/payment-provider';
+import {
+  computePaymentRequestFingerprint,
+  derivePaymentFingerprintKey,
+  merchantReferenceFor,
+} from './../src/subscriptions/payments/payment-request';
+import { EMAIL_SENDER } from '../src/email-verification/email-sender';
+import {
+  autoConfirmVerificationEmails,
+  createE2eEmailSender,
+} from './e2e/email-verification-fixtures';
+import {
+  startEphemeralMongo,
+  stopEphemeralMongoSafe,
+  validatedEphemeralUri,
+} from './e2e/ephemeral-mongodb';
+
+/**
+ * E2E 1-14D.2B — fournisseur de paiement PAR DÉFAUT (aucun `overrideProvider`
+ * de `PAYMENT_PROVIDER`) : c'est la configuration de production tant
+ * qu'aucun adaptateur réel n'est branché. Fichier séparé : une seule
+ * application Nest par processus de test (stratégie Passport globale).
+ */
+
+const TEST_JWT_SECRET = 'subscription-payments-default-14d2b-e2e-secret';
+const PASSWORD = 'pay-default-14d2b-pw-!1x';
+const T0 = new Date('2026-03-01T09:00:00.000Z').getTime();
+const testClock = () => new Date(T0);
+
+describe('Paiements : fournisseur par défaut indisponible (e2e 1-14D.2B)', () => {
+  let moduleFixture: TestingModule;
+  let app: INestApplication<App>;
+  let paymentModel: Model<SubscriptionPaymentDocument>;
+  const emailSender = createE2eEmailSender();
+
+  const server = () => app.getHttpServer();
+  const clearThrottle = () =>
+    moduleFixture.get(ThrottlerStorage).onApplicationShutdown();
+  const call = (method: 'get' | 'post', path: string, token: string) =>
+    request(server())[method](path).set('Authorization', `Bearer ${token}`);
+
+  beforeAll(async () => {
+    const replSet = await startEphemeralMongo();
+    try {
+      process.env.MONGODB_URI = validatedEphemeralUri(replSet);
+      process.env.JWT_SECRET = TEST_JWT_SECRET;
+      process.env.CORS_ORIGIN = 'https://payments-default-e2e.example.com';
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+
+      moduleFixture = await Test.createTestingModule({ imports: [AppModule] })
+        .overrideProvider(EMAIL_SENDER)
+        .useValue(emailSender)
+        .overrideProvider(SUBSCRIPTION_CLOCK)
+        .useValue(testClock)
+        .compile();
+      app = moduleFixture.createNestApplication();
+      app.useGlobalPipes(
+        new ValidationPipe({
+          whitelist: true,
+          forbidNonWhitelisted: true,
+          transform: true,
+        }),
+      );
+      app.useGlobalFilters(new HttpExceptionFilter());
+      await app.init();
+      autoConfirmVerificationEmails(app, emailSender);
+
+      const connection = moduleFixture.get<Connection>(getConnectionToken());
+      await ensureSubscriptionPeriodIndexes(connection);
+      await ensureSubscriptionPaymentIndexes(connection);
+      paymentModel = moduleFixture.get(getModelToken(SubscriptionPayment.name));
+    } catch (error) {
+      await stopEphemeralMongoSafe();
+      throw error;
+    }
+  }, 180_000);
+
+  afterAll(async () => {
+    if (app) await app.close().catch(() => undefined);
+    await stopEphemeralMongoSafe();
+  }, 60_000);
+
+  it('fournisseur injecté par défaut : indisponible', () => {
+    const provider: unknown = moduleFixture.get(PAYMENT_PROVIDER);
+    expect(provider).toBeInstanceOf(UnavailablePaymentProvider);
+  });
+
+  it('nouvelle initiation et consultation → 503, aucune écriture ; lectures locales et rejeu disponibles', async () => {
+    clearThrottle();
+    const email = `owner-default-14d2b@pay.test`;
+    const reg = await request(server()).post('/auth/register').send({
+      name: 'Owner',
+      email,
+      password: PASSWORD,
+      organizationName: 'Org default',
+    });
+    expect(reg.status).toBe(201);
+    const orgId = String(reg.body.organization._id);
+    clearThrottle();
+    const login = await request(server())
+      .post('/auth/login')
+      .send({ email, password: PASSWORD });
+    const token = String(login.body.access_token);
+    const ownerUser = await moduleFixture
+      .get<Model<{ email: string }>>(getModelToken('User'))
+      .findOne({ email })
+      .lean()
+      .exec();
+    const owner = String(ownerUser?._id);
+
+    const refused = await call(
+      'post',
+      '/organizations/current/subscription/payments',
+      token,
+    ).send({
+      term: 'monthly',
+      payerPhone: '677123456',
+      clientOperationId: randomUUID(),
+    });
+    expect(refused.status).toBe(503);
+    expect(refused.body.code).toBe('PAYMENT_SERVICE_UNAVAILABLE');
+    expect(refused.headers['cache-control']).toBe('no-store');
+    expect(
+      await paymentModel.countDocuments({
+        organizationId: new Types.ObjectId(orgId),
+      }),
+    ).toBe(0);
+
+    // Fixture : paiement ouvert créé quand un prestataire était disponible.
+    const _id = new Types.ObjectId();
+    const clientOperationId = randomUUID();
+    await paymentModel.create({
+      _id,
+      organizationId: new Types.ObjectId(orgId),
+      requestedBy: new Types.ObjectId(owner),
+      clientOperationId,
+      requestFingerprint: computePaymentRequestFingerprint(
+        derivePaymentFingerprintKey(TEST_JWT_SECRET),
+        {
+          requestedBy: owner,
+          term: SubscriptionTerm.MONTHLY,
+          payerPhone: '237677123456',
+        },
+      ),
+      term: SubscriptionTerm.MONTHLY,
+      amount: 3000,
+      currency: 'XAF',
+      pricingVersion: 1,
+      provider: 'simulated',
+      merchantReference: merchantReferenceFor(_id),
+      providerReference: 'SIM-FIXTURE',
+      status: SubscriptionPaymentStatus.PENDING,
+      open: true,
+      payerPhoneMasked: '+237 6•• ••• •56',
+    });
+    const before = await paymentModel.findById(_id).lean().exec();
+
+    const read = await call(
+      'get',
+      `/organizations/current/subscription/payments/${_id.toHexString()}`,
+      token,
+    );
+    expect(read.status).toBe(200);
+    expect(read.body.status).toBe('pending');
+    const list = await call(
+      'get',
+      '/organizations/current/subscription/payments',
+      token,
+    );
+    expect(list.status).toBe(200);
+    expect(list.body.items).toHaveLength(1);
+
+    clearThrottle();
+    const refreshed = await call(
+      'post',
+      `/organizations/current/subscription/payments/${_id.toHexString()}/refresh`,
+      token,
+    );
+    expect(refreshed.status).toBe(503);
+    expect(refreshed.body.code).toBe('PAYMENT_SERVICE_UNAVAILABLE');
+
+    // Rejeu local de l'opération existante : même paiement, aucun réseau.
+    clearThrottle();
+    const replay = await call(
+      'post',
+      '/organizations/current/subscription/payments',
+      token,
+    ).send({ term: 'monthly', payerPhone: '677123456', clientOperationId });
+    expect(replay.status).toBe(201);
+    expect(replay.body).toMatchObject({
+      paymentId: _id.toHexString(),
+      replayed: true,
+    });
+
+    expect(await paymentModel.findById(_id).lean().exec()).toEqual(before);
+    expect(
+      await paymentModel.countDocuments({
+        organizationId: new Types.ObjectId(orgId),
+      }),
+    ).toBe(1);
+  });
+});

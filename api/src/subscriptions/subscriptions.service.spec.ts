@@ -6,8 +6,10 @@ import {
   MongooseSession,
   SubscriptionGrantError,
   SubscriptionsService,
+  isGrantTimeout,
   isRetryableGrantCollision,
 } from './subscriptions.service';
+import { mongo } from 'mongoose';
 import { SubscriptionSource } from './subscription-terms';
 
 /**
@@ -33,7 +35,7 @@ interface FakeSession {
   inTransaction: () => boolean;
 }
 
-function harness() {
+function harness(monotonic?: () => number) {
   const sessions: FakeSession[] = [];
   const connection = {
     startSession: jest.fn(() => {
@@ -61,6 +63,7 @@ function harness() {
     organizationModel as unknown as Model<OrganizationDocument>,
     connection as unknown as Connection,
     () => new Date('2026-03-01T09:00:00.000Z'),
+    monotonic,
   );
   return { service, sessions, connection, periodModel, organizationModel };
 }
@@ -247,5 +250,128 @@ describe('SubscriptionsService.grantSubscription — source figée (1-14D.2A)', 
     );
     expect((error as SubscriptionGrantError).code).toBe('INVALID_INPUT');
     expect(connection.startSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('SubscriptionsService.runInGrantTransaction — budget global (1-14D.2B)', () => {
+  /** Horloge monotone factice, avancée explicitement par le test. */
+  const fakeMonotonic = () => {
+    let now = 1_000;
+    return {
+      read: () => now,
+      advance: (ms: number) => {
+        now += ms;
+      },
+    };
+  };
+
+  /** `timeoutMS` transmis à chaque `withTransaction`. */
+  const timeoutsOf = (sessions: FakeSession[]) =>
+    sessions.map(
+      (s) =>
+        (s.withTransaction.mock.calls[0]?.[1] as { timeoutMS?: number })
+          ?.timeoutMS,
+    );
+
+  it('sans budget (attribution manuelle) : aucun `timeoutMS` transmis', async () => {
+    const { service, sessions } = harness();
+    await service.runInGrantTransaction(() => Promise.resolve('ok'));
+    expect(sessions[0].withTransaction.mock.calls[0][1]).toBeUndefined();
+  });
+
+  it('échéance UNIQUE : chaque tentative reçoit seulement le temps restant', async () => {
+    const clock = fakeMonotonic();
+    const { service, sessions } = harness(clock.read);
+    const work = jest
+      .fn<Promise<string>, [MongooseSession]>()
+      .mockImplementationOnce(() => {
+        clock.advance(12_000);
+        return Promise.reject(SEQUENCE_COLLISION());
+      })
+      .mockImplementationOnce(() => {
+        clock.advance(7_500);
+        return Promise.reject(REFERENCE_COLLISION());
+      })
+      .mockResolvedValueOnce('third');
+    await expect(
+      service.runInGrantTransaction(work, { budgetMs: 30_000 }),
+    ).resolves.toBe('third');
+    expect(timeoutsOf(sessions)).toEqual([30_000, 18_000, 10_500]);
+  });
+
+  it('budget épuisé après une collision → GRANT_TIMEOUT, AUCUNE nouvelle tentative', async () => {
+    const clock = fakeMonotonic();
+    const { service, sessions } = harness(clock.read);
+    const work = jest.fn(() => {
+      clock.advance(30_000);
+      return Promise.reject(SEQUENCE_COLLISION());
+    });
+    const error = await errorOf(
+      service.runInGrantTransaction(work, { budgetMs: 30_000 }),
+    );
+    expect((error as SubscriptionGrantError).code).toBe('GRANT_TIMEOUT');
+    expect(work).toHaveBeenCalledTimes(1);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].endSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('moins d’une milliseconde restante → aucune tentative (jamais `timeoutMS: 0`, illimité pour le driver)', async () => {
+    const clock = fakeMonotonic();
+    const { service, sessions } = harness(clock.read);
+    const work = jest.fn(() => {
+      clock.advance(29_999.5);
+      return Promise.reject(SEQUENCE_COLLISION());
+    });
+    const error = await errorOf(
+      service.runInGrantTransaction(work, { budgetMs: 30_000 }),
+    );
+    expect((error as SubscriptionGrantError).code).toBe('GRANT_TIMEOUT');
+    expect(work).toHaveBeenCalledTimes(1);
+    expect(timeoutsOf(sessions)).toEqual([30_000]);
+  });
+
+  it('expiration CSOT levée par le driver → GRANT_TIMEOUT immédiat, sans reprise', async () => {
+    const clock = fakeMonotonic();
+    const { service, sessions } = harness(clock.read);
+    const work = jest.fn(() =>
+      Promise.reject(new mongo.MongoOperationTimeoutError('Timed out')),
+    );
+    const error = await errorOf(
+      service.runInGrantTransaction(work, { budgetMs: 30_000 }),
+    );
+    expect((error as SubscriptionGrantError).code).toBe('GRANT_TIMEOUT');
+    expect(work).toHaveBeenCalledTimes(1);
+    expect(sessions[0].endSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('borne applicative conservée : 5 tentatives au plus, même avec du budget', async () => {
+    const clock = fakeMonotonic();
+    const { service, sessions } = harness(clock.read);
+    const work = jest.fn(() => Promise.reject(SEQUENCE_COLLISION()));
+    const error = await errorOf(
+      service.runInGrantTransaction(work, { budgetMs: 30_000 }),
+    );
+    expect((error as SubscriptionGrantError).code).toBe('GRANT_CONTENTION');
+    expect(work).toHaveBeenCalledTimes(MAX_GRANT_ATTEMPTS);
+    expect(sessions).toHaveLength(MAX_GRANT_ATTEMPTS);
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'budget invalide %p → refusé avant toute session',
+    async (budgetMs) => {
+      const { service, connection } = harness(() => 0);
+      await expect(
+        service.runInGrantTransaction(() => Promise.resolve(1), { budgetMs }),
+      ).rejects.toThrow('Budget transactionnel invalide.');
+      expect(connection.startSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it('isGrantTimeout : erreur CSOT du driver uniquement', () => {
+    expect(isGrantTimeout(new mongo.MongoOperationTimeoutError('x'))).toBe(
+      true,
+    );
+    expect(isGrantTimeout(new Error('timeout'))).toBe(false);
+    expect(isGrantTimeout(SEQUENCE_COLLISION())).toBe(false);
   });
 });
