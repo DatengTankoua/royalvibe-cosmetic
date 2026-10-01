@@ -44,6 +44,10 @@ export default function OrganizationSubscriptionPage() {
     <div className="space-y-4">
       <h2 className="text-lg font-semibold">Abonnement</h2>
       <SubscriptionManager
+        identity={{
+          userId: authContext.userId,
+          organizationId: authContext.organizationId,
+        }}
         serverNow={authContext.access?.checkedAt ?? null}
         reloadKey={reloadKey}
         onVerify={verify}

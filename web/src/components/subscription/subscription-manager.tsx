@@ -10,22 +10,21 @@ import {
   SUBSCRIPTION_STATUS_UNAVAILABLE,
   type ApiSubscription,
 } from "@/lib/api";
-import {
-  SUBSCRIPTION_OFFERS,
-  formatFcfa,
-  type SubscriptionTerm,
-} from "@/lib/subscription-offers";
+import type { PaymentIdentity } from "@/lib/payment-intent";
 import { SubscriptionOverview } from "./subscription-overview";
-import { OfferConditions, OfferSelector } from "./subscription-offers";
+import { SubscriptionPaymentPanel } from "./subscription-payment-panel";
 
 // 1-14C.2 — Gestion de l'abonnement par le PROPRIÉTAIRE réel (droit issu du
 // serveur : rôle de la membership / `access.canRenew`, jamais `User.role`).
 // `token` : jeton limité explicite (session limitée) ; absent = JWT
-// applicatif courant. Le renouvellement n'est qu'une SÉLECTION : le paiement
-// arrive en 1-14D — aucun bouton de paiement, aucune activation locale.
+// applicatif courant.
+// 1-14D.2C — Renouvellement par paiement Mobile Money
+// (`SubscriptionPaymentPanel`) ; aucune activation locale : l'abonnement
+// n'est actif qu'après confirmation serveur, puis reprise via `onVerify`.
 
 export function SubscriptionManager({
   token,
+  identity,
   serverNow,
   reloadKey,
   onVerify,
@@ -33,6 +32,8 @@ export function SubscriptionManager({
   verifyMessage,
 }: {
   token?: string;
+  /** Identité VÉRIFIÉE par le serveur ; `null` : paiement indisponible. */
+  identity: PaymentIdentity | null;
   serverNow: string | null;
   /** Incrémenté après une vérification pour relire l'abonnement. */
   reloadKey: number;
@@ -44,8 +45,6 @@ export function SubscriptionManager({
     null,
   );
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [renewing, setRenewing] = useState(false);
-  const [selected, setSelected] = useState<SubscriptionTerm | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,8 +66,6 @@ export function SubscriptionManager({
       cancelled = true;
     };
   }, [token, reloadKey]);
-
-  const choice = SUBSCRIPTION_OFFERS.find((offer) => offer.term === selected);
 
   return (
     <div className="space-y-6">
@@ -92,15 +89,6 @@ export function SubscriptionManager({
       <div className="flex flex-col gap-2 sm:flex-row">
         <Button
           type="button"
-          className="h-11 px-5"
-          aria-expanded={renewing}
-          aria-controls="subscription-renewal"
-          onClick={() => setRenewing((v) => !v)}
-        >
-          Renouveler
-        </Button>
-        <Button
-          type="button"
           variant="outline"
           className="h-11 px-5"
           disabled={verifying}
@@ -119,38 +107,30 @@ export function SubscriptionManager({
         </p>
       )}
 
-      {renewing && (
-        <section
-          id="subscription-renewal"
-          aria-labelledby="subscription-renewal-title"
-          className="space-y-4 rounded-xl border p-4"
-        >
-          <h3 id="subscription-renewal-title" className="font-semibold">
-            Choisir une durée
-          </h3>
-          <OfferSelector selected={selected} onSelect={setSelected} />
-          <OfferConditions />
-          <div
-            role="status"
-            aria-live="polite"
-            className="rounded-lg bg-muted p-3 text-sm"
-          >
-            {choice ? (
-              <p>
-                Durée choisie : <strong>{choice.label}</strong>, montant total{" "}
-                <strong>{formatFcfa(choice.totalXaf)}</strong>.
-              </p>
-            ) : (
-              <p>Sélectionnez une durée pour voir le montant total.</p>
-            )}
-            <p className="mt-1 text-muted-foreground">
-              Le paiement en ligne sera bientôt disponible. Une fois votre
-              abonnement activé, utilisez « Vérifier mon abonnement » pour
-              retrouver l&apos;accès.
-            </p>
-          </div>
-        </section>
-      )}
+      <section
+        aria-labelledby="subscription-renewal-title"
+        className="space-y-4"
+        id="subscription-renewal"
+      >
+        <h3 id="subscription-renewal-title" className="text-base font-semibold">
+          Renouvellement
+        </h3>
+        {identity ? (
+          // Remonté à chaque changement d'identité ou de session : aucune
+          // donnée d'un contexte précédent n'est conservée.
+          <SubscriptionPaymentPanel
+            key={`${identity.userId}:${identity.organizationId}:${token ? "limited" : "app"}`}
+            identity={identity}
+            token={token}
+            onAccessRestore={onVerify}
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Paiement momentanément indisponible. Utilisez « Vérifier mon
+            abonnement ».
+          </p>
+        )}
+      </section>
     </div>
   );
 }

@@ -83,6 +83,7 @@ export function CommercialBlockScreen({
       {isOwner && !offline ? (
         <SubscriptionManager
           token={restrictedToken}
+          identity={identity}
           serverNow={access?.checkedAt ?? null}
           reloadKey={managerReloadKey}
           onVerify={onVerify}

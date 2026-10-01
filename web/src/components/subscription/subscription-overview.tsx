@@ -149,8 +149,9 @@ export function SubscriptionOverview({
           </ul>
         )}
         <p className="text-xs text-muted-foreground">
-          Historique des périodes d&apos;accès, sans montant : les paiements et
-          factures seront disponibles ultérieurement.
+          Historique des périodes d&apos;accès, sans montant : les paiements
+          figurent dans l&apos;historique des paiements ; les factures seront
+          disponibles ultérieurement.
         </p>
       </section>
     </div>
