@@ -11,6 +11,7 @@ import {
   SubscriptionPeriodDocument,
 } from './schemas/subscription-period.schema';
 import {
+  GrantableSubscriptionSource,
   SUBSCRIPTION_GRANTOR_MAX_LENGTH,
   SUBSCRIPTION_REFERENCE_MAX_LENGTH,
   SubscriptionPeriodKind,
@@ -22,6 +23,7 @@ import {
   computeSubscriptionEndsAt,
   computeSubscriptionState,
   computeTrialEndsAt,
+  isGrantableSubscriptionSource,
   isSubscriptionTerm,
   trialSourceReference,
 } from './subscription-terms';
@@ -30,17 +32,34 @@ import type { SubscriptionAccessDecision } from './subscription-access';
 import { SUBSCRIPTION_CLOCK } from './subscription-clock';
 import type { SubscriptionClock } from './subscription-clock';
 
-type MongooseSession = Awaited<ReturnType<Connection['startSession']>>;
+export type MongooseSession = Awaited<ReturnType<Connection['startSession']>>;
 
 /** Reprises bornées après collision de chaînage (attributions concurrentes). */
 export const MAX_GRANT_ATTEMPTS = 5;
+
+/**
+ * Index dont une collision E11000 justifie de REJOUER la transaction
+ * complète : rejeu concurrent d'une même référence (relu au tour suivant)
+ * ou rang déjà pris par une autre attribution (chaîne relue). Toute autre
+ * collision (essai unique, index d'un appelant) est relancée telle quelle.
+ */
+const RETRYABLE_GRANT_INDEXES: ReadonlySet<string> = new Set([
+  'source_1_sourceReference_1',
+  'organizationId_1_sequence_1',
+]);
+
+export function isRetryableGrantCollision(error: unknown): boolean {
+  const index = subscriptionDuplicateKeyIndex(error);
+  return index !== null && RETRYABLE_GRANT_INDEXES.has(index);
+}
 
 export type SubscriptionGrantErrorCode =
   | 'INVALID_INPUT'
   | 'ORGANIZATION_NOT_FOUND'
   | 'SUBSCRIPTION_REFERENCE_CONFLICT'
   | 'TRIAL_ALREADY_GRANTED'
-  | 'GRANT_CONTENTION';
+  | 'GRANT_CONTENTION'
+  | 'TRANSACTION_REQUIRED';
 
 /** Erreur métier d'attribution (CLI / code serveur), jamais une réponse HTTP. */
 export class SubscriptionGrantError extends Error {
@@ -56,6 +75,22 @@ export class SubscriptionGrantError extends Error {
 export interface GrantSubscriptionInput {
   organizationId: string;
   term: string;
+  sourceReference: string;
+  grantedBy: string;
+}
+
+/**
+ * 1-14D.2A — attribution dans la transaction de l'APPELANT (code serveur
+ * uniquement, jamais une entrée HTTP) : la source est explicite.
+ */
+export interface GrantSubscriptionInSessionInput extends GrantSubscriptionInput {
+  source: GrantableSubscriptionSource;
+}
+
+interface ValidatedGrantRequest {
+  organizationId: Types.ObjectId;
+  term: SubscriptionTerm;
+  source: GrantableSubscriptionSource;
   sourceReference: string;
   grantedBy: string;
 }
@@ -153,57 +188,115 @@ export class SubscriptionsService {
   }
 
   /**
-   * Attribution manuelle (`source: manual`) idempotente sur
-   * `{ source, sourceReference }` :
+   * Attribution manuelle (`source: manual`, CLI et code serveur) idempotente
+   * sur `{ source, sourceReference }` :
    * - même demande canonique (organisation + durée) → même période ;
    * - autre organisation ou durée → `SUBSCRIPTION_REFERENCE_CONFLICT`,
    *   aucune écriture. `grantedBy` n'entre pas dans la comparaison.
    *
    * `startsAt = max(heure serveur, fin de couverture déjà accordée)`.
-   * Concurrence : le rang `sequence` (index unique par organisation)
-   * sérialise les attributions en base ; une collision relance la
-   * transaction (relecture de la chaîne), au plus `MAX_GRANT_ATTEMPTS` fois.
+   * La source est TOUJOURS `manual` : aucun champ de l'entrée ne peut la
+   * changer (les champs sont recopiés explicitement).
    */
   async grantSubscription(
     input: GrantSubscriptionInput,
   ): Promise<GrantedPeriodView> {
-    const request = this.validate(input);
+    const { organizationId, term, sourceReference, grantedBy } =
+      input ?? ({} as GrantSubscriptionInput);
+    const request: GrantSubscriptionInSessionInput = {
+      organizationId,
+      term,
+      sourceReference,
+      grantedBy,
+      source: SubscriptionSource.MANUAL,
+    };
+    // Entrée invalide → refus AVANT toute session.
+    this.validate(request);
+    return this.runInGrantTransaction((session) =>
+      this.grantSubscriptionInSession(request, session),
+    );
+  }
 
+  /**
+   * 1-14D.2A — exécute `work` dans UNE transaction complète, rejouée en
+   * entier (nouvelle session, nouvelle transaction) après une collision des
+   * index d'idempotence ou de séquence, au plus `MAX_GRANT_ATTEMPTS` fois ;
+   * puis `GRANT_CONTENTION`. Toute autre erreur est relancée telle quelle,
+   * transaction annulée.
+   *
+   * Contrat de `work` :
+   * - toutes ses lectures/écritures utilisent la session reçue ;
+   * - il ne capture JAMAIS une erreur de base pour continuer à écrire :
+   *   une erreur d'écriture avorte la transaction ; elle doit remonter ;
+   * - aucun appel réseau ni effet externe : le callback peut être rejoué
+   *   (reprise ici, ou erreur transitoire gérée par `withTransaction`).
+   */
+  async runInGrantTransaction<T>(
+    work: (session: MongooseSession) => Promise<T>,
+  ): Promise<T> {
     for (let attempt = 1; attempt <= MAX_GRANT_ATTEMPTS; attempt++) {
-      let applied: SubscriptionPeriodDocument | undefined;
-      let replayed = false;
+      let outcome: { value: T } | undefined;
       const session = await this.connection.startSession();
       try {
         await session.withTransaction(async () => {
-          const result = await this.applyGrant(request, session);
-          applied = result.period;
-          replayed = result.replayed;
+          // Rejoué par `withTransaction` (erreur transitoire) : seul le
+          // résultat de la dernière exécution validée est conservé.
+          outcome = undefined;
+          outcome = { value: await work(session) };
         });
       } catch (error) {
-        const index = subscriptionDuplicateKeyIndex(error);
-        // Rejeu concurrent de la même référence (relu au prochain tour) ou
-        // rang déjà pris par une autre attribution (chaîne relue). Tout autre
-        // E11000 ou erreur est relancé tel quel.
-        if (
-          index === 'source_1_sourceReference_1' ||
-          index === 'organizationId_1_sequence_1'
-        ) {
-          continue;
-        }
+        if (isRetryableGrantCollision(error)) continue;
         throw error;
       } finally {
         await session.endSession();
       }
-      if (!applied) {
-        throw new Error('Subscription grant completed without a period');
+      if (!outcome) {
+        throw new Error(
+          'Subscription grant transaction completed without result',
+        );
       }
-      if (replayed) this.assertSameRequest(applied, request);
-      return this.toGrantedView(applied, replayed);
+      return outcome.value;
     }
     throw new SubscriptionGrantError(
       'GRANT_CONTENTION',
       'Attribution impossible : trop de conflits concurrents, réessayer.',
     );
+  }
+
+  /**
+   * 1-14D.2A — attribution d'un abonnement dans la transaction ACTIVE de
+   * l'appelant (ex. : marquage d'un paiement et sa période, ensemble). N'ouvre,
+   * ne valide ni n'annule aucune transaction ; toutes les lectures/écritures
+   * passent par `session`.
+   *
+   * - Idempotence sur EXACTEMENT `{ source, sourceReference }` : une même
+   *   référence sous `manual` et `payment` désigne deux attributions
+   *   distinctes.
+   * - Rejeu de la même demande (organisation + durée) → période existante,
+   *   `replayed: true`, aucune écriture ; demande différente →
+   *   `SUBSCRIPTION_REFERENCE_CONFLICT` (l'appelant laisse l'erreur avorter
+   *   la transaction).
+   * - Une collision d'index concurrente remonte (E11000) : la transaction
+   *   est avortée côté serveur, l'appelant la rejoue en entier
+   *   (`runInGrantTransaction`).
+   */
+  async grantSubscriptionInSession(
+    input: GrantSubscriptionInSessionInput,
+    session: MongooseSession,
+  ): Promise<GrantedPeriodView> {
+    if (
+      typeof session?.inTransaction !== 'function' ||
+      !session.inTransaction()
+    ) {
+      throw new SubscriptionGrantError(
+        'TRANSACTION_REQUIRED',
+        'Une transaction active de l’appelant est requise.',
+      );
+    }
+    const request = this.validate(input);
+    const { period, replayed } = await this.applyGrant(request, session);
+    if (replayed) this.assertSameRequest(period, request);
+    return this.toGrantedView(period, replayed);
   }
 
   /** État commercial à l'heure serveur ; organisation issue du contexte. */
@@ -273,17 +366,13 @@ export class SubscriptionsService {
   }
 
   private async applyGrant(
-    request: {
-      organizationId: Types.ObjectId;
-      term: SubscriptionTerm;
-      sourceReference: string;
-      grantedBy: string;
-    },
+    request: ValidatedGrantRequest,
     session: MongooseSession,
   ): Promise<{ period: SubscriptionPeriodDocument; replayed: boolean }> {
+    // Idempotence sur EXACTEMENT `{ source, sourceReference }` (index 1).
     const existing = await this.periodModel
       .findOne({
-        source: SubscriptionSource.MANUAL,
+        source: request.source,
         sourceReference: request.sourceReference,
       })
       .session(session)
@@ -328,7 +417,7 @@ export class SubscriptionsService {
           term: request.term,
           startsAt,
           endsAt: computeSubscriptionEndsAt(startsAt, request.term),
-          source: SubscriptionSource.MANUAL,
+          source: request.source,
           sourceReference: request.sourceReference,
           grantedBy: request.grantedBy,
           previousPeriodId: last?._id ?? null,
@@ -339,7 +428,9 @@ export class SubscriptionsService {
     return { period, replayed: false };
   }
 
-  private validate(input: GrantSubscriptionInput) {
+  private validate(
+    input: GrantSubscriptionInSessionInput,
+  ): ValidatedGrantRequest {
     if (!isStrictObjectId(input?.organizationId)) {
       throw new SubscriptionGrantError(
         'INVALID_INPUT',
@@ -359,6 +450,10 @@ export class SubscriptionsService {
     if (!sourceReference) {
       throw new SubscriptionGrantError('INVALID_INPUT', 'Référence invalide.');
     }
+    // Jamais `trial` : l'essai n'est attribué qu'à la création.
+    if (!isGrantableSubscriptionSource(input.source)) {
+      throw new SubscriptionGrantError('INVALID_INPUT', 'Source invalide.');
+    }
     const grantedBy = boundedText(
       input.grantedBy,
       SUBSCRIPTION_GRANTOR_MAX_LENGTH,
@@ -369,6 +464,7 @@ export class SubscriptionsService {
     return {
       organizationId: new Types.ObjectId(input.organizationId),
       term: input.term,
+      source: input.source,
       sourceReference,
       grantedBy,
     };

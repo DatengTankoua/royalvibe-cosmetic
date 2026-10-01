@@ -24,6 +24,20 @@ export enum SubscriptionTerm {
 export enum SubscriptionSource {
   TRIAL = 'trial',
   MANUAL = 'manual',
+  /** 1-14D.2A : attribution consécutive à un paiement confirmé (serveur). */
+  PAYMENT = 'payment',
+}
+
+/** Sources d'un abonnement (jamais l'essai, attribué à la création seule). */
+export type GrantableSubscriptionSource =
+  SubscriptionSource.MANUAL | SubscriptionSource.PAYMENT;
+
+export function isGrantableSubscriptionSource(
+  value: unknown,
+): value is GrantableSubscriptionSource {
+  return (
+    value === SubscriptionSource.MANUAL || value === SubscriptionSource.PAYMENT
+  );
 }
 
 export const TRIAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
