@@ -20,11 +20,14 @@ import { SocketRegistryService } from './socket-registry.service';
 import { UsersModule } from '../users/users.module';
 import { S3Module } from '../s3/s3.module';
 import { InvitationCreateThrottlerGuard } from '../common/invitation-rate-limiting';
+import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 
 @Module({
   imports: [
     UsersModule,
     S3Module,
+    // 1-14B : essai attribué dans la transaction de création.
+    SubscriptionsModule,
     MongooseModule.forFeature([
       { name: Organization.name, schema: OrganizationSchema },
       {

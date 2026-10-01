@@ -13,6 +13,8 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "migrate:sale-operations-index": "node dist/migrations/create-sale-operations-index.js",
+    "migrate:subscription-period-indexes": "node dist/migrations/create-subscription-period-indexes.js",
+    "subscription:grant": "node dist/migrations/grant-subscription-period.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",

@@ -42,6 +42,7 @@ import { UpdateBrandingDto } from './dto/update-branding.dto';
 import { AcceptInvitationDto } from '../auth/dto/accept-invitation.dto';
 import { SocketRegistryService } from './socket-registry.service';
 import { S3Service } from '../s3/s3.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { buildInvitationUrl, parsePublicAppOrigin } from './invitation-link';
 import {
   ORGANIZATION_NAME_MAX_LENGTH,
@@ -188,6 +189,7 @@ export class OrganizationsService {
     private socketRegistry: SocketRegistryService,
     private s3Service: S3Service,
     private configService: ConfigService,
+    private subscriptionsService: SubscriptionsService,
   ) {}
 
   /**
@@ -324,6 +326,12 @@ export class OrganizationsService {
         'Owner onboarding invariant violated: expected exactly one active owner.',
       );
     }
+
+    // 1-14B : essai de 7 jours, MÊME session (aucune transaction imbriquée) —
+    // un rollback de l'onboarding n'en laisse aucune trace. Seul chemin de
+    // création d'organisation : rejoindre une organisation (invitation)
+    // n'attribue jamais d'essai.
+    await this.subscriptionsService.grantTrial(organization._id, session);
 
     return { organization, membership };
   }

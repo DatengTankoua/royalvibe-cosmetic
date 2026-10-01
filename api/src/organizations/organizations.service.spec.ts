@@ -22,6 +22,7 @@ import { UserRole } from '../users/schemas/user.schema';
 import { SocketRegistryService } from './socket-registry.service';
 import { S3Service } from '../s3/s3.service';
 import { ConfigService } from '@nestjs/config';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
 // Stub partagé (1-8A) : aucun test de ce fichier n'exerce `getCurrent`/
 // `updateBranding`/`removeLogo` (couverts par leur propre describe) — seule
@@ -86,6 +87,8 @@ describe('OrganizationsService.resolveActiveContext', () => {
         },
         { provide: S3Service, useValue: s3ServiceStub },
         { provide: ConfigService, useValue: configServiceStub },
+        // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
+        { provide: SubscriptionsService, useValue: {} },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -419,6 +422,8 @@ describe('OrganizationsService.listActiveOrganizations', () => {
         },
         { provide: S3Service, useValue: s3ServiceStub },
         { provide: ConfigService, useValue: configServiceStub },
+        // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
+        { provide: SubscriptionsService, useValue: {} },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -748,6 +753,8 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
         },
         { provide: S3Service, useValue: s3ServiceStub },
         { provide: ConfigService, useValue: invitationConfig },
+        // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
+        { provide: SubscriptionsService, useValue: {} },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1355,6 +1362,8 @@ describe('OrganizationsService.acceptInvitation (1-6B.2)', () => {
         },
         { provide: S3Service, useValue: s3ServiceStub },
         { provide: ConfigService, useValue: configServiceStub },
+        // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
+        { provide: SubscriptionsService, useValue: {} },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1659,6 +1668,8 @@ describe('OrganizationsService.listMembers (1-7C)', () => {
         },
         { provide: S3Service, useValue: s3ServiceStub },
         { provide: ConfigService, useValue: configServiceStub },
+        // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
+        { provide: SubscriptionsService, useValue: {} },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1715,6 +1726,8 @@ describe('OrganizationsService.updateMembership (1-7C)', () => {
         { provide: SocketRegistryService, useValue: socketRegistry },
         { provide: S3Service, useValue: s3ServiceStub },
         { provide: ConfigService, useValue: configServiceStub },
+        // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
+        { provide: SubscriptionsService, useValue: {} },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1939,6 +1952,8 @@ describe('OrganizationsService.transferOwnership (1-7C)', () => {
         { provide: SocketRegistryService, useValue: socketRegistry },
         { provide: S3Service, useValue: s3ServiceStub },
         { provide: ConfigService, useValue: configServiceStub },
+        // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
+        { provide: SubscriptionsService, useValue: {} },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -2108,6 +2123,8 @@ describe('OrganizationsService — branding (1-8A)', () => {
         },
         { provide: S3Service, useValue: s3Service },
         { provide: ConfigService, useValue: configServiceStub },
+        // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
+        { provide: SubscriptionsService, useValue: {} },
       ],
     }).compile();
     service = module.get(OrganizationsService);
