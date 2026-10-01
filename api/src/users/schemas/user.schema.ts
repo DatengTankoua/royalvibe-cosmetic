@@ -63,6 +63,32 @@ export class User {
 
   @Prop({ type: Number, select: false })
   emailVerificationSendCount?: number;
+
+  /**
+   * 1-13B : version de session serveur. Absente = 0 (comptes historiques).
+   * Incrémentée par une réinitialisation de mot de passe : tout JWT portant
+   * une version antérieure est refusé (`SESSION_REVOKED`).
+   */
+  @Prop({ type: Number, select: false })
+  authVersion?: number;
+
+  // 1-13B — réinitialisation du mot de passe : champs internes, distincts de
+  // la vérification d'email, jamais exposés. SHA-256 du token uniquement.
+  // Aucun index TTL (les champs expirent logiquement, le User reste).
+  @Prop({ select: false, index: { sparse: true } })
+  passwordResetTokenHash?: string;
+
+  @Prop({ type: Date, select: false })
+  passwordResetExpiresAt?: Date;
+
+  @Prop({ type: Date, select: false })
+  passwordResetLastSentAt?: Date;
+
+  @Prop({ type: Date, select: false })
+  passwordResetWindowStartedAt?: Date;
+
+  @Prop({ type: Number, select: false })
+  passwordResetSendCount?: number;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

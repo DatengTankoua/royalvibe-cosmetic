@@ -264,6 +264,21 @@ export async function confirmEmailVerification(token: string): Promise<void> {
   await apiClient.post("/auth/email-verification/confirm", { token });
 }
 
+// 1-13B : demande de réinitialisation — réponse neutre (202) pour toute
+// adresse ; 429 (limitation) ou 503 (envoi indisponible) sinon.
+export async function requestPasswordReset(email: string): Promise<void> {
+  await apiClient.post("/auth/password-reset/request", { email });
+}
+
+// 1-13B : nouveau mot de passe (jamais trimé) — aucun JWT renvoyé, aucune
+// session ouverte ou modifiée ; les anciennes sessions sont révoquées.
+export async function confirmPasswordReset(
+  token: string,
+  password: string,
+): Promise<void> {
+  await apiClient.post("/auth/password-reset/confirm", { token, password });
+}
+
 export async function fetchMe(): Promise<ApiUser> {
   const { data } = await apiClient.get<ApiUser>("/auth/me");
   return data;

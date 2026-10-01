@@ -65,7 +65,11 @@ function makeConnectionFixture() {
 
 describe('AuthService', () => {
   let service: AuthService;
-  let usersService: { findByEmail: jest.Mock; create: jest.Mock };
+  let usersService: {
+    findByEmail: jest.Mock;
+    create: jest.Mock;
+    findByIdForAuth: jest.Mock;
+  };
   let jwt: { sign: jest.Mock };
   let organizations: {
     resolveActiveContext: jest.Mock;
@@ -76,7 +80,11 @@ describe('AuthService', () => {
   let emailVerification: { issueForUser: jest.Mock };
 
   async function build() {
-    usersService = { findByEmail: jest.fn(), create: jest.fn() };
+    usersService = {
+      findByEmail: jest.fn(),
+      create: jest.fn(),
+      findByIdForAuth: jest.fn(),
+    };
     jwt = { sign: jest.fn().mockReturnValue('signed-token') };
     organizations = {
       resolveActiveContext: jest.fn(),
@@ -451,6 +459,7 @@ describe('AuthService', () => {
       expect(jwt.sign).toHaveBeenCalledWith({
         sub: USER_OBJECT_ID,
         orgId: ORG_A_ID,
+        ver: 0,
       });
       expect(user.email).toBe('ada@example.com');
       expect(user.password).toBeUndefined();
@@ -533,6 +542,7 @@ describe('AuthService', () => {
       expect(jwt.sign).toHaveBeenCalledWith({
         sub: USER_OBJECT_ID,
         orgId: ORG_A_ID,
+        ver: 0,
       });
       // la liste n’est PAS consommée quand un choix est fourni :
       expect(organizations.listActiveOrganizations).not.toHaveBeenCalled();
@@ -578,11 +588,35 @@ describe('AuthService', () => {
       });
       expect(jwt.sign).toHaveBeenCalledTimes(1);
       const payload = jwt.sign.mock.calls[0][0] as Record<string, unknown>;
-      expect(Object.keys(payload).sort()).toEqual(['orgId', 'sub']);
+      // 1-13B : `ver` = version de session (absente en base → 0).
+      expect(Object.keys(payload).sort()).toEqual(['orgId', 'sub', 'ver']);
+      expect(payload.ver).toBe(0);
       expect(payload.sub).toBe(USER_OBJECT_ID);
       expect(payload.orgId).toBe(ORG_A_ID);
       expect('email' in payload).toBe(false);
       expect('role' in payload).toBe(false);
+    });
+
+    it('1-13B : version courante signée ; ni mot de passe ni version dans `user`', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(
+        makeUserDoc({ password: await hashRight(), authVersion: 4 }),
+      );
+      organizations.listActiveOrganizations.mockResolvedValue([
+        { organizationId: ORG_A_ID, name: 'Org A' },
+      ]);
+      const result = await service.login({
+        email: 'ada@example.com',
+        password: 'right-password-1',
+      });
+      expect(jwt.sign).toHaveBeenCalledWith({
+        sub: USER_OBJECT_ID,
+        orgId: ORG_A_ID,
+        ver: 4,
+      });
+      const flat = JSON.stringify(result);
+      expect(flat).not.toContain('authVersion');
+      expect(flat).not.toContain('password');
     });
   });
 
@@ -591,6 +625,9 @@ describe('AuthService', () => {
   describe('switchOrganization', () => {
     it('switch valide : le sub provient de l’utilisateur authentifié (jamais du body)', async () => {
       service = await build();
+      usersService.findByIdForAuth.mockResolvedValue(
+        makeUserDoc({ authVersion: 3 }),
+      );
       organizations.resolveActiveContext.mockResolvedValue({
         userId: USER_OBJECT_ID,
         organizationId: ORG_B_ID,
@@ -604,6 +641,7 @@ describe('AuthService', () => {
         {
           organizationId: ORG_B_ID,
         },
+        3,
       );
 
       expect(access_token).toBe('signed-token');
@@ -611,9 +649,55 @@ describe('AuthService', () => {
         USER_OBJECT_ID,
         ORG_B_ID,
       );
+      // 1-13B : version validée du JWT appelant, confirmée en base.
       expect(jwt.sign).toHaveBeenCalledWith({
         sub: USER_OBJECT_ID,
         orgId: ORG_B_ID,
+        ver: 3,
+      });
+    });
+
+    it('1-13B : version en base plus récente que le JWT appelant (réinitialisation concurrente) → 401 SESSION_REVOKED, aucun JWT', async () => {
+      service = await build();
+      usersService.findByIdForAuth.mockResolvedValue(
+        makeUserDoc({ authVersion: 4 }),
+      );
+      organizations.resolveActiveContext.mockResolvedValue({
+        userId: USER_OBJECT_ID,
+        organizationId: ORG_B_ID,
+        membershipId: '99',
+        role: 'seller',
+        permissions: [],
+      });
+      const error: unknown = await service
+        .switchOrganization(USER_OBJECT_ID, { organizationId: ORG_B_ID }, 3)
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(UnauthorizedException);
+      expect((error as UnauthorizedException).getResponse()).toMatchObject({
+        code: 'SESSION_REVOKED',
+      });
+      expect(jwt.sign).not.toHaveBeenCalled();
+    });
+
+    it('1-13B : jamais d’élévation — signé avec la version du JWT appelant', async () => {
+      service = await build();
+      usersService.findByIdForAuth.mockResolvedValue(makeUserDoc());
+      organizations.resolveActiveContext.mockResolvedValue({
+        userId: USER_OBJECT_ID,
+        organizationId: ORG_B_ID,
+        membershipId: '99',
+        role: 'seller',
+        permissions: [],
+      });
+      await service.switchOrganization(
+        USER_OBJECT_ID,
+        { organizationId: ORG_B_ID },
+        0,
+      );
+      expect(jwt.sign).toHaveBeenCalledWith({
+        sub: USER_OBJECT_ID,
+        orgId: ORG_B_ID,
+        ver: 0,
       });
     });
 
@@ -626,7 +710,7 @@ describe('AuthService', () => {
         }),
       );
       const error: unknown = await service
-        .switchOrganization(USER_OBJECT_ID, { organizationId: ORG_B_ID })
+        .switchOrganization(USER_OBJECT_ID, { organizationId: ORG_B_ID }, 0)
         .catch((e: unknown) => e);
       expect(error).toBeInstanceOf(ForbiddenException);
       expect(

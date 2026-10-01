@@ -33,7 +33,7 @@ const PRECACHE_URLS = [
 
 // Seules ces navigations publiques ont un fallback offline / sont mises en
 // cache. Toute autre page (dont /app/*, /auth/invitations/accept et
-// /auth/verify-email, exclues explicitement plus bas) n'est jamais interceptée : la requête part au
+// /auth/verify-email et /auth/reset-password, exclues explicitement plus bas) n'est jamais interceptée : la requête part au
 // réseau natif, sans lecture ni écriture de cache.
 const PUBLIC_NAVIGATIONS = new Set(["/", OFFLINE_URL, "/auth/login", "/auth/register"]);
 
@@ -49,6 +49,11 @@ function isInvitationAcceptPath(pathname) {
 // jamais de cache, precache ni fallback, quel que soit le mode de requête.
 function isEmailVerificationPath(pathname) {
   return pathname.startsWith("/auth/verify-email");
+}
+
+// 1-13B : même règle pour le lien de réinitialisation du mot de passe.
+function isPasswordResetPath(pathname) {
+  return pathname.startsWith("/auth/reset-password");
 }
 
 // Jamais caché : API, Socket.IO, pages/données organisationnelles (/app),
@@ -73,7 +78,7 @@ function isVersionedAsset(pathname) {
 // Filet de sécurité supplémentaire (défense en profondeur) : même hors de
 // /auth/invitations/accept, jamais de cache.put pour une URL dont le
 // chemin ou la query contient un identifiant sensible d'invitation/session.
-const SENSITIVE_URL_PATTERN = /token|access_token|code|invitation|verify-email/i;
+const SENSITIVE_URL_PATTERN = /token|access_token|code|invitation|verify-email|reset-password/i;
 function isSensitiveUrl(url) {
   return SENSITIVE_URL_PATTERN.test(url.pathname) || SENSITIVE_URL_PATTERN.test(url.search);
 }
@@ -111,6 +116,7 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return; // jamais cross-origin
   if (isInvitationAcceptPath(url.pathname)) return; // token en query : jamais de cache, réseau natif
   if (isEmailVerificationPath(url.pathname)) return; // 1-13A : idem (lien de vérification)
+  if (isPasswordResetPath(url.pathname)) return; // 1-13B : idem (lien de réinitialisation)
 
   // Exception UNIQUE et étroite (1-11B) : uniquement la navigation exacte
   // vers /app/catalog, SANS aucune query string (clé précachée invariante,

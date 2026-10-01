@@ -46,6 +46,31 @@ export class SocketRegistryService {
    * après succès de la transaction). Une reconnexion recharge le contexte
    * (`organizationContext`) via le middleware d'auth du handshake.
    */
+  /**
+   * 1-13B — après une réinitialisation de mot de passe (écriture déjà
+   * effectuée) : ferme, dans TOUTES les organisations de l'utilisateur, les
+   * sockets dont la version de session du handshake est antérieure à
+   * `currentVersion`. Les sockets portant déjà la nouvelle version restent
+   * ouverts. Même limite mono-instance que le reste du registre.
+   */
+  disconnectUserSessionsBefore(userId: string, currentVersion: number): number {
+    let closed = 0;
+    for (const [key, sockets] of this.sockets) {
+      if (!key.endsWith(`:${userId}`)) continue;
+      for (const socket of [...sockets]) {
+        const version: unknown = (socket.data as { authVersion?: unknown })
+          ?.authVersion;
+        const socketVersion = typeof version === 'number' ? version : 0;
+        if (socketVersion >= currentVersion) continue;
+        sockets.delete(socket);
+        socket.disconnect(true);
+        closed += 1;
+      }
+      if (sockets.size === 0) this.sockets.delete(key);
+    }
+    return closed;
+  }
+
   disconnectMember(organizationId: string, userId: string): void {
     const key = this.key(organizationId, userId);
     const existing = this.sockets.get(key);

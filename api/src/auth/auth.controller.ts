@@ -23,14 +23,24 @@ import { SkipOrganizationContext } from './decorators/skip-organization-context.
 import { CurrentUser } from './decorators/current-user.decorator';
 import { CurrentOrganization } from './decorators/current-organization.decorator';
 import { User } from '../users/schemas/user.schema';
+import type { AuthenticatedPrincipal } from './strategies/jwt.strategy';
 import { EmailVerificationService } from '../email-verification/email-verification.service';
 import { EmailVerificationAddressThrottlerGuard } from '../email-verification/email-verification-rate-limiting';
 import {
   ConfirmEmailVerificationDto,
   RequestEmailVerificationDto,
 } from '../email-verification/email-verification.dto';
+import { PasswordResetService } from '../password-reset/password-reset.service';
+import { PasswordResetAddressThrottlerGuard } from '../password-reset/password-reset-rate-limiting';
+import {
+  ConfirmPasswordResetDto,
+  RequestPasswordResetDto,
+} from '../password-reset/password-reset.dto';
 
 /** Réponse neutre du renvoi public (1-13A) : identique pour toute adresse. */
+export const PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE =
+  'Si un compte correspond à cette adresse, vous recevrez un lien pour réinitialiser votre mot de passe.';
+
 export const EMAIL_VERIFICATION_REQUEST_ACCEPTED_MESSAGE =
   "Si un compte non vérifié correspond à cette adresse, un nouveau lien de confirmation vient d'être envoyé.";
 
@@ -59,6 +69,7 @@ export class AuthController {
     private authService: AuthService,
     private organizationsService: OrganizationsService,
     private emailVerificationService: EmailVerificationService,
+    private passwordResetService: PasswordResetService,
   ) {}
 
   // Rate limiting (0B.6) : MÊME garde/fenêtres que /auth/login, sans
@@ -128,6 +139,32 @@ export class AuthController {
     await this.emailVerificationService.confirm(dto.token);
     return { verified: true };
   }
+
+  // 1-13B : demande de réinitialisation. Limitée par IP (compteur propre à
+  // la route) ET par adresse normalisée (namespace distinct). Réponse
+  // neutre ; recherche du compte et envoi après la réponse.
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(AuthThrottlerGuard, PasswordResetAddressThrottlerGuard)
+  @Public()
+  @Post('password-reset/request')
+  requestPasswordReset(@Body() dto: RequestPasswordResetDto) {
+    const { delivery } = this.passwordResetService.requestByEmail(dto.email);
+    void delivery;
+    return { message: PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE };
+  }
+
+  // 1-13B : confirmation explicite. Aucun JWT, aucune connexion automatique ;
+  // toutes les sessions antérieures de l'utilisateur sont révoquées.
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(AuthThrottlerGuard)
+  @Public()
+  @Post('password-reset/confirm')
+  async confirmPasswordReset(@Body() dto: ConfirmPasswordResetDto) {
+    await this.passwordResetService.confirm(dto.token, dto.password);
+    return { reset: true };
+  }
   // 200 explicite : le switch répond un nouveau JWT (le POST par défaut
   // NestJS répond 201 — le conserver ici serait trompeur).
   // 1-9B : @SkipOrganizationContext — l'organisation COURANTE (JWT) peut
@@ -137,11 +174,16 @@ export class AuthController {
   @SkipOrganizationContext()
   @Post('switch-organization')
   switchOrganization(
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedPrincipal,
     @Body() dto: SwitchOrganizationDto,
   ) {
     // Le sub provient de l'utilisateur authentifié (JWT) — jamais du body.
-    return this.authService.switchOrganization(user._id.toString(), dto);
+    // 1-13B : version de session validée du JWT appelant, jamais du client.
+    return this.authService.switchOrganization(
+      user._id.toString(),
+      dto,
+      user.sessionVersion,
+    );
   }
 
   // 1-9B : organisations actives de l'utilisateur courant (userId
@@ -157,8 +199,15 @@ export class AuthController {
   }
 
   @Get('me')
-  me(@CurrentUser() user: User) {
-    return user;
+  me(@CurrentUser() user: AuthenticatedPrincipal) {
+    // 1-13B : champs explicites — la version de session reste interne.
+    return {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      organizationId: user.organizationId,
+    };
   }
 
   // 1-9C — source unique et fiable des droits de l'organisation COURANTE

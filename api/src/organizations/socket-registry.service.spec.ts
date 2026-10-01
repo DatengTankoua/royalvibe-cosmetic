@@ -76,4 +76,37 @@ describe('SocketRegistryService (1-7C)', () => {
 
     expect(s2.disconnect).toHaveBeenCalledWith(true);
   });
+  describe('disconnectUserSessionsBefore (1-13B)', () => {
+    const versioned = (authVersion?: number) => ({
+      disconnect: jest.fn(),
+      data: authVersion === undefined ? {} : { authVersion },
+    });
+
+    it('ferme les sockets antérieurs de l’utilisateur dans TOUTES ses organisations, garde la nouvelle version et les autres utilisateurs', () => {
+      const oldA = versioned(0);
+      const legacyB = versioned(); // handshake sans version → 0
+      const fresh = versioned(1);
+      const other = versioned(0);
+      registry.register(ORG_A, USER_A, oldA as never);
+      registry.register(ORG_B, USER_A, legacyB as never);
+      registry.register(ORG_A, USER_A, fresh as never);
+      registry.register(ORG_A, USER_B, other as never);
+
+      expect(registry.disconnectUserSessionsBefore(USER_A, 1)).toBe(2);
+
+      expect(oldA.disconnect).toHaveBeenCalledWith(true);
+      expect(legacyB.disconnect).toHaveBeenCalledWith(true);
+      expect(fresh.disconnect).not.toHaveBeenCalled();
+      expect(other.disconnect).not.toHaveBeenCalled();
+      // Seul le socket à jour reste enregistré pour USER_A.
+      registry.disconnectMember(ORG_A, USER_A);
+      expect(fresh.disconnect).toHaveBeenCalledTimes(1);
+      registry.disconnectMember(ORG_B, USER_A);
+      expect(legacyB.disconnect).toHaveBeenCalledTimes(1);
+    });
+
+    it('aucun socket connu → 0, aucune erreur', () => {
+      expect(registry.disconnectUserSessionsBefore(USER_A, 3)).toBe(0);
+    });
+  });
 });

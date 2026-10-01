@@ -19,6 +19,7 @@ import { RolesGuard } from './guards/roles.guard';
 import { UsersModule } from '../users/users.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { EmailVerificationModule } from '../email-verification/email-verification.module';
+import { PasswordResetModule } from '../password-reset/password-reset.module';
 
 @Module({
   imports: [
@@ -26,6 +27,8 @@ import { EmailVerificationModule } from '../email-verification/email-verificatio
     OrganizationsModule,
     // 1-13A : vérification des emails (service + expéditeur substituable).
     EmailVerificationModule,
+    // 1-13B : réinitialisation du mot de passe.
+    PasswordResetModule,
     PassportModule,
     // Instance du JwtModule (secret `JWT_SECRET`, `signOptions.expiresIn: '7d'`)
     // — MÊME configuration que l'auth HTTP : le handshake Socket.IO (0B.3)

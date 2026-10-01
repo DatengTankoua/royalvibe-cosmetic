@@ -19,6 +19,12 @@ import { EmailVerificationAddressThrottlerGuard } from './email-verification-rat
     EmailVerificationService,
     EmailVerificationAddressThrottlerGuard,
   ],
-  exports: [EmailVerificationService, EmailVerificationAddressThrottlerGuard],
+  // 1-13B : `EMAIL_SENDER` exporté — un seul expéditeur Resend, réutilisé
+  // par la réinitialisation du mot de passe.
+  exports: [
+    EMAIL_SENDER,
+    EmailVerificationService,
+    EmailVerificationAddressThrottlerGuard,
+  ],
 })
 export class EmailVerificationModule {}

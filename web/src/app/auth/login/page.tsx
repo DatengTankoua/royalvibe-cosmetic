@@ -165,6 +165,15 @@ export default function LoginPage() {
             </div>
           </div>
 
+          <div className="text-right">
+            <Link
+              href="/auth/forgot-password"
+              className="text-sm text-muted-foreground underline underline-offset-2"
+            >
+              Mot de passe oublié ?
+            </Link>
+          </div>
+
           {error && (
             <p
               id="login-error"

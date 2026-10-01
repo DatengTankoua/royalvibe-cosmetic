@@ -17,15 +17,21 @@ export class UsersService {
     email: string,
     session?: MongooseSession,
   ): Promise<UserDocument | null> {
+    // 1-13B : `authVersion` lu pour signer le JWT avec la version courante.
     return this.userModel
       .findOne({ email })
-      .select('+password')
+      .select('+password +authVersion')
       .session(session ?? null)
       .exec();
   }
 
   async findById(id: string): Promise<UserDocument | null> {
     return this.userModel.findById(id).exec();
+  }
+
+  /** 1-13B : chargement pour l'authentification (version de session incluse). */
+  async findByIdForAuth(id: string): Promise<UserDocument | null> {
+    return this.userModel.findById(id).select('+authVersion').exec();
   }
 
   async create(

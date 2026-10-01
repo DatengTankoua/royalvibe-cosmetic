@@ -8,6 +8,10 @@ import {
   type ResolvedOrganizationContext,
 } from '../organizations/organizations.service';
 import { OriginAllowlist } from './origin.helpers';
+import {
+  currentSessionVersion,
+  isSessionCurrent,
+} from '../auth/session-version';
 
 /**
  * Contrôle authentifié des connexions Socket.IO — phase 0B.3.
@@ -188,11 +192,19 @@ export function installSocketAuthMiddleware(
 
         // 5. L'utilisateur existe encore (idempotent `JwtStrategy.validate` :
         //    `usersService.findById(sub)`).
-        const user = await usersService.findById(sub);
+        const user = await usersService.findByIdForAuth(sub);
         if (!user) {
           logger.warn(
             'Socket.IO: connection rejected — JWT sub no longer resolves to a user',
           );
+          finish(new Error('unauthorized'));
+          return;
+        }
+
+        // 1-13B : version de session — un JWT antérieur à une
+        //    réinitialisation de mot de passe ne (re)connecte jamais.
+        if (!isSessionCurrent(payload, user)) {
+          logger.warn('Socket.IO: connection rejected — session revoked');
           finish(new Error('unauthorized'));
           return;
         }
@@ -223,6 +235,9 @@ export function installSocketAuthMiddleware(
         } satisfies SocketPrincipal;
         socket.data.organizationContext =
           organizationContext satisfies ResolvedOrganizationContext;
+        // 1-13B : version de session du handshake (fermeture ciblée des
+        //    sockets antérieurs à une réinitialisation, sans timer).
+        socket.data.authVersion = currentSessionVersion(user);
 
         // 7. `next()` appelé EXACTEMENT UNE FOIS, sans erreur.
         finish();

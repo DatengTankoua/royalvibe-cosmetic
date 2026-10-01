@@ -23,17 +23,23 @@ function makeUser(overrides: Record<string, unknown> = {}) {
 
 /** Principal attendu : champs explicites seulement (jamais l'état interne). */
 function expectedPrincipal(overrides: Record<string, unknown> = {}) {
-  const { emailVerifiedAt: _verified, ...user } = makeUser(overrides);
+  const {
+    emailVerifiedAt: _verified,
+    authVersion: _version,
+    ...user
+  } = makeUser(overrides) as Record<string, unknown>;
   void _verified;
-  return { ...user, organizationId: ORG_ID };
+  // 1-13B : version de session validée, portée par le principal.
+  const sessionVersion = typeof _version === 'number' ? _version : 0;
+  return { ...user, organizationId: ORG_ID, sessionVersion };
 }
 
 describe('JwtStrategy', () => {
   let strategy: JwtStrategy;
-  let usersService: { findById: jest.Mock };
+  let usersService: { findByIdForAuth: jest.Mock };
 
   async function build() {
-    usersService = { findById: jest.fn() };
+    usersService = { findByIdForAuth: jest.fn() };
     const config = new ConfigService();
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -53,7 +59,7 @@ describe('JwtStrategy', () => {
   // 13. payload valide
   it('payload { sub, orgId } valide + utilisateur présent → renvoie l’utilisateur (rôle depuis la base)', async () => {
     await build();
-    usersService.findById.mockReturnValue(makeUser());
+    usersService.findByIdForAuth.mockReturnValue(makeUser());
 
     const user = await strategy.validate({
       sub: USER_ID,
@@ -66,8 +72,8 @@ describe('JwtStrategy', () => {
     // (1-3B.2) : c'est la source UNIQUE de l'organisation pour
     // `OrganizationGuard` (jamais d'origine client).
     expect(user).toEqual(expectedPrincipal());
-    expect(usersService.findById).toHaveBeenCalledTimes(1);
-    expect(usersService.findById).toHaveBeenCalledWith(USER_ID);
+    expect(usersService.findByIdForAuth).toHaveBeenCalledTimes(1);
+    expect(usersService.findByIdForAuth).toHaveBeenCalledWith(USER_ID);
     // le rôle retourné provient DU DOCUMENT CHARGÉ (ici 'seller'), JAMAIS du
     // JWT (qui portait 'admin') :
     expect(user.role).toBe('seller');
@@ -83,14 +89,14 @@ describe('JwtStrategy', () => {
     '%s → 401 contrôlée, sans requête vers la base',
     async (_label, payload) => {
       await build();
-      usersService.findById.mockReturnValue(makeUser());
+      usersService.findByIdForAuth.mockReturnValue(makeUser());
 
       const error: unknown = await strategy
         .validate(payload as never)
         .catch((e: unknown) => e);
 
       expect(error).toBeInstanceOf(UnauthorizedException);
-      expect(usersService.findById).not.toHaveBeenCalled();
+      expect(usersService.findByIdForAuth).not.toHaveBeenCalled();
     },
   );
 
@@ -104,14 +110,14 @@ describe('JwtStrategy', () => {
     '%s → 401 contrôlée, sans requête vers la base',
     async (_label, payload) => {
       await build();
-      usersService.findById.mockReturnValue(makeUser());
+      usersService.findByIdForAuth.mockReturnValue(makeUser());
 
       const error: unknown = await strategy
         .validate(payload as never)
         .catch((e: unknown) => e);
 
       expect(error).toBeInstanceOf(UnauthorizedException);
-      expect(usersService.findById).not.toHaveBeenCalled();
+      expect(usersService.findByIdForAuth).not.toHaveBeenCalled();
     },
   );
 
@@ -123,7 +129,7 @@ describe('JwtStrategy', () => {
     'emailVerifiedAt %s → 401 EMAIL_NOT_VERIFIED (ancien JWT refusé)',
     async (_label, value) => {
       await build();
-      usersService.findById.mockReturnValue(
+      usersService.findByIdForAuth.mockReturnValue(
         makeUser({ emailVerifiedAt: value }),
       );
       const error: unknown = await strategy
@@ -136,23 +142,59 @@ describe('JwtStrategy', () => {
     },
   );
 
+  // 1-13B : version de session (claim `ver`) comparée à la base.
+  it.each([
+    ['claim absent, version absente (historique)', {}, undefined],
+    ['claim 0, version absente', { ver: 0 }, undefined],
+    ['claim 2, version 2', { ver: 2 }, 2],
+  ])('%s → accepté', async (_label, claims, authVersion) => {
+    await build();
+    usersService.findByIdForAuth.mockReturnValue(makeUser({ authVersion }));
+    const user = await strategy.validate({
+      sub: USER_ID,
+      orgId: ORG_ID,
+      ...claims,
+    });
+    expect(user).toEqual(expectedPrincipal({ authVersion }));
+    expect(JSON.stringify(user)).not.toContain('authVersion');
+  });
+
+  it.each([
+    ['claim absent, version 1 (réinitialisé)', {}, 1],
+    ['claim 1, version 2', { ver: 1 }, 2],
+    ['claim chaîne "1"', { ver: '1' }, 1],
+    ['claim décimal', { ver: 1.5 }, 1],
+    ['claim négatif', { ver: -1 }, 0],
+    ['claim null', { ver: null }, 0],
+  ])('%s → 401 SESSION_REVOKED', async (_label, claims, authVersion) => {
+    await build();
+    usersService.findByIdForAuth.mockReturnValue(makeUser({ authVersion }));
+    const error: unknown = await strategy
+      .validate({ sub: USER_ID, orgId: ORG_ID, ...claims })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnauthorizedException);
+    expect((error as UnauthorizedException).getResponse()).toMatchObject({
+      code: 'SESSION_REVOKED',
+    });
+  });
+
   // 16. utilisateur absent
   it('utilisateur inexistant (sub/orgId valides) → 401', async () => {
     await build();
-    usersService.findById.mockReturnValue(null);
+    usersService.findByIdForAuth.mockReturnValue(null);
 
     const error: unknown = await strategy
       .validate({ sub: USER_ID, orgId: ORG_ID })
       .catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(UnauthorizedException);
-    expect(usersService.findById).toHaveBeenCalledWith(USER_ID);
+    expect(usersService.findByIdForAuth).toHaveBeenCalledWith(USER_ID);
   });
 
   // 17. rôle chargé depuis la base, jamais depuis le JWT
   it('le rôle retourné est toujours celui du document chargé (pas celui du JWT)', async () => {
     await build();
-    usersService.findById.mockReturnValue(makeUser({ role: 'admin' }));
+    usersService.findByIdForAuth.mockReturnValue(makeUser({ role: 'admin' }));
 
     const user = await strategy.validate({
       sub: USER_ID,
@@ -191,7 +233,7 @@ describe('JwtStrategy', () => {
     'ObjectId strict : %s sur %s → 401 contrôlée, sans requête vers la base',
     async (_label, field, value) => {
       await build();
-      usersService.findById.mockReturnValue(makeUser());
+      usersService.findByIdForAuth.mockReturnValue(makeUser());
       const payload = {
         sub: field === 'sub' ? value : USER_ID,
         orgId: field === 'orgId' ? value : ORG_ID,
@@ -200,7 +242,7 @@ describe('JwtStrategy', () => {
         .validate(payload as never)
         .catch((e: unknown) => e);
       expect(error).toBeInstanceOf(UnauthorizedException);
-      expect(usersService.findById).not.toHaveBeenCalled();
+      expect(usersService.findByIdForAuth).not.toHaveBeenCalled();
     },
   );
 });

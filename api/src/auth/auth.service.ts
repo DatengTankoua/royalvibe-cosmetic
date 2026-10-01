@@ -29,6 +29,12 @@ import {
   EmailVerificationService,
   type EmailVerificationDelivery,
 } from '../email-verification/email-verification.service';
+import {
+  SESSION_REVOKED,
+  SESSION_REVOKED_MESSAGE,
+  SESSION_VERSION_CLAIM,
+  currentSessionVersion,
+} from './session-version';
 
 export interface SelectableOrganization {
   organizationId: string;
@@ -237,7 +243,11 @@ export class AuthService {
         dto.organizationId,
       );
       return {
-        access_token: this.sign(userId, context.organizationId),
+        access_token: this.sign(
+          userId,
+          context.organizationId,
+          currentSessionVersion(user),
+        ),
         user: this.sanitize(user),
       };
     }
@@ -253,7 +263,11 @@ export class AuthService {
 
     if (organizations.length === 1) {
       return {
-        access_token: this.sign(userId, organizations[0].organizationId),
+        access_token: this.sign(
+          userId,
+          organizations[0].organizationId,
+          currentSessionVersion(user),
+        ),
         user: this.sanitize(user),
       };
     }
@@ -277,18 +291,42 @@ export class AuthService {
   async switchOrganization(
     userId: string,
     dto: SwitchOrganizationDto,
+    sessionVersion: number,
   ): Promise<{ access_token: string }> {
     const context = await this.organizationsService.resolveActiveContext(
       userId,
       dto.organizationId,
     );
-    return { access_token: this.sign(userId, context.organizationId) };
+    // 1-13B : le nouveau JWT hérite de la version VALIDÉE du JWT appelant,
+    // jamais d'une version relue plus récente. Une réinitialisation survenue
+    // pendant la requête est détectée ici (refus) ; si elle survient après
+    // ce contrôle, le JWT émis porte l'ancienne version et sera refusé.
+    const user = await this.usersService.findByIdForAuth(userId);
+    if (!user || currentSessionVersion(user) !== sessionVersion) {
+      throw new UnauthorizedException({
+        code: SESSION_REVOKED,
+        message: SESSION_REVOKED_MESSAGE,
+      });
+    }
+    return {
+      access_token: this.sign(userId, context.organizationId, sessionVersion),
+    };
   }
 
-  private sign(userId: string, organizationId: string): string {
+  private sign(
+    userId: string,
+    organizationId: string,
+    sessionVersion: number,
+  ): string {
     // Payload métier minimal : plus d'`email` ni de `role` — le rôle
     // vient exclusivement du document User chargé par la stratégie.
-    return this.jwtService.sign({ sub: userId, orgId: organizationId });
+    // 1-13B : `ver` = version de session lue avec les identifiants (login)
+    // ou validée dans le JWT appelant (switch).
+    return this.jwtService.sign({
+      sub: userId,
+      orgId: organizationId,
+      [SESSION_VERSION_CLAIM]: sessionVersion,
+    });
   }
 
   // Refus uniforme : ne révèle ni l'existence, ni le statut (suspension/
@@ -302,8 +340,9 @@ export class AuthService {
 
   private sanitize(user: UserDocument): Omit<UserDocument, 'password'> {
     const obj = user.toObject();
+    // 1-13B : ni mot de passe ni version de session dans la réponse.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { password: _p, ...rest } = obj;
+    const { password: _p, authVersion: _v, ...rest } = obj;
     return rest as Omit<UserDocument, 'password'>;
   }
 }

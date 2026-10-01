@@ -21,6 +21,9 @@ import {
 } from './auth.controller';
 import { EmailVerificationService } from '../email-verification/email-verification.service';
 import { EmailVerificationAddressThrottlerGuard } from '../email-verification/email-verification-rate-limiting';
+import { PasswordResetService } from '../password-reset/password-reset.service';
+import { PasswordResetAddressThrottlerGuard } from '../password-reset/password-reset-rate-limiting';
+import { PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE } from './auth.controller';
 
 /**
  * AuthController — garde de l'inscription publique (0B.5) +
@@ -35,6 +38,8 @@ describe('AuthController', () => {
   let listActiveOrganizationsMock: jest.Mock;
   let requestByEmailMock: jest.Mock;
   let confirmMock: jest.Mock;
+  let resetRequestMock: jest.Mock;
+  let resetConfirmMock: jest.Mock;
 
   const VALID_REG: RegisterDto = {
     name: 'E2E User',
@@ -46,7 +51,11 @@ describe('AuthController', () => {
     email: 'seller@royalvibe.test',
     password: 'secret-123',
   };
-  const AUTH_USER = { _id: '112233445566778899001122' } as unknown;
+  // 1-13B : principal validé, version de session comprise.
+  const AUTH_USER = {
+    _id: '112233445566778899001122',
+    sessionVersion: 2,
+  } as unknown;
 
   function callRegister(): unknown {
     try {
@@ -68,6 +77,8 @@ describe('AuthController', () => {
     listActiveOrganizationsMock = jest.fn();
     requestByEmailMock = jest.fn();
     confirmMock = jest.fn();
+    resetRequestMock = jest.fn();
+    resetConfirmMock = jest.fn();
 
     const module: TestingModule = await Test.createTestingModule({
       // Garde 0B.6 : enregistrée pour que la DI du contrôleur se résolve
@@ -98,8 +109,16 @@ describe('AuthController', () => {
             confirm: confirmMock,
           },
         },
+        {
+          provide: PasswordResetService,
+          useValue: {
+            requestByEmail: resetRequestMock,
+            confirm: resetConfirmMock,
+          },
+        },
         AuthThrottlerGuard,
         EmailVerificationAddressThrottlerGuard,
+        PasswordResetAddressThrottlerGuard,
       ],
     }).compile();
 
@@ -181,9 +200,11 @@ describe('AuthController', () => {
     const dto = { organizationId: '334455667788990011223344' };
     const out = await controller.switchOrganization(AUTH_USER, dto);
     expect(switchMock).toHaveBeenCalledTimes(1);
-    expect(switchMock).toHaveBeenCalledWith(AUTH_USER._id, {
-      organizationId: dto.organizationId,
-    });
+    expect(switchMock).toHaveBeenCalledWith(
+      AUTH_USER._id,
+      { organizationId: dto.organizationId },
+      2,
+    );
     // aucun champ utilisateur du body n'est transmis :
     expect(switchMock.mock.calls[0][1]).toEqual({
       organizationId: dto.organizationId,
@@ -198,8 +219,28 @@ describe('AuthController', () => {
     // Ici on vérifie que le contrôleur ne transmet QUE `organizationId` :
     const dto = { organizationId: '112233445566778899001122' };
     await controller.switchOrganization(AUTH_USER, dto);
-    expect(switchMock).toHaveBeenCalledWith(AUTH_USER._id, {
-      organizationId: dto.organizationId,
+    expect(switchMock).toHaveBeenCalledWith(
+      AUTH_USER._id,
+      { organizationId: dto.organizationId },
+      2,
+    );
+  });
+
+  it('me : champs explicites, jamais la version de session', () => {
+    const principal = {
+      _id: '112233445566778899001122',
+      name: 'Ada',
+      email: 'ada@example.com',
+      role: 'seller',
+      organizationId: '223344556677889900112233',
+      sessionVersion: 4,
+    };
+    expect(controller.me(principal as never)).toEqual({
+      _id: principal._id,
+      name: 'Ada',
+      email: 'ada@example.com',
+      role: 'seller',
+      organizationId: principal.organizationId,
     });
   });
 
@@ -260,6 +301,51 @@ describe('AuthController', () => {
       for (const name of [
         'requestEmailVerification',
         'confirmEmailVerification',
+      ] as const) {
+        const handler: unknown = Reflect.get(proto, name);
+        const headers = Reflect.getMetadata(
+          '__headers__',
+          handler as object,
+        ) as { name: string; value: string }[] | undefined;
+        expect(headers).toEqual(
+          expect.arrayContaining([
+            { name: 'Cache-Control', value: 'no-store' },
+          ]),
+        );
+      }
+    });
+  });
+
+  // ---- réinitialisation du mot de passe (1-13B) ----
+
+  describe('password-reset (1-13B)', () => {
+    it('request : réponse neutre exacte, envoi non attendu', () => {
+      resetRequestMock.mockReturnValue({
+        delivery: new Promise<void>(() => undefined),
+      });
+      const out = controller.requestPasswordReset({ email: 'a@b.co' });
+      expect(resetRequestMock).toHaveBeenCalledWith('a@b.co');
+      expect(out).toEqual({ message: PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE });
+      expect(PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE).toBe(
+        'Si un compte correspond à cette adresse, vous recevrez un lien pour réinitialiser votre mot de passe.',
+      );
+    });
+
+    it('confirm : token + mot de passe NON trimé transmis, { reset: true } sans JWT', async () => {
+      resetConfirmMock.mockResolvedValue(undefined);
+      const out = await controller.confirmPasswordReset({
+        token: 'tok',
+        password: '  avec espaces  ',
+      });
+      expect(resetConfirmMock).toHaveBeenCalledWith('tok', '  avec espaces  ');
+      expect(out).toEqual({ reset: true });
+    });
+
+    it('request/confirm : Cache-Control no-store déclaré', () => {
+      const proto = _AuthControllerForMetadata.prototype;
+      for (const name of [
+        'requestPasswordReset',
+        'confirmPasswordReset',
       ] as const) {
         const handler: unknown = Reflect.get(proto, name);
         const headers = Reflect.getMetadata(

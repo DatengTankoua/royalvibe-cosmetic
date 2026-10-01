@@ -9,6 +9,12 @@ import {
   EMAIL_NOT_VERIFIED,
   EMAIL_NOT_VERIFIED_MESSAGE,
 } from '../../email-verification/email-verification.service';
+import {
+  SESSION_REVOKED,
+  SESSION_REVOKED_MESSAGE,
+  currentSessionVersion,
+  isSessionCurrent,
+} from '../session-version';
 
 interface JwtPayload {
   sub: string;
@@ -27,6 +33,12 @@ export interface AuthenticatedPrincipal {
   email: string;
   role: UserRole;
   organizationId: string;
+  /**
+   * 1-13B : version de session VALIDÉE de ce JWT (claim `ver`, égal à la
+   * base au moment de la validation). Sert à signer un JWT dérivé (switch)
+   * sans jamais l'élever à une version plus récente. Jamais renvoyée au client.
+   */
+  sessionVersion: number;
 }
 
 // ObjectId canonique : une CHAÎNE strictement de 24 caractères hexadécimaux.
@@ -66,9 +78,19 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException();
     }
 
-    const user = await this.usersService.findById(payload.sub);
+    const user = await this.usersService.findByIdForAuth(payload.sub);
     if (!user) {
       throw new UnauthorizedException();
+    }
+    // 1-13B : version de session relue à CHAQUE requête — un JWT antérieur à
+    // une réinitialisation de mot de passe est refusé, toute organisation.
+    if (
+      !isSessionCurrent(payload as unknown as Record<string, unknown>, user)
+    ) {
+      throw new UnauthorizedException({
+        code: SESSION_REVOKED,
+        message: SESSION_REVOKED_MESSAGE,
+      });
     }
     // 1-13A : relu à CHAQUE requête — un JWT émis avant la vérification
     // obligatoire (ou pour un compte non vérifié) ne donne aucun accès.
@@ -86,6 +108,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       email: user.email,
       role: user.role,
       organizationId: payload.orgId,
+      sessionVersion: currentSessionVersion(user),
     };
     return principal;
   }

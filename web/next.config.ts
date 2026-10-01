@@ -25,6 +25,15 @@ const nextConfig: NextConfig = {
           { key: "X-Robots-Tag", value: "noindex" },
         ],
       },
+      // 1-13B : lien de réinitialisation du mot de passe (même règle).
+      {
+        source: "/auth/reset-password",
+        headers: [
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Cache-Control", value: "no-store" },
+          { key: "X-Robots-Tag", value: "noindex" },
+        ],
+      },
     ];
   },
   images: {
