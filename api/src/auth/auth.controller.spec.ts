@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthController, isPublicRegistrationEnabled } from './auth.controller';
@@ -15,6 +15,12 @@ import {
   AuthThrottlerGuard,
   createAuthThrottlerOptions,
 } from '../common/auth-rate-limiting';
+import {
+  AuthController as _AuthControllerForMetadata,
+  EMAIL_VERIFICATION_REQUEST_ACCEPTED_MESSAGE,
+} from './auth.controller';
+import { EmailVerificationService } from '../email-verification/email-verification.service';
+import { EmailVerificationAddressThrottlerGuard } from '../email-verification/email-verification-rate-limiting';
 
 /**
  * AuthController — garde de l'inscription publique (0B.5) +
@@ -27,6 +33,8 @@ describe('AuthController', () => {
   let switchMock: jest.Mock;
   let acceptInvitationMock: jest.Mock;
   let listActiveOrganizationsMock: jest.Mock;
+  let requestByEmailMock: jest.Mock;
+  let confirmMock: jest.Mock;
 
   const VALID_REG: RegisterDto = {
     name: 'E2E User',
@@ -58,6 +66,8 @@ describe('AuthController', () => {
     switchMock = jest.fn();
     acceptInvitationMock = jest.fn();
     listActiveOrganizationsMock = jest.fn();
+    requestByEmailMock = jest.fn();
+    confirmMock = jest.fn();
 
     const module: TestingModule = await Test.createTestingModule({
       // Garde 0B.6 : enregistrée pour que la DI du contrôleur se résolve
@@ -72,16 +82,24 @@ describe('AuthController', () => {
             register: registerMock,
             login: loginMock,
             switchOrganization: switchMock,
+            acceptInvitation: acceptInvitationMock,
           },
         },
         {
           provide: OrganizationsService,
           useValue: {
-            acceptInvitation: acceptInvitationMock,
             listActiveOrganizations: listActiveOrganizationsMock,
           },
         },
+        {
+          provide: EmailVerificationService,
+          useValue: {
+            requestByEmail: requestByEmailMock,
+            confirm: confirmMock,
+          },
+        },
         AuthThrottlerGuard,
+        EmailVerificationAddressThrottlerGuard,
       ],
     }).compile();
 
@@ -187,11 +205,12 @@ describe('AuthController', () => {
 
   // ---- acceptation d'invitation (1-6B.2) ----
 
-  it('acceptInvitation : délègue à OrganizationsService.acceptInvitation avec le DTO exact', async () => {
+  it('acceptInvitation : délègue à AuthService.acceptInvitation (acceptation + envoi 1-13A) avec le DTO exact', async () => {
     const result = {
       user: { _id: '1', name: 'A', email: 'a@b.co' },
       organization: { _id: '2', name: 'Org', slug: 'org' },
       membership: { role: 'seller', status: 'active' },
+      emailVerification: { status: 'sent' },
     };
     acceptInvitationMock.mockResolvedValue(result);
     const dto = { token: 'raw-token', name: 'Ada', password: 'secret-123' };
@@ -199,6 +218,61 @@ describe('AuthController', () => {
     expect(acceptInvitationMock).toHaveBeenCalledTimes(1);
     expect(acceptInvitationMock).toHaveBeenCalledWith(dto);
     expect(out).toEqual(result);
+  });
+
+  // ---- vérification des emails (1-13A) ----
+
+  describe('email-verification (1-13A)', () => {
+    it('request : réponse neutre, sans attendre l’envoi', async () => {
+      // Envoi jamais résolu : la réponse ne doit pas en dépendre.
+      requestByEmailMock.mockResolvedValue({
+        delivery: new Promise<void>(() => undefined),
+      });
+      const out = await controller.requestEmailVerification({
+        email: 'ada@example.com',
+      });
+      expect(requestByEmailMock).toHaveBeenCalledWith('ada@example.com');
+      expect(out).toEqual({
+        message: EMAIL_VERIFICATION_REQUEST_ACCEPTED_MESSAGE,
+      });
+    });
+
+    it('confirm : transmet le token seul, répond { verified: true } sans JWT', async () => {
+      confirmMock.mockResolvedValue(undefined);
+      const out = await controller.confirmEmailVerification({ token: 'tok' });
+      expect(confirmMock).toHaveBeenCalledWith('tok');
+      expect(out).toEqual({ verified: true });
+      expect(JSON.stringify(out)).not.toContain('access_token');
+    });
+
+    it('confirm : erreur stable propagée telle quelle', async () => {
+      const error = new BadRequestException({
+        code: 'EMAIL_VERIFICATION_INVALID_OR_EXPIRED',
+      });
+      confirmMock.mockRejectedValue(error);
+      await expect(
+        controller.confirmEmailVerification({ token: 'bad' }),
+      ).rejects.toBe(error);
+    });
+
+    it('request/confirm : Cache-Control no-store déclaré', () => {
+      const proto = _AuthControllerForMetadata.prototype;
+      for (const name of [
+        'requestEmailVerification',
+        'confirmEmailVerification',
+      ] as const) {
+        const handler: unknown = Reflect.get(proto, name);
+        const headers = Reflect.getMetadata(
+          '__headers__',
+          handler as object,
+        ) as { name: string; value: string }[] | undefined;
+        expect(headers).toEqual(
+          expect.arrayContaining([
+            { name: 'Cache-Control', value: 'no-store' },
+          ]),
+        );
+      }
+    });
   });
 
   // ---- organisations actives (1-9B) ----

@@ -34,6 +34,35 @@ export class User {
 
   @Prop({ enum: UserRole, default: UserRole.SELLER })
   role: UserRole;
+
+  /**
+   * 1-13A : preuve d'accès à la boîte mail. Absent ou `null` = non vérifiée
+   * (comptes historiques compris, jamais migrés automatiquement). Renseigné
+   * UNIQUEMENT par la consommation d'un lien de vérification valide
+   * (`EmailVerificationService.confirm`), jamais depuis une requête client.
+   */
+  @Prop({ type: Date, default: undefined })
+  emailVerifiedAt?: Date | null;
+
+  // 1-13A — champs internes de vérification : `select: false`, jamais
+  // exposés (réponses, principal JWT/Socket.IO). Seul le hash SHA-256 du
+  // token est stocké ; le token brut n'existe que dans l'email envoyé.
+  @Prop({ select: false, index: { sparse: true } })
+  emailVerificationTokenHash?: string;
+
+  @Prop({ type: Date, select: false })
+  emailVerificationExpiresAt?: Date;
+
+  /** Dernière émission (cooldown et verrou optimiste anti-concurrence). */
+  @Prop({ type: Date, select: false })
+  emailVerificationLastSentAt?: Date;
+
+  /** Début de la fenêtre horaire du plafond d'émissions. */
+  @Prop({ type: Date, select: false })
+  emailVerificationWindowStartedAt?: Date;
+
+  @Prop({ type: Number, select: false })
+  emailVerificationSendCount?: number;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

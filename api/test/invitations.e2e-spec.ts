@@ -29,6 +29,15 @@ import {
   parseCORSOrigin,
   buildHttpCorsOptions,
 } from './../src/events/origin.helpers';
+import { EMAIL_SENDER } from '../src/email-verification/email-sender';
+import {
+  E2E_EMAIL_VERIFIED_AT,
+  autoConfirmVerificationEmails,
+  createE2eEmailSender,
+} from './e2e/email-verification-fixtures';
+
+// 1-13A : expéditeur simulé, liens confirmés via le service réel.
+const emailSender = createE2eEmailSender();
 
 /**
  * E2E (1-6B.1) — émission/liste/révocation d'invitations tenant-scopées,
@@ -112,7 +121,10 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
 
       moduleFixture = await Test.createTestingModule({
         imports: [AppModule],
-      }).compile();
+      })
+        .overrideProvider(EMAIL_SENDER)
+        .useValue(emailSender)
+        .compile();
       app = moduleFixture.createNestApplication();
       app.enableCors(
         buildHttpCorsOptions(
@@ -128,6 +140,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       );
       app.useGlobalFilters(new HttpExceptionFilter());
       await app.init();
+      autoConfirmVerificationEmails(app, emailSender);
 
       userModel = moduleFixture.get(getModelToken('User'));
       organizationModel = moduleFixture.get(getModelToken(Organization.name));
@@ -176,6 +189,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
 
       // ---- Admin/Seller de A (membres actifs directs, hors register) ----
       const adminA = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Admin A',
         email: ADMIN_A_EMAIL,
         password: await bcrypt.hash(PASSWORD, 10),
@@ -187,6 +201,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
         status: 'active',
       });
       const sellerA = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Seller A',
         email: SELLER_A_EMAIL,
         password: await bcrypt.hash(PASSWORD, 10),
@@ -266,6 +281,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
     it('seller DÉLÉGUÉ members.invite (membership.permissions) → 201/200 sur les 3 routes', async () => {
       const delegatedEmail = `delegated-seller-17b-${Date.now()}@royalvibe.test`;
       const delegated = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Delegated Seller',
         email: delegatedEmail,
         password: await bcrypt.hash(PASSWORD, 10),
@@ -540,6 +556,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       const email = escalationEmail('admin-role');
       const inviteOnlyEmail = `invite-only-a-${Date.now()}@royalvibe.test`;
       const inviteOnly = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Invite Only Seller',
         email: inviteOnlyEmail,
         password: await bcrypt.hash(PASSWORD, 10),
@@ -578,6 +595,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       const email = escalationEmail('extra-perm');
       const inviteOnlyEmail = `invite-only-b-${Date.now()}@royalvibe.test`;
       const inviteOnly = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Invite Only Seller 2',
         email: inviteOnlyEmail,
         password: await bcrypt.hash(PASSWORD, 10),
@@ -615,6 +633,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       const email = escalationEmail('allowed-subset');
       const delegatedEmail = `invite-analytics-${Date.now()}@royalvibe.test`;
       const delegated = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Invite Analytics',
         email: delegatedEmail,
         password: await bcrypt.hash(PASSWORD, 10),
@@ -650,6 +669,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       const email = escalationEmail('cross-org');
       const crossEmail = `cross-org-admin-${Date.now()}@royalvibe.test`;
       const crossUser = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Cross Org User',
         email: crossEmail,
         password: await bcrypt.hash(PASSWORD, 10),
@@ -796,10 +816,13 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       expect(res.status).toBe(200);
       const body = res.body as Record<string, unknown>;
       expect(Object.keys(body).sort()).toEqual([
+        'emailVerification',
         'membership',
         'organization',
         'user',
       ]);
+      // 1-13A : compte créé non vérifié, lien envoyé après le commit.
+      expect(res.body.emailVerification).toEqual({ status: 'sent' });
       expect(res.body.user.email).toBe(email);
       expect(res.body.organization._id).toBe(orgAId);
       expect(res.body.membership.role).toBe('admin');
@@ -962,6 +985,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
     it('membership déjà existante (même révoquée) → 409, AUCUNE réactivation silencieuse', async () => {
       const email = `accept-conflict-${Date.now()}@royalvibe.test`;
       const revokedUser = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Revoked',
         email,
         password: await bcrypt.hash(PASSWORD, 10),

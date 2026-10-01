@@ -13,6 +13,20 @@ const nextConfig: NextConfig = {
         outputFileTracingRoot: path.join(__dirname, ".."),
       }
     : {}),
+  // 1-13A : page de confirmation d'email (token en query string) — aucun
+  // référent transmis, aucun stockage en cache.
+  async headers() {
+    return [
+      {
+        source: "/auth/verify-email",
+        headers: [
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Cache-Control", value: "no-store" },
+          { key: "X-Robots-Tag", value: "noindex" },
+        ],
+      },
+    ];
+  },
   images: {
     remotePatterns: [
       { protocol: "http", hostname: "localhost", port: "9000" },

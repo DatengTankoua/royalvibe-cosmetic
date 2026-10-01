@@ -15,8 +15,17 @@ function makeUser(overrides: Record<string, unknown> = {}) {
     name: 'Ada',
     email: 'ada@example.com',
     role: 'seller',
+    // 1-13A : adresse vérifiée (jamais recopiée dans le principal).
+    emailVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
     ...overrides,
   };
+}
+
+/** Principal attendu : champs explicites seulement (jamais l'état interne). */
+function expectedPrincipal(overrides: Record<string, unknown> = {}) {
+  const { emailVerifiedAt: _verified, ...user } = makeUser(overrides);
+  void _verified;
+  return { ...user, organizationId: ORG_ID };
 }
 
 describe('JwtStrategy', () => {
@@ -56,7 +65,7 @@ describe('JwtStrategy', () => {
     // Le claim `orgId` signé est attaché au principal sous `organizationId`
     // (1-3B.2) : c'est la source UNIQUE de l'organisation pour
     // `OrganizationGuard` (jamais d'origine client).
-    expect(user).toEqual({ ...makeUser(), organizationId: ORG_ID });
+    expect(user).toEqual(expectedPrincipal());
     expect(usersService.findById).toHaveBeenCalledTimes(1);
     expect(usersService.findById).toHaveBeenCalledWith(USER_ID);
     // le rôle retourné provient DU DOCUMENT CHARGÉ (ici 'seller'), JAMAIS du
@@ -103,6 +112,27 @@ describe('JwtStrategy', () => {
 
       expect(error).toBeInstanceOf(UnauthorizedException);
       expect(usersService.findById).not.toHaveBeenCalled();
+    },
+  );
+
+  // 1-13A : adresse non vérifiée — un JWT signé et non expiré ne suffit pas.
+  it.each([
+    ['absent', undefined],
+    ['null', null],
+  ])(
+    'emailVerifiedAt %s → 401 EMAIL_NOT_VERIFIED (ancien JWT refusé)',
+    async (_label, value) => {
+      await build();
+      usersService.findById.mockReturnValue(
+        makeUser({ emailVerifiedAt: value }),
+      );
+      const error: unknown = await strategy
+        .validate({ sub: USER_ID, orgId: ORG_ID })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(UnauthorizedException);
+      expect((error as UnauthorizedException).getResponse()).toMatchObject({
+        code: 'EMAIL_NOT_VERIFIED',
+      });
     },
   );
 

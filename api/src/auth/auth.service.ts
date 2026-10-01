@@ -21,6 +21,14 @@ import {
   OrganizationCurrency,
   OrganizationStatus,
 } from '../organizations/permissions';
+import type { InvitationAcceptanceResult } from '../organizations/organizations.service';
+import { AcceptInvitationDto } from './dto/accept-invitation.dto';
+import {
+  EMAIL_NOT_VERIFIED,
+  EMAIL_NOT_VERIFIED_MESSAGE,
+  EmailVerificationService,
+  type EmailVerificationDelivery,
+} from '../email-verification/email-verification.service';
 
 export interface SelectableOrganization {
   organizationId: string;
@@ -48,7 +56,14 @@ export interface OwnerOnboardingResult {
     currency: OrganizationCurrency;
     status: OrganizationStatus;
   };
+  /** 1-13A : compte créé NON vérifié ; résultat de l'envoi du lien. */
+  emailVerification: { status: EmailVerificationDelivery };
 }
+
+/** 1-13A : acceptation d'invitation + résultat de l'envoi éventuel du lien. */
+export type InvitationAcceptanceResponse = InvitationAcceptanceResult & {
+  emailVerification: { status: EmailVerificationDelivery };
+};
 
 // Session transactionnelle Mongoose (`mongodb.ClientSession`) : même
 // convention que `products.service.ts`/`audit.service.ts`.
@@ -75,10 +90,35 @@ export class AuthService {
     private jwtService: JwtService,
     private organizationsService: OrganizationsService,
     @InjectConnection() private connection: Connection,
+    private emailVerificationService: EmailVerificationService,
   ) {}
 
-  register(dto: RegisterDto): Promise<OwnerOnboardingResult> {
-    return this.registerOwner(dto);
+  /**
+   * 1-13A : le lien de vérification part APRÈS le commit de l'onboarding.
+   * Un échec d'envoi ne supprime ni ne vérifie le compte (statut `failed`,
+   * renvoi possible via /auth/email-verification/request).
+   */
+  async register(dto: RegisterDto): Promise<OwnerOnboardingResult> {
+    const result = await this.registerOwner(dto);
+    const status = await this.emailVerificationService.issueForUser(
+      result.user._id,
+    );
+    return { ...result, emailVerification: { status } };
+  }
+
+  /**
+   * 1-13A : acceptation inchangée (transaction de 1-6B.2), puis, après le
+   * commit, envoi du lien si le compte n'est pas vérifié. Le lien
+   * d'invitation n'est JAMAIS une preuve d'accès à la boîte mail.
+   */
+  async acceptInvitation(
+    dto: AcceptInvitationDto,
+  ): Promise<InvitationAcceptanceResponse> {
+    const result = await this.organizationsService.acceptInvitation(dto);
+    const status = await this.emailVerificationService.issueForUser(
+      result.user._id,
+    );
+    return { ...result, emailVerification: { status } };
   }
 
   /**
@@ -89,7 +129,7 @@ export class AuthService {
    */
   private async registerOwner(
     dto: RegisterDto,
-  ): Promise<OwnerOnboardingResult> {
+  ): Promise<Omit<OwnerOnboardingResult, 'emailVerification'>> {
     const hashed = await bcrypt.hash(dto.password, 10);
     const session = await this.connection.startSession();
     let created:
@@ -177,6 +217,15 @@ export class AuthService {
     const valid = await bcrypt.compare(dto.password, user.password);
     if (!valid)
       throw new UnauthorizedException('Email ou mot de passe incorrect!');
+
+    // 1-13A : identifiants corrects mais adresse non vérifiée → aucun JWT.
+    // Vérifié APRÈS le mot de passe : ne révèle rien sans identifiants.
+    if (!user.emailVerifiedAt) {
+      throw new ForbiddenException({
+        code: EMAIL_NOT_VERIFIED,
+        message: EMAIL_NOT_VERIFIED_MESSAGE,
+      });
+    }
 
     const userId = user._id.toString();
 

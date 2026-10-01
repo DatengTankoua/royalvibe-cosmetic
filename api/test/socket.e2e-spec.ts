@@ -26,6 +26,14 @@ import {
   stopEphemeralMongoSafe,
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
+import { EMAIL_SENDER } from '../src/email-verification/email-sender';
+import {
+  autoConfirmVerificationEmails,
+  createE2eEmailSender,
+} from './e2e/email-verification-fixtures';
+
+// 1-13A : expéditeur simulé, liens confirmés via le service réel.
+const emailSender = createE2eEmailSender();
 
 /**
  * E2E — phase 0B.3 : authentification du handshake Socket.IO + contrôle des
@@ -369,10 +377,14 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
 
       moduleFixture = await Test.createTestingModule({
         imports: [AppModule],
-      }).compile();
+      })
+        .overrideProvider(EMAIL_SENDER)
+        .useValue(emailSender)
+        .compile();
       app = moduleFixture.createNestApplication();
       jwtService = moduleFixture.get(JwtService);
       await app.init();
+      autoConfirmVerificationEmails(app, emailSender);
       await app.listen(0);
       port = (app.getHttpServer().address() as AddressInfo).port;
       ioServer = moduleFixture.get(EventsGateway).server;

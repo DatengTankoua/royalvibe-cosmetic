@@ -197,6 +197,17 @@ export function installSocketAuthMiddleware(
           return;
         }
 
+        // 1-13A : même règle que `JwtStrategy.validate` — un compte non
+        //    vérifié ne se connecte ni ne se reconnecte, même avec un JWT
+        //    signé encore valide (erreur client générique inchangée).
+        if (!user.emailVerifiedAt) {
+          logger.warn(
+            'Socket.IO: connection rejected — email address not verified',
+          );
+          finish(new Error('unauthorized'));
+          return;
+        }
+
         const organizationContext =
           await organizationsService.resolveActiveContext(sub, orgId);
 

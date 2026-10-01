@@ -90,6 +90,8 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
       _id: { toString: () => USER_ID },
       email: USER_EMAIL,
       role: USER_ROLE,
+      // 1-13A : seul un compte vérifié se connecte.
+      emailVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
     };
   }
   function validPayload(expOverride?: number) {
@@ -358,6 +360,30 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
       USER_ID,
     );
   });
+
+  it.each([
+    ['absent', undefined],
+    ['null', null],
+  ])(
+    '1-13A : emailVerifiedAt %s → refus générique, aucun contexte ni timer',
+    async (_label, value) => {
+      deps.jwtService.verifyAsync.mockResolvedValue(validPayload());
+      deps.usersService.findById.mockResolvedValue({
+        ...validUser(),
+        emailVerifiedAt: value,
+      });
+      const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
+      const { next } = await run(socket);
+      expect(next).toHaveBeenCalledTimes(1);
+      expect((next.mock.calls[0][0] as Error).message).toBe('unauthorized');
+      expect(
+        deps.organizationsService.resolveActiveContext,
+      ).not.toHaveBeenCalled();
+      expect(socket.data.user).toBeUndefined();
+      expect(socket.once).not.toHaveBeenCalled();
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     'membership absente',

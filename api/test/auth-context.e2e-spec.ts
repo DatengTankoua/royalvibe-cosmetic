@@ -23,6 +23,15 @@ import {
   parseCORSOrigin,
   buildHttpCorsOptions,
 } from './../src/events/origin.helpers';
+import { EMAIL_SENDER } from '../src/email-verification/email-sender';
+import {
+  E2E_EMAIL_VERIFIED_AT,
+  autoConfirmVerificationEmails,
+  createE2eEmailSender,
+} from './e2e/email-verification-fixtures';
+
+// 1-13A : expéditeur simulé, liens confirmés via le service réel.
+const emailSender = createE2eEmailSender();
 
 /**
  * E2E (1-9C) — `GET /auth/context`. Source unique et fiable des droits de
@@ -93,7 +102,10 @@ describe('GET /auth/context (e2e 1-9C)', () => {
 
       moduleFixture = await Test.createTestingModule({
         imports: [AppModule],
-      }).compile();
+      })
+        .overrideProvider(EMAIL_SENDER)
+        .useValue(emailSender)
+        .compile();
       app = moduleFixture.createNestApplication();
       app.enableCors(
         buildHttpCorsOptions(
@@ -109,6 +121,7 @@ describe('GET /auth/context (e2e 1-9C)', () => {
       );
       app.useGlobalFilters(new HttpExceptionFilter());
       await app.init();
+      autoConfirmVerificationEmails(app, emailSender);
 
       userModel = moduleFixture.get(getModelToken('User'));
       organizationModel = moduleFixture.get(getModelToken(Organization.name));
@@ -136,6 +149,7 @@ describe('GET /auth/context (e2e 1-9C)', () => {
       // Seller avec une permission supplémentaire déléguée (au-delà des
       // permissions par défaut du rôle) — vérifie l'union rôle ∪ extra.
       const sellerExtra = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Seller Extra',
         email: SELLER_WITH_EXTRA_EMAIL,
         password: await bcrypt.hash(PASSWORD, 10),
@@ -156,6 +170,7 @@ describe('GET /auth/context (e2e 1-9C)', () => {
       // Membership suspendue : le token est émis PENDANT qu'elle est
       // active, puis suspendue — même convention que les autres specs 1-9.
       const suspendedMember = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Suspended Member',
         email: SUSPENDED_MEMBER_EMAIL,
         password: await bcrypt.hash(PASSWORD, 10),

@@ -6,7 +6,8 @@ import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useAuth } from "@/contexts/auth-context";
+import { LoginError, useAuth } from "@/contexts/auth-context";
+import { EmailVerificationResend } from "@/components/auth/email-verification-resend";
 import type { SelectableOrganization } from "@/lib/api";
 import { Wordmark } from "@/components/brand/wordmark";
 import Link from "next/link";
@@ -19,6 +20,9 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 1-13A : identifiants corrects mais adresse non vérifiée — aucune session
+  // créée ; l'adresse saisie sert uniquement au renvoi du lien.
+  const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
   const [organizations, setOrganizations] = useState<
     SelectableOrganization[] | null
   >(null);
@@ -30,6 +34,7 @@ export default function LoginPage() {
   const submit = async (organizationId?: string) => {
     setLoading(true);
     setError(null);
+    setUnverifiedEmail(null);
     try {
       const outcome = await login(email, password, organizationId);
       if (outcome.status === "organizationSelectionRequired") {
@@ -39,6 +44,11 @@ export default function LoginPage() {
       setPassword("");
       router.push("/app");
     } catch (err: unknown) {
+      if (err instanceof LoginError && err.code === "EMAIL_NOT_VERIFIED") {
+        setOrganizations(null);
+        setUnverifiedEmail(email.trim());
+        return;
+      }
       setError(err instanceof Error ? err.message : "Erreur de connexion");
     } finally {
       setLoading(false);
@@ -169,6 +179,20 @@ export default function LoginPage() {
             {loading ? "Connexion…" : "Se connecter"}
           </Button>
         </form>
+
+        {unverifiedEmail && (
+          <div
+            role="alert"
+            className="space-y-3 rounded-md border px-4 py-3 text-sm"
+          >
+            <p className="font-medium">Adresse email non confirmée</p>
+            <p className="text-muted-foreground">
+              Confirmez votre adresse email pour accéder à votre compte. Ouvrez
+              le lien reçu par email, ou demandez-en un nouveau.
+            </p>
+            <EmailVerificationResend email={unverifiedEmail} />
+          </div>
+        )}
 
         {registrationEnabled && (
           <p className="text-center text-sm text-muted-foreground">

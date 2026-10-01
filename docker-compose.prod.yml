@@ -49,6 +49,10 @@ services:
       # Origine des liens d'invitation (1-12G, aucun email envoyé) : par
       # défaut l'URL publique du frontend, jamais l'en-tête Host.
       PUBLIC_APP_URL: ${PUBLIC_APP_URL:-${WEB_URL}}
+      # Vérification des emails (1-13A) : clé Resend (secret) et expéditeur
+      # d'un domaine vérifié. Vides → envoi indisponible (erreur contrôlée).
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
       # Inscription publique fermée par défaut (seule la valeur exacte `true` l'ouvre).
       PUBLIC_REGISTRATION_ENABLED: ${PUBLIC_REGISTRATION_ENABLED:-false}
       # 0 = aucun proxy approuvé. À mesurer avant le déploiement : 1 uniquement

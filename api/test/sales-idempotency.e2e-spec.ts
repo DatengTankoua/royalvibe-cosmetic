@@ -39,6 +39,15 @@ import {
   buildOriginAllowlist,
   parseCORSOrigin,
 } from './../src/events/origin.helpers';
+import { EMAIL_SENDER } from '../src/email-verification/email-sender';
+import {
+  E2E_EMAIL_VERIFIED_AT,
+  autoConfirmVerificationEmails,
+  createE2eEmailSender,
+} from './e2e/email-verification-fixtures';
+
+// 1-13A : expéditeur simulé, liens confirmés via le service réel.
+const emailSender = createE2eEmailSender();
 
 /**
  * E2E 1-11C.1 — idempotence de `POST /sales` sur replica set éphémère
@@ -80,6 +89,7 @@ describe('App (e2e 1-11C.1) — idempotence POST /sales', () => {
     role: 'owner' | 'seller',
   ) {
     const user = await userModel.create({
+      emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
       name: `User ${label}`,
       email: `${label}-11c1@idem.test`,
       password: await bcrypt.hash(PASSWORD, 10),
@@ -159,7 +169,10 @@ describe('App (e2e 1-11C.1) — idempotence POST /sales', () => {
 
       moduleFixture = await Test.createTestingModule({
         imports: [AppModule],
-      }).compile();
+      })
+        .overrideProvider(EMAIL_SENDER)
+        .useValue(emailSender)
+        .compile();
       app = moduleFixture.createNestApplication();
       app.enableCors(
         buildHttpCorsOptions(
@@ -177,6 +190,7 @@ describe('App (e2e 1-11C.1) — idempotence POST /sales', () => {
       );
       app.useGlobalFilters(new HttpExceptionFilter());
       await app.init();
+      autoConfirmVerificationEmails(app, emailSender);
 
       connection = moduleFixture.get<Connection>(getConnectionToken());
       userModel = moduleFixture.get(getModelToken('User'));

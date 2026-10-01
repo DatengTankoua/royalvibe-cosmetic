@@ -12,7 +12,13 @@ import {
   USER_NAME_MAX_LENGTH,
 } from "@/lib/name-limits";
 import { validateNewPassword } from "@/lib/password-policy";
-import { authRegister, getApiErrorCode, getApiErrorMessage } from "@/lib/api";
+import {
+  authRegister,
+  getApiErrorCode,
+  getApiErrorMessage,
+  type EmailVerificationDelivery,
+} from "@/lib/api";
+import { EmailVerificationResend } from "@/components/auth/email-verification-resend";
 import { Wordmark } from "@/components/brand/wordmark";
 import Link from "next/link";
 
@@ -24,7 +30,11 @@ export default function RegisterPage() {
   const [organizationName, setOrganizationName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
+  // 1-13A : compte créé (adresse enregistrée + résultat de l'envoi du lien).
+  const [done, setDone] = useState<{
+    email: string;
+    delivery: EmailVerificationDelivery;
+  } | null>(null);
   const submitting = useRef(false);
   // 0B.5 : parcours d'inscription fermé — par défaut, un accès direct à la
   // route affiche un court message (affichage seulement ; le backend est
@@ -61,8 +71,24 @@ export default function RegisterPage() {
           <h1 className="text-xl font-bold">Compte créé</h1>
           <p className="text-sm text-muted-foreground">
             Ton entreprise et ton compte propriétaire ont été créés.
-            Connecte-toi pour continuer.
           </p>
+          <p className="text-sm font-medium">
+            Confirmez votre adresse email pour accéder à votre compte.
+          </p>
+          {done.delivery === "failed" ? (
+            <p role="alert" className="text-sm text-destructive">
+              L&apos;email de confirmation n&apos;a pas pu être envoyé. Ton
+              compte est bien créé : demande un nouvel envoi ci-dessous.
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Un lien de confirmation a été envoyé à {done.email}.
+            </p>
+          )}
+          <EmailVerificationResend
+            email={done.email}
+            initialCooldown={done.delivery !== "failed"}
+          />
           <Link
             href="/auth/login"
             className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
@@ -88,10 +114,18 @@ export default function RegisterPage() {
     setLoading(true);
     setError(null);
     try {
-      await authRegister({ name, email, password, organizationName });
+      const result = await authRegister({
+        name,
+        email,
+        password,
+        organizationName,
+      });
       setPassword("");
       setConfirmation("");
-      setDone(true);
+      setDone({
+        email: result.user.email,
+        delivery: result.emailVerification?.status ?? "failed",
+      });
     } catch (err: unknown) {
       const code = getApiErrorCode(err);
       setError(

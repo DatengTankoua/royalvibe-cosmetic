@@ -23,6 +23,15 @@ import {
   parseCORSOrigin,
   buildHttpCorsOptions,
 } from './../src/events/origin.helpers';
+import { EMAIL_SENDER } from '../src/email-verification/email-sender';
+import {
+  E2E_EMAIL_VERIFIED_AT,
+  autoConfirmVerificationEmails,
+  createE2eEmailSender,
+} from './e2e/email-verification-fixtures';
+
+// 1-13A : expéditeur simulé, liens confirmés via le service réel.
+const emailSender = createE2eEmailSender();
 
 /**
  * E2E (1-9B) — `GET /auth/organizations` + `POST /auth/switch-organization`,
@@ -85,7 +94,10 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
 
       moduleFixture = await Test.createTestingModule({
         imports: [AppModule],
-      }).compile();
+      })
+        .overrideProvider(EMAIL_SENDER)
+        .useValue(emailSender)
+        .compile();
       app = moduleFixture.createNestApplication();
       app.enableCors(
         buildHttpCorsOptions(
@@ -101,6 +113,7 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
       );
       app.useGlobalFilters(new HttpExceptionFilter());
       await app.init();
+      autoConfirmVerificationEmails(app, emailSender);
 
       userModel = moduleFixture.get(getModelToken('User'));
       organizationModel = moduleFixture.get(getModelToken(Organization.name));
@@ -152,6 +165,7 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
       // MULTI_USER : membership active dans org1 ET org2 (noms triés :
       // "Alpha Org 19B" < "Zebra Org 19B").
       const multiUser = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Multi User',
         email: MULTI_USER_EMAIL,
         password: await bcrypt.hash(PASSWORD, 10),
@@ -182,6 +196,7 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
       // + membership active dans une organisation SUSPENDUE (exclue),
       // + membership SUSPENDUE dans une organisation active (exclue).
       const excludedUser = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Excluded User',
         email: EXCLUDED_USER_EMAIL,
         password: await bcrypt.hash(PASSWORD, 10),

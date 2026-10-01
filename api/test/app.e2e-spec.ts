@@ -36,6 +36,15 @@ import {
 } from './../src/events/origin.helpers';
 import { ThrottlerStorage } from '@nestjs/throttler';
 import { AUTH_RATE_LIMIT_CODE } from './../src/common/auth-rate-limiting';
+import { EMAIL_SENDER } from '../src/email-verification/email-sender';
+import {
+  E2E_EMAIL_VERIFIED_AT,
+  autoConfirmVerificationEmails,
+  createE2eEmailSender,
+} from './e2e/email-verification-fixtures';
+
+// 1-13A : expéditeur simulé, liens confirmés via le service réel.
+const emailSender = createE2eEmailSender();
 
 /**
  * E2E (phase 0B.2) — application NestJS complète sur MongoDB éphémère.
@@ -123,7 +132,10 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
 
       moduleFixture = await Test.createTestingModule({
         imports: [AppModule],
-      }).compile();
+      })
+        .overrideProvider(EMAIL_SENDER)
+        .useValue(emailSender)
+        .compile();
       app = moduleFixture.createNestApplication();
       jwtService = moduleFixture.get(JwtService);
       // MÊME factory que main.ts (0B.4) : buildHttpCorsOptions — les E2E
@@ -143,6 +155,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       );
       app.useGlobalFilters(new HttpExceptionFilter());
       await app.init();
+      autoConfirmVerificationEmails(app, emailSender);
 
       // ---- Fixtures utilisateurs (base éphémère uniquement) ----
       // 1-6A : POST /auth/register crée désormais AUSSI une organisation
@@ -164,6 +177,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
         password: string,
       ) =>
         userModel.create({
+          emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
           name,
           email,
           password: await bcrypt.hash(password, 10),
@@ -387,6 +401,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
 
       const delegatedEmail = `delegated-trash-17b-${Date.now()}@royalvibe.test`;
       const delegatedUser = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Delegated Trash E2E',
         email: delegatedEmail,
         password: await bcrypt.hash('delegated-trash-pw-!1x', 10),
@@ -2082,7 +2097,13 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
 
       // Réponse exacte, sans donnée sensible ni token :
       const body = res.body as Record<string, unknown>;
-      expect(Object.keys(body).sort()).toEqual(['organization', 'user']);
+      expect(Object.keys(body).sort()).toEqual([
+        'emailVerification',
+        'organization',
+        'user',
+      ]);
+      // 1-13A : lien de vérification envoyé après le commit.
+      expect(body.emailVerification).toEqual({ status: 'sent' });
       expect(Object.keys(body.user as object).sort()).toEqual([
         '_id',
         'email',

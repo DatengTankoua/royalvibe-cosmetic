@@ -12,7 +12,9 @@ import {
   acceptInvitation,
   getApiErrorCode,
   getApiErrorMessage,
+  type AcceptInvitationResult,
 } from "@/lib/api";
+import { EmailVerificationResend } from "@/components/auth/email-verification-resend";
 import { Wordmark } from "@/components/brand/wordmark";
 import Link from "next/link";
 
@@ -39,17 +41,29 @@ export default function AcceptInvitationPage() {
   const [message, setMessage] = useState<string>(MISSING_TOKEN_MESSAGE);
   const [canRetry, setCanRetry] = useState(false);
   const [organizationName, setOrganizationName] = useState<string | null>(null);
+  // 1-13A : vérification de l'adresse requise après acceptation (le lien
+  // d'invitation n'est jamais une preuve d'accès à la boîte mail).
+  const [verification, setVerification] = useState<{
+    email: string;
+    delivery: AcceptInvitationResult["emailVerification"]["status"];
+  } | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const finish = (orgName: string) => {
+  const finish = (result: AcceptInvitationResult) => {
     tokenRef.current = null;
     setPassword("");
     setConfirmation("");
-    setOrganizationName(orgName);
+    setOrganizationName(result.organization.name);
+    const delivery = result.emailVerification?.status ?? "not_required";
+    setVerification(
+      delivery === "not_required"
+        ? null
+        : { email: result.user.email, delivery },
+    );
     setStep("success");
   };
 
@@ -69,7 +83,7 @@ export default function AcceptInvitationPage() {
     setStep("loading");
     try {
       const result = await acceptInvitation({ token });
-      finish(result.organization.name);
+      finish(result);
     } catch (err: unknown) {
       if (getApiErrorCode(err) === "ACCOUNT_DETAILS_REQUIRED") {
         setStep("needsDetails");
@@ -115,7 +129,7 @@ export default function AcceptInvitationPage() {
     try {
       // Seul `password` part à l'API ; la confirmation reste locale.
       const result = await acceptInvitation({ token, name, password });
-      finish(result.organization.name);
+      finish(result);
     } catch (err: unknown) {
       if (getApiErrorCode(err) === "INVITATION_INVALID_OR_EXPIRED") {
         fail(err);
@@ -165,11 +179,36 @@ export default function AcceptInvitationPage() {
             <div className="space-y-1">
               <h1 className="text-lg font-semibold">Invitation acceptée</h1>
               <p className="text-sm text-muted-foreground">
-                {organizationName
-                  ? `Tu as rejoint ${organizationName}. Connecte-toi pour continuer.`
-                  : "Connecte-toi pour continuer."}
+                {verification
+                  ? organizationName
+                    ? `Tu as rejoint ${organizationName}.`
+                    : "Invitation acceptée."
+                  : organizationName
+                    ? `Tu as rejoint ${organizationName}. Connecte-toi pour continuer.`
+                    : "Connecte-toi pour continuer."}
               </p>
             </div>
+            {verification && (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">
+                  Confirmez votre adresse email pour accéder à votre compte.
+                </p>
+                {verification.delivery === "failed" ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    L&apos;email de confirmation n&apos;a pas pu être envoyé.
+                    Demande un nouvel envoi ci-dessous.
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Un lien de confirmation a été envoyé à {verification.email}.
+                  </p>
+                )}
+                <EmailVerificationResend
+                  email={verification.email}
+                  initialCooldown={verification.delivery !== "failed"}
+                />
+              </div>
+            )}
             <Link
               href="/auth/login"
               className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"

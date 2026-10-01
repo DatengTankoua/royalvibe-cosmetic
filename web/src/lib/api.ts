@@ -212,11 +212,17 @@ export async function authLogin(payload: {
   return data;
 }
 
+// 1-13A : résultat de l'envoi du lien de vérification après création du
+// compte (`sent` ≠ adresse vérifiée ; `failed` : compte créé, renvoi possible).
+export type EmailVerificationDelivery =
+  "sent" | "failed" | "recently_sent" | "not_required";
+
 // 1-6A : inscription propriétaire — aucun token renvoyé (le compte doit
-// ensuite se connecter via /auth/login).
+// ensuite confirmer son adresse, 1-13A, puis se connecter via /auth/login).
 export interface OwnerRegistrationResult {
   user: { _id: string; name: string; email: string };
   organization: { _id: string; name: string; slug: string };
+  emailVerification: { status: EmailVerificationDelivery };
 }
 
 export async function authRegister(payload: {
@@ -234,6 +240,7 @@ export interface AcceptInvitationResult {
   user: { _id: string; name: string; email: string };
   organization: { _id: string; name: string; slug: string };
   membership: { role: string; status: string };
+  emailVerification: { status: EmailVerificationDelivery };
 }
 
 export async function acceptInvitation(payload: {
@@ -243,6 +250,18 @@ export async function acceptInvitation(payload: {
 }): Promise<AcceptInvitationResult> {
   const { data } = await apiClient.post("/auth/invitations/accept", payload);
   return data;
+}
+
+// 1-13A : (ré)envoi du lien de vérification — réponse neutre (202) quelle
+// que soit l'adresse ; 429 (limitation) ou 503 (envoi indisponible) sinon.
+export async function requestEmailVerification(email: string): Promise<void> {
+  await apiClient.post("/auth/email-verification/request", { email });
+}
+
+// 1-13A : confirmation explicite (POST) — aucun JWT renvoyé, aucune session
+// ouverte ou modifiée.
+export async function confirmEmailVerification(token: string): Promise<void> {
+  await apiClient.post("/auth/email-verification/confirm", { token });
 }
 
 export async function fetchMe(): Promise<ApiUser> {

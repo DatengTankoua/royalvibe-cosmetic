@@ -5,6 +5,10 @@ import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
 import { UsersService } from '../../users/users.service';
 import { UserRole } from '../../users/schemas/user.schema';
+import {
+  EMAIL_NOT_VERIFIED,
+  EMAIL_NOT_VERIFIED_MESSAGE,
+} from '../../email-verification/email-verification.service';
 
 interface JwtPayload {
   sub: string;
@@ -65,6 +69,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     const user = await this.usersService.findById(payload.sub);
     if (!user) {
       throw new UnauthorizedException();
+    }
+    // 1-13A : relu à CHAQUE requête — un JWT émis avant la vérification
+    // obligatoire (ou pour un compte non vérifié) ne donne aucun accès.
+    if (!user.emailVerifiedAt) {
+      throw new UnauthorizedException({
+        code: EMAIL_NOT_VERIFIED,
+        message: EMAIL_NOT_VERIFIED_MESSAGE,
+      });
     }
 
     // Nouvel objet principal : le document Mongoose est LU (pas muté).

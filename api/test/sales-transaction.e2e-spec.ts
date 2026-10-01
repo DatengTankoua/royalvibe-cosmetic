@@ -28,6 +28,15 @@ import {
   parseCORSOrigin,
   buildHttpCorsOptions,
 } from './../src/events/origin.helpers';
+import { EMAIL_SENDER } from '../src/email-verification/email-sender';
+import {
+  E2E_EMAIL_VERIFIED_AT,
+  autoConfirmVerificationEmails,
+  createE2eEmailSender,
+} from './e2e/email-verification-fixtures';
+
+// 1-13A : expéditeur simulé, liens confirmés via le service réel.
+const emailSender = createE2eEmailSender();
 
 /**
  * E2E (phase 0B.7B) — transaction atomique VENTE–STOCK–AUDIT.
@@ -161,7 +170,10 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
 
       moduleFixture = await Test.createTestingModule({
         imports: [AppModule],
-      }).compile();
+      })
+        .overrideProvider(EMAIL_SENDER)
+        .useValue(emailSender)
+        .compile();
       app = moduleFixture.createNestApplication();
       const corsAllowlist = buildOriginAllowlist(
         parseCORSOrigin(process.env.CORS_ORIGIN, 'development'),
@@ -176,6 +188,7 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       );
       app.useGlobalFilters(new HttpExceptionFilter());
       await app.init();
+      autoConfirmVerificationEmails(app, emailSender);
 
       userModel = moduleFixture.get<Model<UserDocument>>(getModelToken('User'));
       productModel = moduleFixture.get<Model<ProductDocument>>(
@@ -200,6 +213,7 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
       // jamais via /auth/register, pour ne pas leur attacher une
       // organisation parasite.
       const adminDoc = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Admin 0B.7',
         email: ADMIN_EMAIL,
         password: await bcrypt.hash('adm-0b7-pw-!1x', 10),
@@ -222,6 +236,7 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
 
       // 1-4C.1 : seconde org (B) + son admin + login dédié.
       const adminBUser = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Admin B 1-4C.1',
         email: ADMIN_B_EMAIL,
         password: await bcrypt.hash('adm-b-14c1-pw-!1x', 10),

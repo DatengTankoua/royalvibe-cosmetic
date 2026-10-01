@@ -28,6 +28,14 @@ import {
   stopEphemeralMongoSafe,
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
+import { EMAIL_SENDER } from '../src/email-verification/email-sender';
+import {
+  autoConfirmVerificationEmails,
+  createE2eEmailSender,
+} from './e2e/email-verification-fixtures';
+
+// 1-13A : expéditeur simulé, liens confirmés via le service réel.
+const emailSender = createE2eEmailSender();
 
 const JWT_SECRET = 'phase-1-4e-e2e-only-secret';
 const ADMIN_EMAIL = 'admin-14e@royalvibe.test';
@@ -148,7 +156,10 @@ describe('Phase 1-4E — portail transversal d’isolation multi-tenant', () => 
 
       moduleFixture = await Test.createTestingModule({
         imports: [AppModule],
-      }).compile();
+      })
+        .overrideProvider(EMAIL_SENDER)
+        .useValue(emailSender)
+        .compile();
       app = moduleFixture.createNestApplication();
       app.enableCors(
         buildHttpCorsOptions(
@@ -164,6 +175,7 @@ describe('Phase 1-4E — portail transversal d’isolation multi-tenant', () => 
       );
       app.useGlobalFilters(new HttpExceptionFilter());
       await app.init();
+      autoConfirmVerificationEmails(app, emailSender);
 
       userModel = moduleFixture.get(getModelToken('User'));
       organizationModel = moduleFixture.get(getModelToken(Organization.name));

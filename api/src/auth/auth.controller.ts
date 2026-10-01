@@ -3,6 +3,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Header,
   HttpCode,
   Post,
   UseGuards,
@@ -22,6 +23,16 @@ import { SkipOrganizationContext } from './decorators/skip-organization-context.
 import { CurrentUser } from './decorators/current-user.decorator';
 import { CurrentOrganization } from './decorators/current-organization.decorator';
 import { User } from '../users/schemas/user.schema';
+import { EmailVerificationService } from '../email-verification/email-verification.service';
+import { EmailVerificationAddressThrottlerGuard } from '../email-verification/email-verification-rate-limiting';
+import {
+  ConfirmEmailVerificationDto,
+  RequestEmailVerificationDto,
+} from '../email-verification/email-verification.dto';
+
+/** Réponse neutre du renvoi public (1-13A) : identique pour toute adresse. */
+export const EMAIL_VERIFICATION_REQUEST_ACCEPTED_MESSAGE =
+  "Si un compte non vérifié correspond à cette adresse, un nouveau lien de confirmation vient d'être envoyé.";
 
 /**
  * Registre public ouvert (phase 0B.5) — désactivé PAR DÉFAUT.
@@ -47,6 +58,7 @@ export class AuthController {
   constructor(
     private authService: AuthService,
     private organizationsService: OrganizationsService,
+    private emailVerificationService: EmailVerificationService,
   ) {}
 
   // Rate limiting (0B.6) : MÊME garde/fenêtres que /auth/login, sans
@@ -83,7 +95,38 @@ export class AuthController {
   @Public()
   @Post('invitations/accept')
   acceptInvitation(@Body() dto: AcceptInvitationDto) {
-    return this.organizationsService.acceptInvitation(dto);
+    // 1-13A : acceptation puis envoi éventuel du lien de vérification.
+    return this.authService.acceptInvitation(dto);
+  }
+
+  // 1-13A : (ré)envoi public du lien de vérification. Limité par IP
+  // (`AuthThrottlerGuard`, compteur propre à cette route) ET par adresse
+  // normalisée (clé SHA-256). Réponse neutre : compte inexistant, déjà
+  // vérifié, en cooldown ou échec fournisseur répondent à l'identique ;
+  // l'envoi n'est pas attendu (aucun écart de temps selon le compte).
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(AuthThrottlerGuard, EmailVerificationAddressThrottlerGuard)
+  @Public()
+  @Post('email-verification/request')
+  async requestEmailVerification(@Body() dto: RequestEmailVerificationDto) {
+    const { delivery } = await this.emailVerificationService.requestByEmail(
+      dto.email,
+    );
+    void delivery;
+    return { message: EMAIL_VERIFICATION_REQUEST_ACCEPTED_MESSAGE };
+  }
+
+  // 1-13A : confirmation par POST explicite uniquement (jamais par GET ni
+  // préchargement du lien). Aucun JWT, aucune connexion automatique.
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(AuthThrottlerGuard)
+  @Public()
+  @Post('email-verification/confirm')
+  async confirmEmailVerification(@Body() dto: ConfirmEmailVerificationDto) {
+    await this.emailVerificationService.confirm(dto.token);
+    return { verified: true };
   }
   // 200 explicite : le switch répond un nouveau JWT (le POST par défaut
   // NestJS répond 201 — le conserver ici serait trompeur).

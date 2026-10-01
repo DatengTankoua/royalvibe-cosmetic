@@ -13,6 +13,7 @@ import {
   ORGANIZATION_ACCESS_DENIED,
   OrganizationsService,
 } from '../organizations/organizations.service';
+import { EmailVerificationService } from '../email-verification/email-verification.service';
 
 const USER_OBJECT_ID = '112233445566778899001122';
 const ORG_A_ID = '223344556677889900112233';
@@ -35,6 +36,8 @@ function makeUserDoc(overrides: Record<string, unknown> = {}): unknown {
     email: 'ada@example.com',
     password: '$2a$10$x7VQm9LbRdHhGk2sP0v1OeuJ5tYzWAbCdEfGhIjKlMnOpQrStUvWx',
     role: 'seller',
+    // 1-13A : fixtures de login vérifiées explicitement.
+    emailVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
     ...overrides,
   };
   return { ...doc, toObject: () => ({ ...doc }) };
@@ -70,6 +73,7 @@ describe('AuthService', () => {
     createOwnerOrganization: jest.Mock;
   };
   let connectionFixture: ReturnType<typeof makeConnectionFixture>;
+  let emailVerification: { issueForUser: jest.Mock };
 
   async function build() {
     usersService = { findByEmail: jest.fn(), create: jest.fn() };
@@ -80,6 +84,7 @@ describe('AuthService', () => {
       createOwnerOrganization: jest.fn(),
     };
     connectionFixture = makeConnectionFixture();
+    emailVerification = { issueForUser: jest.fn().mockResolvedValue('sent') };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
@@ -90,6 +95,7 @@ describe('AuthService', () => {
           provide: getConnectionToken(),
           useValue: connectionFixture.connection,
         },
+        { provide: EmailVerificationService, useValue: emailVerification },
       ],
     }).compile();
     return module.get(AuthService);
@@ -194,11 +200,16 @@ describe('AuthService', () => {
       );
     });
 
-    it('réponse exacte : user{_id,name,email} + organization{_id,name,slug,currency,status} — rien de plus', async () => {
+    it('réponse exacte : user{_id,name,email} + organization{_id,name,slug,currency,status} + emailVerification — rien de plus', async () => {
       service = await build();
       mockHappyPath();
       const result = await service.register(VALID_DTO);
-      expect(Object.keys(result).sort()).toEqual(['organization', 'user']);
+      expect(Object.keys(result).sort()).toEqual([
+        'emailVerification',
+        'organization',
+        'user',
+      ]);
+      expect(result.emailVerification).toEqual({ status: 'sent' });
       expect(Object.keys(result.user).sort()).toEqual(['_id', 'email', 'name']);
       expect(Object.keys(result.organization).sort()).toEqual([
         '_id',
@@ -242,6 +253,134 @@ describe('AuthService', () => {
   });
 
   // ---- login : refus identifiants (inchangés) ----
+
+  describe('register / invitation — vérification email après commit (1-13A)', () => {
+    const VALID_DTO = {
+      name: 'Ada',
+      email: 'ada@example.com',
+      password: 'secret1',
+      organizationName: 'Ada Corp',
+    };
+
+    function mockCreation() {
+      usersService.create.mockResolvedValue({
+        _id: { toString: () => USER_OBJECT_ID },
+        name: 'Ada',
+        email: 'ada@example.com',
+      });
+      organizations.createOwnerOrganization.mockResolvedValue({
+        organization: {
+          _id: { toString: () => ORG_A_ID },
+          name: 'Ada Corp',
+          slug: 'ada-corp',
+          currency: 'XAF',
+          status: 'active',
+        },
+      });
+    }
+
+    it('envoi APRÈS le commit (session fermée) pour le User créé', async () => {
+      service = await build();
+      mockCreation();
+      let sessionEndedBeforeSend = false;
+      emailVerification.issueForUser.mockImplementation(() => {
+        sessionEndedBeforeSend =
+          connectionFixture.endSession.mock.calls.length === 1;
+        return Promise.resolve('sent');
+      });
+      await service.register(VALID_DTO);
+      expect(sessionEndedBeforeSend).toBe(true);
+      expect(emailVerification.issueForUser).toHaveBeenCalledTimes(1);
+      expect(emailVerification.issueForUser).toHaveBeenCalledWith(
+        USER_OBJECT_ID,
+      );
+    });
+
+    it('échec d’envoi → compte créé, statut `failed`, aucune exception', async () => {
+      service = await build();
+      mockCreation();
+      emailVerification.issueForUser.mockResolvedValue('failed');
+      const result = await service.register(VALID_DTO);
+      expect(result.user._id).toBe(USER_OBJECT_ID);
+      expect(result.emailVerification).toEqual({ status: 'failed' });
+    });
+
+    it('transaction en échec → aucun envoi', async () => {
+      service = await build();
+      usersService.create.mockRejectedValue(new Error('boom'));
+      await expect(service.register(VALID_DTO)).rejects.toThrow('boom');
+      expect(emailVerification.issueForUser).not.toHaveBeenCalled();
+    });
+
+    it('acceptInvitation : acceptation déléguée puis envoi pour le User rattaché', async () => {
+      const acceptInvitation = jest.fn().mockResolvedValue({
+        user: { _id: USER_OBJECT_ID, name: 'Ada', email: 'ada@example.com' },
+        organization: { _id: ORG_A_ID, name: 'Ada Corp', slug: 'ada-corp' },
+        membership: { role: 'seller', status: 'active' },
+      });
+      service = await build();
+      (organizations as unknown as Record<string, jest.Mock>).acceptInvitation =
+        acceptInvitation;
+      emailVerification.issueForUser.mockResolvedValue('not_required');
+      const dto = { token: 'tok' };
+      const result = await service.acceptInvitation(dto);
+      expect(acceptInvitation).toHaveBeenCalledWith(dto);
+      expect(emailVerification.issueForUser).toHaveBeenCalledWith(
+        USER_OBJECT_ID,
+      );
+      expect(result.emailVerification).toEqual({ status: 'not_required' });
+      expect(result.membership).toEqual({ role: 'seller', status: 'active' });
+    });
+
+    it('acceptInvitation refusée → aucun envoi', async () => {
+      service = await build();
+      (organizations as unknown as Record<string, jest.Mock>).acceptInvitation =
+        jest.fn().mockRejectedValue(new BadRequestException());
+      await expect(service.acceptInvitation({ token: 'x' })).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(emailVerification.issueForUser).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('login — adresse non vérifiée (1-13A)', () => {
+    it.each([
+      ['absent', undefined],
+      ['null', null],
+    ])(
+      'emailVerifiedAt %s + bons identifiants → 403 EMAIL_NOT_VERIFIED, aucun JWT ni requête organisationnelle',
+      async (_label, value) => {
+        service = await build();
+        usersService.findByEmail.mockResolvedValue(
+          makeUserDoc({ password: await hashRight(), emailVerifiedAt: value }),
+        );
+        const error: unknown = await service
+          .login({ email: 'ada@example.com', password: 'right-password-1' })
+          .catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(ForbiddenException);
+        expect((error as ForbiddenException).getResponse()).toMatchObject({
+          code: 'EMAIL_NOT_VERIFIED',
+        });
+        expect(organizations.listActiveOrganizations).not.toHaveBeenCalled();
+        expect(organizations.resolveActiveContext).not.toHaveBeenCalled();
+        expect(jwt.sign).not.toHaveBeenCalled();
+      },
+    );
+
+    it('non vérifié + mauvais mot de passe → 401 générique (identifiants vérifiés d’abord)', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(
+        makeUserDoc({ password: await hashRight(), emailVerifiedAt: null }),
+      );
+      const error: unknown = await service
+        .login({ email: 'ada@example.com', password: 'wrong-password-1' })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(UnauthorizedException);
+      expect(
+        JSON.stringify((error as UnauthorizedException).getResponse()),
+      ).not.toContain('EMAIL_NOT_VERIFIED');
+    });
+  });
 
   describe('login (refus identifiants, inchangé)', () => {
     it('email inconnu → 401 message générique ; aucune requête organisationnelle', async () => {

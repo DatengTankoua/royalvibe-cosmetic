@@ -28,6 +28,15 @@ import {
   parseCORSOrigin,
   buildHttpCorsOptions,
 } from './../src/events/origin.helpers';
+import { EMAIL_SENDER } from '../src/email-verification/email-sender';
+import {
+  E2E_EMAIL_VERIFIED_AT,
+  autoConfirmVerificationEmails,
+  createE2eEmailSender,
+} from './e2e/email-verification-fixtures';
+
+// 1-13A : expéditeur simulé, liens confirmés via le service réel.
+const emailSender = createE2eEmailSender();
 
 /**
  * E2E (1-8A) — branding d'organisation + logo tenant, sur
@@ -130,7 +139,10 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
 
       moduleFixture = await Test.createTestingModule({
         imports: [AppModule],
-      }).compile();
+      })
+        .overrideProvider(EMAIL_SENDER)
+        .useValue(emailSender)
+        .compile();
       app = moduleFixture.createNestApplication();
       app.enableCors(
         buildHttpCorsOptions(
@@ -146,6 +158,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       );
       app.useGlobalFilters(new HttpExceptionFilter());
       await app.init();
+      autoConfirmVerificationEmails(app, emailSender);
 
       userModel = moduleFixture.get(getModelToken('User'));
       organizationModel = moduleFixture.get(getModelToken(Organization.name));
@@ -189,6 +202,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       ownerBToken = loginOwnerB.body.access_token as string;
 
       const adminA = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Admin A',
         email: ADMIN_A_EMAIL,
         password: await bcrypt.hash(PASSWORD, 10),
@@ -200,6 +214,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
         status: 'active',
       });
       const sellerA = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Seller A',
         email: SELLER_A_EMAIL,
         password: await bcrypt.hash(PASSWORD, 10),
@@ -211,6 +226,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
         status: 'active',
       });
       const delegatedSellerA = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Delegated Seller A',
         email: DELEGATED_SELLER_A_EMAIL,
         password: await bcrypt.hash(PASSWORD, 10),
@@ -1425,6 +1441,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
     // refusé dès la suspension, sans réémission.
     it('membership suspendue APRÈS l’émission du token → 403, GET current refusé sur les 3 routes', async () => {
       const staleUser = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
         name: 'Stale Seller A',
         email: 'stale-seller-a-18a@royalvibe.test',
         password: await bcrypt.hash(PASSWORD, 10),

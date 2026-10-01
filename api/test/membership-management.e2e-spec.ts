@@ -24,6 +24,15 @@ import {
   parseCORSOrigin,
   buildHttpCorsOptions,
 } from './../src/events/origin.helpers';
+import { EMAIL_SENDER } from '../src/email-verification/email-sender';
+import {
+  E2E_EMAIL_VERIFIED_AT,
+  autoConfirmVerificationEmails,
+  createE2eEmailSender,
+} from './e2e/email-verification-fixtures';
+
+// 1-13A : expéditeur simulé, liens confirmés via le service réel.
+const emailSender = createE2eEmailSender();
 
 /**
  * E2E (1-7C) — gestion des membres + transfert de propriété, sur
@@ -102,6 +111,7 @@ describe('Gestion des membres + transfert de propriété (e2e 1-7C)', () => {
     const userId = new Types.ObjectId();
     const membershipId = new Types.ObjectId();
     await userModel.create({
+      emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
       _id: userId,
       name,
       email,
@@ -174,7 +184,10 @@ describe('Gestion des membres + transfert de propriété (e2e 1-7C)', () => {
 
       moduleFixture = await Test.createTestingModule({
         imports: [AppModule],
-      }).compile();
+      })
+        .overrideProvider(EMAIL_SENDER)
+        .useValue(emailSender)
+        .compile();
       app = moduleFixture.createNestApplication();
       app.enableCors(
         buildHttpCorsOptions(
@@ -190,6 +203,7 @@ describe('Gestion des membres + transfert de propriété (e2e 1-7C)', () => {
       );
       app.useGlobalFilters(new HttpExceptionFilter());
       await app.init();
+      autoConfirmVerificationEmails(app, emailSender);
       await app.listen(0);
       port = (app.getHttpServer().address() as AddressInfo).port;
 

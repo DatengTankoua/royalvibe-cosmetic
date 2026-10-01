@@ -17,6 +17,7 @@ import {
 } from "@/lib/auth";
 import {
   authLogin,
+  getApiErrorCode,
   getApiErrorMessage,
   type SelectableOrganization,
 } from "@/lib/api";
@@ -48,6 +49,17 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+/** Échec de connexion : message affichable + code stable éventuel de l'API. */
+export class LoginError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "LoginError";
+  }
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<StoredUser | null>(null);
@@ -92,7 +104,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setSessionVersion((v) => v + 1);
         return { status: "success" };
       } catch (err) {
-        throw new Error(getApiErrorMessage(err));
+        // 1-13A : code conservé (ex. EMAIL_NOT_VERIFIED) — aucune session
+        // créée, aucun token ni utilisateur stocké.
+        throw new LoginError(getApiErrorMessage(err), getApiErrorCode(err));
       }
     },
     [],
