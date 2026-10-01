@@ -340,6 +340,10 @@ export function describeOperationError(error?: OutboxLastError): string | null {
     case "ORGANIZATION_ACCESS_DENIED":
     case "PERMISSION_DENIED":
       return "Accès refusé par le serveur.";
+    // 1-14C.2 : refus commercial — la vente reste en attente.
+    case "SUBSCRIPTION_INACTIVE":
+    case "SUBSCRIPTION_ACCESS_LIMITED":
+      return "Abonnement du commerce inactif : vente conservée, envoi après renouvellement.";
   }
   switch (error.kind) {
     case "network":

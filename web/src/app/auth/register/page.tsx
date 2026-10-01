@@ -20,6 +20,7 @@ import {
 } from "@/lib/api";
 import { EmailVerificationResend } from "@/components/auth/email-verification-resend";
 import { Wordmark } from "@/components/brand/wordmark";
+import { BackToHome } from "@/components/landing/back-to-home";
 import Link from "next/link";
 
 export default function RegisterPage() {
@@ -46,6 +47,7 @@ export default function RegisterPage() {
     return (
       <div className="flex flex-1 items-center justify-center px-4 py-12">
         <div className="w-full max-w-sm space-y-4 text-center">
+          <BackToHome />
           <Wordmark className="mx-auto" size="large" />
           <h1 className="text-xl font-bold">Inscription désactivée</h1>
           <p className="text-sm text-muted-foreground">
@@ -67,6 +69,7 @@ export default function RegisterPage() {
     return (
       <div className="flex flex-1 items-center justify-center px-4 py-12">
         <div className="w-full max-w-sm space-y-4 text-center">
+          <BackToHome />
           <Wordmark className="mx-auto" size="large" />
           <h1 className="text-xl font-bold">Compte créé</h1>
           <p className="text-sm text-muted-foreground">
@@ -142,6 +145,7 @@ export default function RegisterPage() {
   return (
     <div className="flex flex-1 items-center justify-center px-4 py-12 pb-[max(3rem,env(safe-area-inset-bottom))]">
       <div className="w-full max-w-sm space-y-6">
+        <BackToHome />
         <div className="space-y-3 text-center">
           <Wordmark className="mx-auto" size="large" />
           <div>

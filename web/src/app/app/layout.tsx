@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -47,10 +47,17 @@ import {
   stopOfflineSalesSync,
 } from "@/lib/offline-sales-sync";
 import {
+  clearSubscriptionBlock,
   deleteUserOperations,
   readUserUnfinalizedOperations,
   type OutboxOperation,
 } from "@/lib/offline-sales-outbox-db";
+import {
+  forgetCommercialBlock,
+  isCommerciallyBlocked,
+  rememberCommercialBlock,
+} from "@/lib/commercial-block";
+import { CommercialBlockScreen } from "@/components/subscription/commercial-block-screen";
 import {
   clearSalesCapability,
   writeSalesCapability,
@@ -70,11 +77,17 @@ import {
 import { useOfflineSalesSync } from "@/hooks/use-offline-sales-sync";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import {
+  canRecordSalesFromContext,
   fetchActiveOrganizations,
   fetchAuthContext,
   fetchCurrentOrganization,
+  getApiErrorCode,
   getApiErrorMessage,
+  hasApplicationAccess,
   isNetworkError,
+  setSubscriptionBlockedListener,
+  SUBSCRIPTION_STATUS_UNAVAILABLE,
+  type ApiAccessView,
   type ApiAuthContext,
   type ApiOrganizationCurrent,
   type SelectableOrganization,
@@ -204,7 +217,8 @@ export default function AppShellLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { user, isLoading, sessionVersion, logout } = useAuth();
+  const { user, isLoading, sessionVersion, logout, restrictedToken } =
+    useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const [organization, setOrganization] =
@@ -242,10 +256,51 @@ export default function AppShellLayout({
   const refreshShell = () => setRefreshTick((v) => v + 1);
   const [converterOpen, setConverterOpen] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
+  // 1-14C.2 — accès COMMERCIAL bloqué (abonnement inactif) pour la session
+  // applicative courante : interface métier, socket et envois arrêtés, sans
+  // déconnexion ni suppression locale. `access` = vue serveur (null tant
+  // qu'inconnue, ou blocage connu hors ligne).
+  const [commercialBlock, setCommercialBlock] = useState<{
+    access: ApiAccessView | null;
+    identity: { userId: string; organizationId: string } | null;
+  } | null>(null);
+  // Lecture de l'état impossible (503) : ni expiration annoncée, ni accès.
+  const [statusUnavailable, setStatusUnavailable] = useState(false);
+  // Contexte réglé (succès, refus ou repli) : les pages métier ne sont
+  // montées qu'après — jamais sur une session dont l'accès est inconnu.
+  const [contextReady, setContextReady] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyMessage, setVerifyMessage] = useState<string | null>(null);
+  const [managerReloadKey, setManagerReloadKey] = useState(0);
+  const authContextRef = useRef<ApiAuthContext | null>(null);
+  useEffect(() => {
+    authContextRef.current = authContext;
+  }, [authContext]);
 
   // 1-11C.2 : synchronisation des ventes hors ligne — partition issue du
   // contexte SERVEUR uniquement ; inactive sans contexte ou file vide.
-  useOfflineSalesSync(authContext);
+  // 1-14C.2 : inactive aussi dès que l'accès commercial est bloqué.
+  useOfflineSalesSync(
+    !commercialBlock && hasApplicationAccess(authContext) ? authContext : null,
+  );
+
+  // 1-14C.2 : un appel du JWT applicatif COURANT refusé commercialement
+  // (session ouverte puis expiration) bascule sur l'écran de blocage : le
+  // refus est mémorisé pour cette identité, la capacité hors ligne retirée ;
+  // le contexte est relu pour afficher l'état exact. Aucune déconnexion.
+  useEffect(() => {
+    setSubscriptionBlockedListener(() => {
+      const ctx = authContextRef.current;
+      const identity = ctx
+        ? { userId: ctx.userId, organizationId: ctx.organizationId }
+        : null;
+      if (identity) rememberCommercialBlock(identity);
+      void clearSalesCapability();
+      setCommercialBlock((prev) => prev ?? { access: null, identity });
+      setRefreshTick((v) => v + 1);
+    });
+    return () => setSubscriptionBlockedListener(null);
+  }, []);
 
   // 1-11C.3 : shell ouvert hors ligne (contexte serveur absent) → au retour
   // du réseau, le contexte est rechargé ; il réactive la synchronisation.
@@ -272,8 +327,11 @@ export default function AppShellLayout({
     : [];
 
   useEffect(() => {
-    if (!isLoading && !user) router.push("/auth/login");
-  }, [user, isLoading, router]);
+    // 1-14C.2 : une session LIMITÉE n'entre jamais dans le shell métier.
+    if (!isLoading && !user) {
+      router.push(restrictedToken ? "/access" : "/auth/login");
+    }
+  }, [user, isLoading, router, restrictedToken]);
 
   useEffect(() => {
     if (!user) return;
@@ -281,6 +339,7 @@ export default function AppShellLayout({
     setLoadingOrg(true);
     setBrandingError(null);
     setListError(null);
+    setStatusUnavailable(false);
     // Correctif 1-11C.3 : navigateur déjà hors ligne → aucune requête ne
     // peut atteindre le serveur ; l'identité vérifiée localement est lue
     // tout de suite (catalogue hors ligne sans attendre l'échec réseau du
@@ -294,23 +353,108 @@ export default function AppShellLayout({
       const brand = identity ? await readTenantBrand(identity) : null;
       return { identity, brand };
     };
-    if (typeof navigator !== "undefined" && !navigator.onLine) {
-      void readOfflineFallback().then(({ identity, brand }) => {
-        if (cancelled || contextSettled) return;
+    // 1-14C.2 : un refus commercial CONNU pour cette identité n'est jamais
+    // contourné par le repli hors ligne (cache, rechargement, coupure).
+    const applyOfflineFallback = ({
+      identity,
+      brand,
+    }: Awaited<ReturnType<typeof readOfflineFallback>>) => {
+      setOfflineBrand(brand);
+      if (identity && isCommerciallyBlocked(identity)) {
+        setOfflineIdentity(null);
+        setCommercialBlock({ access: null, identity });
+      } else {
         setOfflineIdentity(identity);
-        setOfflineBrand(brand);
+      }
+      setContextReady(true);
+    };
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      void readOfflineFallback().then((fallback) => {
+        if (cancelled || contextSettled) return;
+        applyOfflineFallback(fallback);
       });
     }
-    // `allSettled` : une organisation courante suspendue (403) ne doit
-    // jamais empêcher l'exploitation d'une liste d'organisations valide,
-    // et vice-versa. Le contexte d'autorisation suit la même logique
-    // (échec → section « Organisation » simplement masquée).
-    Promise.allSettled([
-      fetchCurrentOrganization(),
-      fetchActiveOrganizations(),
-      fetchAuthContext(),
-    ]).then(([currentResult, listResult, authContextResult]) => {
+
+    void (async () => {
+      let ctx: ApiAuthContext;
+      try {
+        ctx = await fetchAuthContext();
+      } catch (reason) {
+        contextSettled = true;
+        if (cancelled) return;
+        setAuthContext(null);
+        setOrganization(null);
+        // Distinction stricte : une vraie panne réseau peut retomber sur
+        // l'identité vérifiée localement ; une réponse HTTP (401/403/autre)
+        // est une révocation/refus serveur — JAMAIS transformée en mode
+        // hors ligne, fail-closed.
+        if (isNetworkError(reason)) {
+          applyOfflineFallback(await readOfflineFallback());
+        } else if (
+          getApiErrorCode(reason) === SUBSCRIPTION_STATUS_UNAVAILABLE
+        ) {
+          // 1-14C.2 : état temporairement illisible — aucun accès accordé,
+          // aucune expiration annoncée ; rien n'est effacé.
+          setOfflineIdentity(null);
+          setStatusUnavailable(true);
+          setContextReady(true);
+        } else {
+          setOfflineIdentity(null);
+          setOfflineBrand(null);
+          // Refus serveur : plus aucune saisie hors ligne sur cet appareil,
+          // ni identité visuelle du commerce.
+          void clearSalesCapability();
+          void clearTenantBrand();
+          setContextReady(true);
+        }
+        setLoadingOrg(false);
+        return;
+      }
       contextSettled = true;
+      if (cancelled) return;
+      const identity = {
+        userId: ctx.userId,
+        organizationId: ctx.organizationId,
+      };
+      const token = getToken();
+      setAuthContext(ctx);
+      setOfflineIdentity(null);
+
+      // 1-14C.2 — accès commercial BLOQUÉ : aucun appel métier (branding
+      // compris), capacité hors ligne retirée, refus mémorisé. Le pointeur
+      // d'identité (contexte serveur) permet la consultation/export locaux.
+      if (!hasApplicationAccess(ctx)) {
+        rememberCommercialBlock(identity);
+        void clearSalesCapability();
+        setCommercialBlock({ access: ctx.access ?? null, identity });
+        setOrganization(null);
+        if (token) void writeIdentityPointer({ ...identity, token });
+        try {
+          const list = await fetchActiveOrganizations();
+          if (!cancelled) {
+            setOrganizations(list);
+            setListLoaded(true);
+          }
+        } catch {
+          // nom du commerce simplement absent
+        }
+        if (!cancelled) {
+          setContextReady(true);
+          setLoadingOrg(false);
+        }
+        return;
+      }
+      forgetCommercialBlock(identity);
+      setCommercialBlock(null);
+      setContextReady(true);
+
+      // `allSettled` : une organisation courante suspendue (403) ne doit
+      // jamais empêcher l'exploitation d'une liste d'organisations valide,
+      // et vice-versa.
+      const [currentResult, listResult] = await Promise.allSettled([
+        fetchCurrentOrganization(),
+        fetchActiveOrganizations(),
+      ]);
       if (cancelled) return;
       if (currentResult.status === "fulfilled") {
         setOrganization(currentResult.value);
@@ -332,73 +476,80 @@ export default function AppShellLayout({
           setListError(getApiErrorMessage(listResult.reason));
         }
       }
-      if (authContextResult.status === "fulfilled") {
-        setAuthContext(authContextResult.value);
-        setOfflineIdentity(null);
-        setOfflineBrand(null);
-        // 1-12A : snapshot visuel écrit seulement si les DEUX réponses ont
-        // réussi et désignent la même organisation (champs recopiés un à un,
-        // jamais la réponse brute).
-        if (
-          currentResult.status === "fulfilled" &&
-          currentResult.value._id === authContextResult.value.organizationId
-        ) {
-          void writeTenantBrand({
-            userId: authContextResult.value.userId,
-            organizationId: authContextResult.value.organizationId,
-            organizationName: currentResult.value.name,
-            brandColor: currentResult.value.brandColor,
-          });
-        }
-        const token = getToken();
-        if (token) {
-          // 1-11C.2 : pointeur écrit → le moteur peut vérifier l'identité.
-          void writeIdentityPointer({
-            userId: authContextResult.value.userId,
-            organizationId: authContextResult.value.organizationId,
-            token,
-          }).then((written) => {
-            if (written && !cancelled) requestOfflineSalesSync();
-          });
-          // 1-11C.3 : capacité minimale de saisie hors ligne (booléen seul),
-          // liée à l'identité et au token courants, TTL 72 h.
-          void writeSalesCapability({
-            userId: authContextResult.value.userId,
-            organizationId: authContextResult.value.organizationId,
-            token,
-            canRecordSales: hasPermission(
-              authContextResult.value,
-              "sales.record",
-            ),
-          });
-        }
-      } else {
-        setAuthContext(null);
-        // Distinction stricte : une vraie panne réseau peut retomber sur
-        // l'identité vérifiée localement ; une réponse HTTP (401/403/autre)
-        // est une révocation/refus serveur — JAMAIS transformée en mode
-        // hors ligne, fail-closed.
-        if (isNetworkError(authContextResult.reason)) {
-          void readOfflineFallback().then(({ identity, brand }) => {
-            if (cancelled) return;
-            setOfflineIdentity(identity);
-            setOfflineBrand(brand);
-          });
-        } else {
-          setOfflineIdentity(null);
-          setOfflineBrand(null);
-          // Refus serveur : plus aucune saisie hors ligne sur cet appareil,
-          // ni identité visuelle du commerce.
-          void clearSalesCapability();
-          void clearTenantBrand();
-        }
+      // 1-12A : snapshot visuel écrit seulement si les DEUX réponses ont
+      // réussi et désignent la même organisation (champs recopiés un à un,
+      // jamais la réponse brute).
+      if (
+        currentResult.status === "fulfilled" &&
+        currentResult.value._id === ctx.organizationId
+      ) {
+        void writeTenantBrand({
+          userId: ctx.userId,
+          organizationId: ctx.organizationId,
+          organizationName: currentResult.value.name,
+          brandColor: currentResult.value.brandColor,
+        });
+      }
+      if (token) {
+        const canRecordSales = canRecordSalesFromContext(ctx);
+        // 1-11C.2 : pointeur écrit → le moteur peut vérifier l'identité.
+        // 1-14C.2 : puis levée EXPLICITE d'un blocage commercial de l'outbox
+        // (JWT applicatif, accès et saisie autorisés par le serveur, même
+        // identité) — jamais d'un blocage de permissions ou de corruption.
+        void writeIdentityPointer({ ...identity, token }).then(
+          async (written) => {
+            if (!written || cancelled) return;
+            if (canRecordSales) {
+              await clearSubscriptionBlock({ ...identity, token });
+            }
+            if (!cancelled) requestOfflineSalesSync();
+          },
+        );
+        // 1-11C.3 : capacité minimale de saisie hors ligne (booléen seul),
+        // liée à l'identité et au token courants, TTL 72 h. 1-14C.2 : selon
+        // l'accord serveur `access.canRecordSales`.
+        void writeSalesCapability({ ...identity, token, canRecordSales });
       }
       setLoadingOrg(false);
-    });
+    })();
     return () => {
       cancelled = true;
     };
   }, [user, sessionVersion, refreshTick]);
+
+  // 1-14C.2 — « Vérifier mon abonnement » (session applicative bloquée) :
+  // relecture du contexte serveur, AUCUN changement de token. L'accès ne
+  // reprend que si le serveur l'indique pour cette session.
+  const verifyCommercialAccess = useCallback(async () => {
+    setVerifying(true);
+    setVerifyMessage(null);
+    try {
+      const ctx = await fetchAuthContext();
+      setManagerReloadKey((v) => v + 1);
+      if (hasApplicationAccess(ctx)) {
+        forgetCommercialBlock({
+          userId: ctx.userId,
+          organizationId: ctx.organizationId,
+        });
+        setCommercialBlock(null);
+        setRefreshTick((v) => v + 1);
+        return;
+      }
+      setCommercialBlock({
+        access: ctx.access ?? null,
+        identity: { userId: ctx.userId, organizationId: ctx.organizationId },
+      });
+      setVerifyMessage("L'abonnement n'est toujours pas actif.");
+    } catch (err) {
+      setVerifyMessage(
+        isNetworkError(err)
+          ? "Vérification impossible hors connexion."
+          : "Vérification momentanément indisponible.",
+      );
+    } finally {
+      setVerifying(false);
+    }
+  }, []);
 
   const noActiveOrganization =
     !loadingOrg && listLoaded && organizations.length === 0;
@@ -489,8 +640,82 @@ export default function AppShellLayout({
   );
   const userFullName = fullNameOf(user.name);
 
+  // 1-14C.2 — accès commercial bloqué : écran unique, sans socket, sans
+  // moteur de synchronisation ni pages métier. Consultation/export locaux et
+  // déconnexion (avec choix explicite si des ventes restent) conservés.
+  if (commercialBlock) {
+    const blockedIdentity =
+      commercialBlock.identity ??
+      (authContext
+        ? {
+            userId: authContext.userId,
+            organizationId: authContext.organizationId,
+          }
+        : null);
+    const blockedName =
+      organizations.find(
+        (o) => o.organizationId === blockedIdentity?.organizationId,
+      )?.name ??
+      offlineBrand?.organizationName ??
+      null;
+    return (
+      <div
+        data-tenant-shell=""
+        style={accentStyle}
+        className="flex min-h-full flex-1 flex-col"
+      >
+        <header className="sticky top-0 z-40 border-b border-(--tenant-accent-border) bg-background">
+          <div className="mx-auto flex h-16 max-w-4xl items-center gap-3 px-4 sm:px-6">
+            <div
+              className="flex min-w-0 flex-1 items-center gap-2.5"
+              title={fullNameOf(blockedName) ?? undefined}
+            >
+              <TenantLogo name={blockedName} logoUrl={null} />
+              <span className="truncate text-sm font-semibold sm:text-base">
+                {blockedName ?? ORGANIZATION_NAME_FALLBACK}
+              </span>
+            </div>
+            <OnlineStatusIndicator />
+          </div>
+        </header>
+        <main className="flex flex-1 flex-col pb-10">
+          <CommercialBlockScreen
+            access={commercialBlock.access}
+            isOwner={
+              commercialBlock.access?.canRenew === true ||
+              (commercialBlock.access === null && authContext?.role === "owner")
+            }
+            offline={!online}
+            identity={blockedIdentity}
+            pendingToken={getToken()}
+            onVerify={() => void verifyCommercialAccess()}
+            verifying={verifying}
+            verifyMessage={verifyMessage}
+            onLogout={handleLogout}
+            managerReloadKey={managerReloadKey}
+          />
+        </main>
+        {logoutPending && (
+          <LogoutPendingDialog
+            operations={logoutPending}
+            online={typeof navigator === "undefined" || navigator.onLine}
+            canSync={false}
+            onCancel={cancelLogout}
+            onSyncNow={syncBeforeLogout}
+            onKeepAndLogout={finishLogout}
+            onDeleteAndLogout={async () => {
+              const ok = await deleteUserOperations(user._id);
+              if (ok) await finishLogout();
+              return ok;
+            }}
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
-    <SocketProvider>
+    <SocketProvider onServerDisconnect={() => setRefreshTick((v) => v + 1)}>
       <OrganizationShellContext.Provider
         value={{ organization, authContext, refreshShell, offlineIdentity }}
       >
@@ -632,7 +857,28 @@ export default function AppShellLayout({
             <main
               className={`flex flex-1 flex-col ${navOffline ? "pb-24 md:pb-16" : "pb-16"}`}
             >
-              {noActiveOrganization ? (
+              {statusUnavailable ? (
+                <div className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
+                  <p role="alert" className="text-sm">
+                    Vérification momentanément indisponible.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={refreshShell}
+                    className="inline-flex h-11 items-center justify-center rounded-md border px-4 text-sm font-medium hover:bg-muted"
+                  >
+                    Réessayer
+                  </button>
+                  <PendingSalesIfAny />
+                </div>
+              ) : !contextReady ? (
+                <p
+                  role="status"
+                  className="mx-auto mt-10 text-sm text-muted-foreground"
+                >
+                  Chargement…
+                </p>
+              ) : noActiveOrganization ? (
                 <div className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
                   <p className="text-sm text-muted-foreground">
                     Aucune organisation active. Contacte un administrateur ou

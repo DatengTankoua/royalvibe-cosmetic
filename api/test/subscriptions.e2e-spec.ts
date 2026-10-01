@@ -541,6 +541,15 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
         },
         coverageEndsAt: new Date(T0.getTime() + TRIAL_MS).toISOString(),
         nextPeriodStartsAt: null,
+        // 1-14C.2 : historique des périodes (projection explicite).
+        periods: [
+          {
+            kind: 'trial',
+            term: null,
+            startsAt: T0.toISOString(),
+            endsAt: new Date(T0.getTime() + TRIAL_MS).toISOString(),
+          },
+        ],
       });
       const flat = JSON.stringify(res.body);
       for (const forbidden of [
@@ -579,6 +588,14 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
         currentPeriod: null,
         coverageEndsAt: new Date(T0.getTime() + TRIAL_MS).toISOString(),
         nextPeriodStartsAt: null,
+        periods: [
+          {
+            kind: 'trial',
+            term: null,
+            startsAt: T0.toISOString(),
+            endsAt: new Date(T0.getTime() + TRIAL_MS).toISOString(),
+          },
+        ],
       });
     });
 
@@ -683,6 +700,58 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
         );
       }
       expect(periods[0].endsAt.toISOString()).toBe(trialEnd.toISOString());
+    });
+
+    it('1-14C.2 : historique des périodes — plus récente d’abord, projection explicite, lecture seule', async () => {
+      clockNow = T0;
+      const { orgId, token } = await registerOwner('history');
+      clockNow = new Date(T0.getTime() + 2 * DAY_MS);
+      await grant(orgId, 'monthly', `hist-1-${orgId}`, 'ops-secret-name');
+      await grant(orgId, 'annual', `hist-2-${orgId}`, 'ops-secret-name');
+      const before = await periodModel.countDocuments({
+        organizationId: new Types.ObjectId(orgId),
+      });
+      const res = await getSubscription(token);
+      expect(res.status).toBe(200);
+      const periods = res.body.periods as Array<Record<string, unknown>>;
+      expect(periods.map((p) => [p.kind, p.term])).toEqual([
+        ['subscription', 'annual'],
+        ['subscription', 'monthly'],
+        ['trial', null],
+      ]);
+      for (const entry of periods) {
+        expect(Object.keys(entry).sort()).toEqual([
+          'endsAt',
+          'kind',
+          'startsAt',
+          'term',
+        ]);
+      }
+      expect(periods[1]).toEqual({
+        kind: 'subscription',
+        term: 'monthly',
+        startsAt: '2026-03-08T09:00:00.000Z',
+        endsAt: '2026-04-08T09:00:00.000Z',
+      });
+      const flat = JSON.stringify(res.body);
+      for (const forbidden of [
+        'hist-1-',
+        'hist-2-',
+        'ops-secret-name',
+        'manual',
+        'source',
+        'sequence',
+        'previousPeriodId',
+        '_id',
+      ]) {
+        expect(flat).not.toContain(forbidden);
+      }
+      // Lecture seule : aucune période créée par la consultation.
+      expect(
+        await periodModel.countDocuments({
+          organizationId: new Types.ObjectId(orgId),
+        }),
+      ).toBe(before);
     });
 
     it('attribution à une organisation inexistante ou entrées invalides → refus, aucune écriture', async () => {
@@ -915,6 +984,7 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
         currentPeriod: null,
         coverageEndsAt: null,
         nextPeriodStartsAt: null,
+        periods: [],
       });
 
       for (const [token, code] of [

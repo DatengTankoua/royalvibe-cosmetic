@@ -161,6 +161,28 @@ export function setForcedLogoutListener(listener: (() => void) | null): void {
   forcedLogoutListener = listener;
 }
 
+// 1-14C.2 : notifié quand un appel fait avec le JWT applicatif COURANT est
+// refusé commercialement (403 `SUBSCRIPTION_INACTIVE` ou
+// `SUBSCRIPTION_ACCESS_LIMITED`). Le shell bascule alors sur l'écran de
+// blocage : AUCUNE déconnexion, aucune suppression locale.
+let subscriptionBlockedListener: (() => void) | null = null;
+
+export function setSubscriptionBlockedListener(
+  listener: (() => void) | null,
+): void {
+  subscriptionBlockedListener = listener;
+}
+
+export const SUBSCRIPTION_INACTIVE = "SUBSCRIPTION_INACTIVE";
+export const SUBSCRIPTION_ACCESS_LIMITED = "SUBSCRIPTION_ACCESS_LIMITED";
+export const SUBSCRIPTION_STATUS_UNAVAILABLE =
+  "SUBSCRIPTION_STATUS_UNAVAILABLE";
+
+/** Refus COMMERCIAL (abonnement inactif ou session limitée). */
+export function isCommercialRefusalCode(code: unknown): boolean {
+  return code === SUBSCRIPTION_INACTIVE || code === SUBSCRIPTION_ACCESS_LIMITED;
+}
+
 function bearerOf(value: unknown): string | null {
   return typeof value === "string" && value.startsWith("Bearer ")
     ? value.slice("Bearer ".length)
@@ -184,6 +206,18 @@ apiClient.interceptors.response.use(
       if (typeof window !== "undefined") {
         window.location.replace("/auth/login");
       }
+    }
+    if (
+      axios.isAxiosError(error) &&
+      error.response?.status === 403 &&
+      isCommercialRefusalCode(
+        (error.response.data as { code?: unknown } | undefined)?.code,
+      ) &&
+      !error.config?.url?.startsWith("/auth/") &&
+      // Jamais pour un ancien token ou un jeton limité explicite.
+      bearerOf(error.config?.headers?.Authorization) === getToken()
+    ) {
+      subscriptionBlockedListener?.();
     }
     return Promise.reject(error);
   },
@@ -279,19 +313,23 @@ export async function confirmPasswordReset(
   await apiClient.post("/auth/password-reset/confirm", { token, password });
 }
 
-export async function fetchMe(): Promise<ApiUser> {
-  const { data } = await apiClient.get<ApiUser>("/auth/me");
+export async function fetchMe(token?: string): Promise<ApiUser> {
+  const { data } = await apiClient.get<ApiUser>(
+    "/auth/me",
+    token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
+  );
   return data;
 }
 
 // 1-9B : organisations actives de l'utilisateur courant (userId depuis le
 // JWT côté serveur). 1-12A : ne sert plus qu'à détecter « aucune
 // organisation active » dans le shell (plus de sélecteur de switch).
-export async function fetchActiveOrganizations(): Promise<
-  SelectableOrganization[]
-> {
+export async function fetchActiveOrganizations(
+  token?: string,
+): Promise<SelectableOrganization[]> {
   const { data } = await apiClient.get<SelectableOrganization[]>(
     "/auth/organizations",
+    token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
   );
   return data;
 }
@@ -354,17 +392,123 @@ export async function removeOrganizationLogo(): Promise<ApiOrganizationCurrent> 
 // GET /auth/context — source unique et fiable de role/permissions/userId de
 // la membership courante ; jamais `ApiUser.role` (legacy) ni un décodage JWT
 // côté client pour décider des droits.
+export type ApiSubscriptionState = "active" | "expired" | "none" | "scheduled";
+
+// 1-14C.1 — état d'accès commercial calculé par le serveur. Un 200 sur
+// `/auth/context` ne signifie PAS que le commerce est accessible :
+// seul `applicationAccess` l'indique ; la saisie de ventes dépend de
+// `canRecordSales` (faux dès que l'accès est bloqué).
+export interface ApiAccessView {
+  subscriptionState: ApiSubscriptionState;
+  applicationAccess: boolean;
+  coverageEndsAt: string | null;
+  checkedAt: string;
+  canRenew: boolean;
+  tokenScope?: "app" | "subscription_limited";
+  canRecordSales?: boolean;
+}
+
 export interface ApiAuthContext {
   userId: string;
   organizationId: string;
   role: OrganizationRole;
   permissions: DelegablePermission[];
   effectivePermissions: DelegablePermission[];
+  // Absent (API antérieure) → traité comme bloqué (fail-closed).
+  access?: ApiAccessView;
 }
 
-export async function fetchAuthContext(): Promise<ApiAuthContext> {
-  const { data } = await apiClient.get<ApiAuthContext>("/auth/context");
+/** En-tête explicite : jamais remplacé par l'intercepteur (jeton limité). */
+const explicitBearer = (token?: string) =>
+  token ? { headers: { Authorization: `Bearer ${token}` } } : undefined;
+
+export async function fetchAuthContext(
+  token?: string,
+): Promise<ApiAuthContext> {
+  const { data } = await apiClient.get<ApiAuthContext>(
+    "/auth/context",
+    explicitBearer(token),
+  );
   return data;
+}
+
+/** Accès applicatif ouvert selon le contexte serveur (fail-closed). */
+export function hasApplicationAccess(context: ApiAuthContext | null): boolean {
+  return (
+    context?.access?.applicationAccess === true &&
+    context.access.tokenScope !== "subscription_limited"
+  );
+}
+
+/** Saisie de ventes autorisée selon le contexte serveur (fail-closed). */
+export function canRecordSalesFromContext(
+  context: ApiAuthContext | null,
+): boolean {
+  return (
+    hasApplicationAccess(context) && context?.access?.canRecordSales === true
+  );
+}
+
+// ─── Abonnement (1-14B/1-14C) ────────────────────────────────────────────────
+
+export interface ApiSubscriptionPeriod {
+  kind: "trial" | "subscription";
+  term: "monthly" | "quarterly" | "semiannual" | "annual" | null;
+  startsAt: string;
+  endsAt: string;
+}
+
+export interface ApiSubscription {
+  state: ApiSubscriptionState;
+  currentPeriod: ApiSubscriptionPeriod | null;
+  coverageEndsAt: string | null;
+  nextPeriodStartsAt: string | null;
+  /** Historique des PÉRIODES (pas des paiements), plus récente d'abord. */
+  periods: ApiSubscriptionPeriod[];
+}
+
+// GET /organizations/current/subscription — propriétaire réel uniquement.
+export async function fetchSubscription(
+  token?: string,
+): Promise<ApiSubscription> {
+  const { data } = await apiClient.get<ApiSubscription>(
+    "/organizations/current/subscription",
+    explicitBearer(token),
+  );
+  return data;
+}
+
+// POST /auth/subscription-access/complete — jeton LIMITÉ uniquement, corps
+// vide : délivre un JWT applicatif si l'abonnement est actif.
+export async function completeSubscriptionAccess(
+  restrictedToken: string,
+): Promise<{ access_token: string }> {
+  const { data } = await apiClient.post<{ access_token: string }>(
+    "/auth/subscription-access/complete",
+    undefined,
+    explicitBearer(restrictedToken),
+  );
+  return data;
+}
+
+/** Corps d'un 403 `SUBSCRIPTION_INACTIVE` (login/switch), sinon `null`. */
+export function readSubscriptionInactive(
+  error: unknown,
+): { restrictedToken: string | null; access: ApiAccessView | null } | null {
+  if (!axios.isAxiosError(error) || error.response?.status !== 403) {
+    return null;
+  }
+  const body = error.response.data as
+    { code?: unknown; restrictedToken?: unknown; access?: unknown } | undefined;
+  if (body?.code !== SUBSCRIPTION_INACTIVE) return null;
+  return {
+    restrictedToken:
+      typeof body.restrictedToken === "string" ? body.restrictedToken : null,
+    access:
+      typeof body.access === "object" && body.access !== null
+        ? (body.access as ApiAccessView)
+        : null,
+  };
 }
 
 // ─── Membres (1-7C) ──────────────────────────────────────────────────────────
@@ -749,6 +893,11 @@ export function getApiErrorMessage(error: unknown): string {
     const body = error.response.data as
       { message?: string | string[] } | undefined;
 
+    const code = (body as { code?: unknown } | undefined)?.code;
+    if (code === SUBSCRIPTION_INACTIVE)
+      return "L'abonnement de ce commerce n'est pas actif.";
+    if (code === SUBSCRIPTION_STATUS_UNAVAILABLE)
+      return "Vérification momentanément indisponible. Réessayez.";
     if (status === 403) return "Accès refusé.";
     if (status === 404) return "Ressource introuvable.";
     if (status >= 500)

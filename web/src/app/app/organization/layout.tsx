@@ -17,6 +17,13 @@ const TABS = [
     permission: "members.invite" as const,
   },
   { href: "/app/organization/offline-data", label: "Hors connexion" },
+  // 1-14C.2 : propriétaire RÉEL uniquement (rôle de la membership renvoyé
+  // par le serveur) — jamais `User.role` ni une permission déléguée.
+  {
+    href: "/app/organization/subscription",
+    label: "Abonnement",
+    ownerOnly: true,
+  },
 ];
 
 // Sous-shell de la section « Organisation » (1-9C) : onglets filtrés par
@@ -32,8 +39,11 @@ export default function OrganizationLayout({
   const { authContext } = useOrganizationShell();
   const effective = authContext?.effectivePermissions ?? [];
 
+  const isOwner = authContext?.role === "owner";
   const tabs = TABS.filter(
-    (tab) => !tab.permission || effective.includes(tab.permission),
+    (tab) =>
+      (!tab.permission || effective.includes(tab.permission)) &&
+      (!("ownerOnly" in tab) || isOwner),
   );
 
   return (

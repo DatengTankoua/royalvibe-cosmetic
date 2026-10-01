@@ -14,8 +14,9 @@ import { AllowInactiveSubscription } from './subscription-access';
  * `User.role`). Aucune route d'écriture : l'activation passe uniquement par
  * le script serveur.
  *
- * Projection explicite : état, période courante, dates utiles. Jamais de
- * référence, d'opérateur, d'identifiant de période ni de rang interne.
+ * Projection explicite : état, période courante, dates utiles et (1-14C.2)
+ * historique des périodes. Jamais de référence, d'opérateur, de source,
+ * d'identifiant de période ni de rang interne.
  */
 @Controller('organizations/current/subscription')
 export class SubscriptionsController {
@@ -31,9 +32,10 @@ export class SubscriptionsController {
   async current(
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    const view = await this.subscriptionsService.getState(
-      organizationContext.organizationId,
-    );
+    const { view, periods } =
+      await this.subscriptionsService.getStateWithHistory(
+        organizationContext.organizationId,
+      );
     return {
       state: view.state,
       currentPeriod: view.currentPeriod
@@ -46,6 +48,14 @@ export class SubscriptionsController {
         : null,
       coverageEndsAt: view.coverageEndsAt?.toISOString() ?? null,
       nextPeriodStartsAt: view.nextPeriodStartsAt?.toISOString() ?? null,
+      // 1-14C.2 : historique des PÉRIODES (pas des paiements), projection
+      // explicite, de la plus récente à la plus ancienne.
+      periods: periods.map((p) => ({
+        kind: p.kind,
+        term: p.term,
+        startsAt: p.startsAt.toISOString(),
+        endsAt: p.endsAt.toISOString(),
+      })),
     };
   }
 }

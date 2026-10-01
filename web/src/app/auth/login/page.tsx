@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { LoginError, useAuth } from "@/contexts/auth-context";
 import { EmailVerificationResend } from "@/components/auth/email-verification-resend";
 import type { SelectableOrganization } from "@/lib/api";
 import { Wordmark } from "@/components/brand/wordmark";
+import { BackToHome } from "@/components/landing/back-to-home";
 import Link from "next/link";
 
 export default function LoginPage() {
@@ -30,6 +31,17 @@ export default function LoginPage() {
   // reste l'autorité finale). Par défaut : désactivée.
   const registrationEnabled =
     process.env.NEXT_PUBLIC_REGISTRATION_ENABLED === "true";
+  // 1-14C.2 : retour d'une session limitée expirée (message seul, aucune
+  // donnée lue dans l'URL au-delà de ce marqueur).
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (
+      new URLSearchParams(window.location.search).get("session") ===
+      "limitee-expiree"
+    ) {
+      setNotice("Votre accès temporaire a expiré. Reconnectez-vous.");
+    }
+  }, []);
 
   const submit = async (organizationId?: string) => {
     setLoading(true);
@@ -42,7 +54,10 @@ export default function LoginPage() {
         return;
       }
       setPassword("");
-      router.push("/app");
+      // 1-14C.2 : abonnement inactif → écran d'accès limité (hors /app).
+      router.push(
+        outcome.status === "subscriptionInactive" ? "/access" : "/app",
+      );
     } catch (err: unknown) {
       if (err instanceof LoginError && err.code === "EMAIL_NOT_VERIFIED") {
         setOrganizations(null);
@@ -70,6 +85,7 @@ export default function LoginPage() {
     return (
       <div className="flex flex-1 items-center justify-center px-4 py-12 pb-[max(3rem,env(safe-area-inset-bottom))]">
         <div className="w-full max-w-sm space-y-6">
+          <BackToHome />
           <div className="space-y-3 text-center">
             <Wordmark className="mx-auto" size="large" />
             <p className="text-sm text-muted-foreground">
@@ -112,12 +128,19 @@ export default function LoginPage() {
   return (
     <div className="flex flex-1 items-center justify-center px-4 py-12 pb-[max(3rem,env(safe-area-inset-bottom))]">
       <div className="w-full max-w-sm space-y-6">
+        <BackToHome />
         <div className="space-y-3 text-center">
           <Wordmark className="mx-auto" size="large" />
           <p className="text-sm text-muted-foreground">
             Connexion à ton espace de gestion
           </p>
         </div>
+
+        {notice && !error && (
+          <p role="status" className="text-center text-sm">
+            {notice}
+          </p>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <div className="space-y-2">

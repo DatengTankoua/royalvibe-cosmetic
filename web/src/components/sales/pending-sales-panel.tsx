@@ -163,9 +163,11 @@ export function PendingSalesPanel() {
             aria-hidden
           />
           <p>
-            {blocked.reason === "access_denied"
-              ? "Envoi suspendu : le serveur a refusé l'accès (session, droits ou organisation). Reconnecte-toi ou contacte un administrateur ; les ventes restent sur cet appareil."
-              : "Envoi suspendu : une incohérence a été détectée. Exporte les ventes et contacte le support avant de retirer l'opération concernée."}
+            {blocked.reason === "subscription"
+              ? "Envoi suspendu : l'abonnement de ce commerce n'est pas actif. Les ventes restent sur cet appareil et repartiront après le renouvellement."
+              : blocked.reason === "access_denied"
+                ? "Envoi suspendu : le serveur a refusé l'accès (session, droits ou organisation). Reconnecte-toi ou contacte un administrateur ; les ventes restent sur cet appareil."
+                : "Envoi suspendu : une incohérence a été détectée. Exporte les ventes et contacte le support avant de retirer l'opération concernée."}
           </p>
         </div>
       )}

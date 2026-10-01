@@ -15,6 +15,22 @@ import {
 } from "lucide-react";
 import { Wordmark } from "@/components/brand/wordmark";
 import { SessionCta } from "@/components/landing/session-cta";
+import {
+  OfferConditions,
+  OfferGrid,
+} from "@/components/subscription/subscription-offers";
+import {
+  SUBSCRIPTION_OFFERS,
+  TRIAL_DAYS,
+  formatFcfa,
+  monthlyEquivalentXaf,
+} from "@/lib/subscription-offers";
+
+// Plus petit équivalent mensuel (affiché comme tel, jamais comme un prix
+// mensuel facturé).
+const lowestMonthlyEquivalent = Math.min(
+  ...SUBSCRIPTION_OFFERS.map(monthlyEquivalentXaf),
+);
 
 export const metadata: Metadata = {
   title: "Stock Master — Gestion des stocks et des ventes pour PME",
@@ -111,6 +127,10 @@ const steps = [
 // Landing publique (1-10A) : ne déclenche aucun appel métier authentifié —
 // seul `SessionCta` lit la session déjà en mémoire (jamais de fetch).
 export default function LandingPage() {
+  // Même flag d'affichage que la connexion/inscription (0B.5) ; le backend
+  // reste l'autorité finale.
+  const registrationEnabled =
+    process.env.NEXT_PUBLIC_REGISTRATION_ENABLED === "true";
   return (
     <div className="flex flex-1 flex-col">
       <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur-sm">
@@ -122,6 +142,12 @@ export default function LandingPage() {
               className="text-sm font-medium text-muted-foreground hover:text-foreground"
             >
               Fonctionnalités
+            </a>
+            <a
+              href="#tarifs"
+              className="text-sm font-medium text-muted-foreground hover:text-foreground"
+            >
+              Tarifs
             </a>
             <SessionCta variant="header" />
           </div>
@@ -140,8 +166,91 @@ export default function LandingPage() {
             suivi de performance de ton entreprise, avec une gestion fine des
             accès par organisation.
           </p>
-          <div className="mt-8 flex justify-center">
-            <SessionCta variant="hero" />
+          <div className="mt-8 flex flex-col items-center gap-4">
+            {registrationEnabled ? (
+              <div className="flex flex-col items-center gap-3 sm:flex-row">
+                <Link
+                  href="/auth/register"
+                  className="inline-flex h-12 items-center justify-center rounded-lg bg-(--brand-navy) px-7 text-base font-semibold text-white shadow-sm hover:bg-(--brand-navy)/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-navy)"
+                >
+                  Essayer gratuitement {TRIAL_DAYS} jours
+                </Link>
+                <a
+                  href="#tarifs"
+                  className="inline-flex h-12 items-center justify-center rounded-lg border border-(--brand-navy) px-7 text-base font-medium text-(--brand-navy) hover:bg-(--brand-navy)/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-navy)"
+                >
+                  Voir les tarifs
+                </a>
+              </div>
+            ) : (
+              <SessionCta variant="hero" />
+            )}
+            <p className="text-sm text-muted-foreground">
+              Sans carte bancaire · à partir de{" "}
+              <strong className="text-foreground">
+                {formatFcfa(lowestMonthlyEquivalent)} / mois
+              </strong>{" "}
+              en équivalent mensuel (formule 12 mois)
+            </p>
+            {registrationEnabled && (
+              <p className="text-sm text-muted-foreground">
+                Déjà un compte ?{" "}
+                <Link href="/auth/login" className="underline">
+                  Se connecter
+                </Link>
+              </p>
+            )}
+          </div>
+        </section>
+
+        {/* 1-14C.2 : offre unique, quatre durées, mise en avant juste sous
+        le hero (présentation seulement — aucune attribution depuis le
+        navigateur). L'essai suit le flag d'inscription, jamais contourné. */}
+        <section
+          id="tarifs"
+          aria-labelledby="tarifs-title"
+          className="scroll-mt-16 border-y border-border bg-(--brand-navy)/[0.03]"
+        >
+          <div className="mx-auto max-w-6xl px-4 py-14 sm:py-16">
+            <p className="text-center text-sm font-semibold tracking-wide text-(--brand-orange) uppercase">
+              Tarifs simples
+            </p>
+            <h2
+              id="tarifs-title"
+              className="mt-2 text-center text-2xl font-bold text-(--brand-navy) sm:text-3xl"
+            >
+              Une offre complète, la durée de ton choix
+            </h2>
+            <p className="mx-auto mt-3 max-w-2xl text-center text-muted-foreground">
+              Toutes les fonctionnalités pour tout ton commerce, sans supplément
+              par vendeur. Montants totaux en francs CFA pour la durée choisie.
+            </p>
+            <p className="mx-auto mt-5 w-fit rounded-full bg-(--brand-orange)/15 px-4 py-1.5 text-center text-sm font-semibold text-(--brand-navy)">
+              {TRIAL_DAYS} jours d&apos;essai gratuit, sans carte bancaire
+            </p>
+            <div className="mt-10">
+              <OfferGrid
+                cta={
+                  registrationEnabled
+                    ? {
+                        href: "/auth/register",
+                        label: "Commencer l'essai gratuit",
+                      }
+                    : undefined
+                }
+              />
+            </div>
+            <div className="mx-auto mt-8 max-w-2xl">
+              <OfferConditions />
+            </div>
+            {!registrationEnabled && (
+              <p className="mt-6 text-center text-sm text-muted-foreground">
+                Les inscriptions sont momentanément fermées.{" "}
+                <Link href="/auth/login" className="underline">
+                  Se connecter
+                </Link>
+              </p>
+            )}
           </div>
         </section>
 

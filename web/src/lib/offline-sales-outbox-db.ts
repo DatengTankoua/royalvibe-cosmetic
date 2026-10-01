@@ -55,14 +55,20 @@ export interface OutboxOperation {
   updatedAt: number;
 }
 
-export type PartitionBlockReason = "access_denied" | "corruption";
+// `subscription` (1-14C.2) : refus COMMERCIAL (abonnement inactif). Levé
+// uniquement par `clearSubscriptionBlock` sur un signal serveur explicite
+// (JWT applicatif, accès commercial ET saisie autorisés, même identité) —
+// jamais par un simple changement de token.
+export type PartitionBlockReason =
+  "access_denied" | "corruption" | "subscription";
 
 export interface OutboxPartitionMeta {
   partitionKey: string;
   nextSeq: number;
   lease?: { owner: string; expiresAt: number };
   // `access_denied` : levé automatiquement avec un AUTRE token (nouvelle
-  // session) ; `corruption` : jamais levé automatiquement (1-11C.3).
+  // session) ; `corruption` : jamais levé automatiquement (1-11C.3) ;
+  // `subscription` : levé seulement par `clearSubscriptionBlock` (1-14C.2).
   blocked?: {
     reason: PartitionBlockReason;
     tokenFingerprint?: string;
@@ -514,6 +520,38 @@ export async function setPartitionBlocked(
     await req(tx.objectStore(META).put(next));
   });
   notifyOutboxChanged("updated");
+}
+
+/**
+ * 1-14C.2 — levée d'un blocage COMMERCIAL de SA partition (identité
+ * vérifiée localement avec le token courant). Ne touche JAMAIS un blocage
+ * `corruption` ni `access_denied` (permissions, accès administratif) : un
+ * abonnement actif ne prouve rien sur ces refus. Aucune opération modifiée :
+ * mêmes UUID, payloads, dates. Renvoie `true` si un blocage a été levé.
+ */
+export async function clearSubscriptionBlock(params: {
+  userId: string;
+  organizationId: string;
+  token: string | null;
+}): Promise<boolean> {
+  if (!isIndexedDbAvailable()) return false;
+  const partitionKey = await verifiedPartition(params);
+  if (!partitionKey || !(await outboxDatabaseMayExist())) return false;
+  try {
+    const lifted = await withTx([META], "readwrite", async (tx) => {
+      const meta = await getMetaIn(tx, partitionKey);
+      if (meta.blocked?.reason !== "subscription") return false;
+      const next: OutboxPartitionMeta = { ...meta };
+      delete next.blocked;
+      await req(tx.objectStore(META).put(next));
+      return true;
+    });
+    if (lifted) notifyOutboxChanged("updated");
+    return lifted;
+  } catch {
+    console.warn("Offline sales outbox: levée du blocage indisponible.");
+    return false;
+  }
 }
 
 // ─── Bail de secours (sans Web Locks) ────────────────────────────────────────

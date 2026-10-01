@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { getToken } from "@/lib/auth";
 import { useAuth } from "@/contexts/auth-context";
@@ -24,8 +24,24 @@ import { useOnlineStatus } from "@/hooks/use-online-status";
 // `online`.
 const SocketContext = createContext<Socket | null>(null);
 
-export function SocketProvider({ children }: { children: React.ReactNode }) {
+// 1-14C.2 : monté UNIQUEMENT quand l'accès applicatif est ouvert (le shell
+// ne le rend pas sous un blocage commercial ; jamais avec un jeton limité).
+// Une déconnexion décidée par le SERVEUR (`io server disconnect`, ex.
+// échéance de couverture) n'est jamais suivie d'une reconnexion automatique
+// (comportement Socket.IO) : `onServerDisconnect` demande au shell de relire
+// le contexte, qui bascule si besoin sur l'écran de blocage — aucune boucle.
+export function SocketProvider({
+  children,
+  onServerDisconnect,
+}: {
+  children: React.ReactNode;
+  onServerDisconnect?: () => void;
+}) {
   const [socket, setSocket] = useState<Socket | null>(null);
+  const onServerDisconnectRef = useRef(onServerDisconnect);
+  useEffect(() => {
+    onServerDisconnectRef.current = onServerDisconnect;
+  }, [onServerDisconnect]);
   const { user, sessionVersion } = useAuth();
   const online = useOnlineStatus();
   const userId: string | null = user?._id ?? null;
@@ -38,6 +54,9 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     const instance = io(process.env.NEXT_PUBLIC_API_URL, {
       transports: ["websocket"],
       auth: token ? { token } : undefined,
+    });
+    instance.on("disconnect", (reason) => {
+      if (reason === "io server disconnect") onServerDisconnectRef.current?.();
     });
     setSocket(instance);
 

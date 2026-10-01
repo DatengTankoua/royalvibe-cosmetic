@@ -14,6 +14,7 @@ import { useOnlineStatus } from "@/hooks/use-online-status";
 import { getToken } from "@/lib/auth";
 import { hasPermission } from "@/lib/organization-permissions";
 import { readSalesCapability } from "@/lib/offline-sales-capability";
+import { canRecordSalesFromContext } from "@/lib/api";
 import { readVerifiedIdentity } from "@/lib/offline-identity-db";
 import {
   applyOperationAction,
@@ -254,8 +255,12 @@ export function OfflineSalesProvider({
     };
   }, [authContext, offlineIdentity]);
 
+  // 1-14C.2 : en ligne, la saisie exige l'accord SERVEUR explicite
+  // (`access.canRecordSales`, faux dès que l'accès commercial est bloqué) —
+  // une permission `sales.record` seule ne suffit plus.
   const canRecordSales = authContext
-    ? hasPermission(authContext, "sales.record")
+    ? canRecordSalesFromContext(authContext) &&
+      hasPermission(authContext, "sales.record")
     : offlineCapability;
 
   const operations = useMemo(

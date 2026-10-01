@@ -60,6 +60,14 @@ export interface GrantSubscriptionInput {
   grantedBy: string;
 }
 
+/** 1-14C.2 — entrée d'historique exposable (aucun champ interne). */
+export interface SubscriptionPeriodHistoryEntry {
+  kind: SubscriptionPeriodKind;
+  term: SubscriptionTerm | null;
+  startsAt: Date;
+  endsAt: Date;
+}
+
 export interface GrantedPeriodView {
   periodId: string;
   organizationId: string;
@@ -200,12 +208,39 @@ export class SubscriptionsService {
 
   /** État commercial à l'heure serveur ; organisation issue du contexte. */
   async getState(organizationId: string): Promise<SubscriptionStateView> {
+    return (await this.getStateWithHistory(organizationId)).view;
+  }
+
+  /**
+   * 1-14C.2 — état ET historique des périodes, en UNE lecture. L'historique
+   * est une projection explicite (nature, durée, début, fin), de la plus
+   * récente à la plus ancienne : jamais de référence, d'opérateur, de
+   * source ni de rang de chaîne. Lecture seule.
+   */
+  async getStateWithHistory(organizationId: string): Promise<{
+    view: SubscriptionStateView;
+    periods: SubscriptionPeriodHistoryEntry[];
+  }> {
     const periods = await this.periodModel
       .find({ organizationId: new Types.ObjectId(organizationId) })
       .select({ sequence: 1, kind: 1, term: 1, startsAt: 1, endsAt: 1 })
       .lean()
       .exec();
-    return computeSubscriptionState(periods, this.clock());
+    return {
+      view: computeSubscriptionState(periods, this.clock()),
+      periods: [...periods]
+        .sort(
+          (a, b) =>
+            b.startsAt.getTime() - a.startsAt.getTime() ||
+            b.sequence - a.sequence,
+        )
+        .map((p) => ({
+          kind: p.kind,
+          term: p.term,
+          startsAt: p.startsAt,
+          endsAt: p.endsAt,
+        })),
+    };
   }
 
   /**

@@ -1,5 +1,6 @@
 import {
   createSaleIdempotent,
+  isCommercialRefusalCode,
   setForcedLogoutListener,
   toSaleSyncOutcome,
 } from "./api";
@@ -63,6 +64,7 @@ type StopReason =
   | "token-changed"
   | "auth"
   | "access-denied"
+  | "subscription"
   | "corruption"
   | "lease-lost"
   | "error";
@@ -290,9 +292,12 @@ async function processPartition(
   const meta = await getPartitionMeta(s.partitionKey);
   if (meta.blocked) {
     // Refus d'accès levé seulement par une NOUVELLE session (autre token) ;
-    // corruption jamais levée automatiquement.
+    // corruption jamais levée automatiquement ; refus COMMERCIAL (1-14C.2)
+    // levé seulement par `clearSubscriptionBlock` (signal serveur explicite),
+    // jamais par un changement de token.
     if (
       meta.blocked.reason === "corruption" ||
+      meta.blocked.reason === "subscription" ||
       meta.blocked.tokenFingerprint === fingerprint
     ) {
       return { status: "blocked" };
@@ -444,14 +449,23 @@ async function applyDecision(
     case "stop-auth":
       await update({ status: "pending", lastError: decision.error });
       return { status: "stopped", reason: "auth" };
-    case "stop-block":
+    case "stop-block": {
+      // La vente reste `pending` (même UUID, même payload) : un refus n'est
+      // jamais un conflit métier définitif.
       await update({ status: "pending", lastError: decision.error });
+      // 1-14C.2 : refus COMMERCIAL distinct des refus de permissions ou
+      // d'accès administratif.
+      const commercial = isCommercialRefusalCode(decision.error.code);
       await setPartitionBlocked(s.partitionKey, {
-        reason: "access_denied",
+        reason: commercial ? "subscription" : "access_denied",
         tokenFingerprint: fingerprint,
         at: now,
       });
-      return { status: "stopped", reason: "access-denied" };
+      return {
+        status: "stopped",
+        reason: commercial ? "subscription" : "access-denied",
+      };
+    }
     case "aborted":
       await update({ status: "pending" });
       return {
