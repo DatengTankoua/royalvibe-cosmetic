@@ -6,6 +6,7 @@ import type { Server, Socket } from 'socket.io';
 import { UsersService } from '../users/users.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { SocketRegistryService } from '../organizations/socket-registry.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import {
   buildOriginAllowlist,
   parseCORSOrigin,
@@ -15,6 +16,7 @@ import {
 import {
   createAllowRequest,
   installSocketAuthMiddleware,
+  socketCoverageEndsAt,
 } from './socket-auth.middleware';
 
 /**
@@ -145,6 +147,7 @@ export class EventsGateway {
     private readonly usersService: UsersService,
     private readonly organizationsService: OrganizationsService,
     private readonly socketRegistry: SocketRegistryService,
+    private readonly subscriptionsService: SubscriptionsService,
   ) {}
 
   /**
@@ -167,6 +170,7 @@ export class EventsGateway {
       jwtService: this.jwtService,
       usersService: this.usersService,
       organizationsService: this.organizationsService,
+      subscriptionsService: this.subscriptionsService,
       logger: new Logger(EventsGateway.name),
     });
   }
@@ -195,11 +199,30 @@ export class EventsGateway {
     this.socketRegistry.unregister(organizationId, userId, client);
   }
 
+  /**
+   * 1-14C.1 — diffusion aux sockets de l'organisation dont la couverture
+   * connue n'est PAS échue (heure serveur) : aucun nouvel événement métier
+   * vers un socket commercialement bloqué, même avant que son contrôle à
+   * l'échéance ne le ferme. Synchrone, sans lecture DB (mono-instance, même
+   * limite que le registre). Les appelants restent en best effort après
+   * commit : une erreur ici ne transforme jamais une mutation en échec.
+   */
   emitToOrganization(
     organizationId: string,
     event: string,
     payload: unknown,
   ): void {
-    this.server.to(organizationRoom(organizationId)).emit(event, payload);
+    const room = this.server.sockets.adapter.rooms.get(
+      organizationRoom(organizationId),
+    );
+    if (!room) return;
+    const now = this.subscriptionsService.now().getTime();
+    for (const socketId of room) {
+      const socket = this.server.sockets.sockets.get(socketId);
+      if (!socket) continue;
+      const coverageEndsAt = socketCoverageEndsAt(socket);
+      if (coverageEndsAt === null || coverageEndsAt <= now) continue;
+      socket.emit(event, payload);
+    }
   }
 }

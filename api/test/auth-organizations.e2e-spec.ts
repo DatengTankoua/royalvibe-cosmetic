@@ -18,6 +18,7 @@ import {
   stopEphemeralMongoSafe,
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
+import { activateTestSubscriptions } from './e2e/subscription-fixtures';
 import {
   buildOriginAllowlist,
   parseCORSOrigin,
@@ -150,6 +151,10 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
         slug: 'suspended-org-19b',
         status: 'suspended',
       });
+      // 1-14C.1 : accès métier → période active explicite.
+      await activateTestSubscriptions(moduleFixture, [
+        suspendedOrg._id.toString(),
+      ]);
       const activeOrgWithSuspendedMembership = await organizationModel.create({
         name: 'Active Susp Memb 19B',
         slug: 'active-org-suspended-membership-19b',
@@ -250,6 +255,10 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
         slug: 'stranded-fallback-org-19b',
         status: 'active',
       });
+      // 1-14C.1 : accès métier → période active explicite.
+      await activateTestSubscriptions(moduleFixture, [
+        strandedFallbackOrg._id.toString(),
+      ]);
       strandedFallbackOrgId = strandedFallbackOrg._id.toString();
       await membershipModel.create({
         organizationId: strandedFallbackOrg._id,

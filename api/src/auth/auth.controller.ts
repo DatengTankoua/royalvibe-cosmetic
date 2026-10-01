@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
@@ -13,6 +14,7 @@ import { AuthService } from './auth.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
 import { effectivePermissions } from '../organizations/permissions';
+import { AllowInactiveSubscription } from '../subscriptions/subscription-access';
 import { AuthThrottlerGuard } from '../common/auth-rate-limiting';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -93,6 +95,7 @@ export class AuthController {
   // Garde de rate limiting (0B.6) : applicée UNIQUEMENT à /auth/login
   // (jamais en garde globale), avant la logique de login.
   @UseGuards(AuthThrottlerGuard)
+  @Header('Cache-Control', 'no-store')
   @Public()
   @Post('login')
   login(@Body() dto: LoginDto) {
@@ -170,7 +173,12 @@ export class AuthController {
   // 1-9B : @SkipOrganizationContext — l'organisation COURANTE (JWT) peut
   // être devenue inactive ; seule la cible (dto.organizationId) est
   // validée, par AuthService.switchOrganization → resolveActiveContext.
+  // 1-14C.1 : exception `identity` (l'organisation courante peut être
+  // expirée) ; le service refuse un jeton limité et applique le contrôle
+  // commercial à l'organisation CIBLE.
   @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @AllowInactiveSubscription('identity')
   @SkipOrganizationContext()
   @Post('switch-organization')
   switchOrganization(
@@ -183,6 +191,36 @@ export class AuthController {
       user._id.toString(),
       dto,
       user.sessionVersion,
+      user.accessScope,
+    );
+  }
+
+  // 1-14C.1 : jeton LIMITÉ → JWT applicatif, seulement si l'abonnement est
+  // actif. Body vide strict (refus 400 sinon) : aucun organizationId,
+  // rôle, statut, paiement ou date accepté. Organisation = contexte serveur.
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @AllowInactiveSubscription('identity')
+  @Post('subscription-access/complete')
+  completeSubscriptionAccess(
+    @CurrentUser() user: AuthenticatedPrincipal,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+    @Body() body: unknown,
+  ) {
+    // Corps vide uniquement : aucune donnée client n'entre dans l'échange.
+    if (
+      body !== undefined &&
+      body !== null &&
+      (typeof body !== 'object' || Object.keys(body).length > 0)
+    ) {
+      throw new BadRequestException({
+        code: 'UNEXPECTED_BODY',
+        message: 'Aucun paramètre attendu.',
+      });
+    }
+    return this.authService.completeSubscriptionAccess(
+      user,
+      organizationContext,
     );
   }
 
@@ -190,6 +228,8 @@ export class AuthController {
   // exclusivement du JWT) — alimente le sélecteur de switch frontend.
   // @SkipOrganizationContext : doit rester listable même si l'organisation
   // COURANTE du JWT est devenue inactive.
+  @Header('Cache-Control', 'no-store')
+  @AllowInactiveSubscription('identity')
   @SkipOrganizationContext()
   @Get('organizations')
   organizations(@CurrentUser() user: User) {
@@ -198,6 +238,9 @@ export class AuthController {
     );
   }
 
+  // 1-14C.1 : identification minimale, JWT applicatif ou limité.
+  @Header('Cache-Control', 'no-store')
+  @AllowInactiveSubscription('identity')
   @Get('me')
   me(@CurrentUser() user: AuthenticatedPrincipal) {
     // 1-13B : champs explicites — la version de session reste interne.
@@ -214,21 +257,40 @@ export class AuthController {
   // pour le frontend (jamais `User.role`, jamais un décodage JWT côté
   // client). Données exclusivement depuis `request.organizationContext`
   // (branché par `OrganizationGuard`, aucune résolution/lookup ici).
+  //
+  // 1-14C.1 : accessible avec un JWT limité ou un abonnement inactif (état
+  // d'accès). Les permissions restent les permissions RÉELLES ; `access`
+  // porte l'état commercial : un succès de cette route ne signifie PAS que
+  // le commerce est accessible (`access.applicationAccess`), et
+  // `access.canRecordSales` est faux dès que l'accès est bloqué, même si
+  // `sales.record` figure dans les permissions.
+  @Header('Cache-Control', 'no-store')
+  @AllowInactiveSubscription('identity')
   @Get('context')
-  context(
+  async context(
+    @CurrentUser() user: AuthenticatedPrincipal,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
+    const effective = effectivePermissions(
+      organizationContext.role,
+      organizationContext.permissions,
+    );
+    const access = await this.authService.accessViewFor(
+      organizationContext,
+      user.accessScope,
+    );
     return {
       userId: organizationContext.userId,
       organizationId: organizationContext.organizationId,
       role: organizationContext.role,
       permissions: organizationContext.permissions,
-      effectivePermissions: [
-        ...effectivePermissions(
-          organizationContext.role,
-          organizationContext.permissions,
-        ),
-      ],
+      effectivePermissions: [...effective],
+      access: {
+        ...access,
+        tokenScope: user.accessScope,
+        canRecordSales:
+          access.applicationAccess && effective.has('sales.record'),
+      },
     };
   }
 }

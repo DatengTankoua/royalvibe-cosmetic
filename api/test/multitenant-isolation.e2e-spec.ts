@@ -28,6 +28,7 @@ import {
   stopEphemeralMongoSafe,
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
+import { activateTestSubscriptions } from './e2e/subscription-fixtures';
 import { EMAIL_SENDER } from '../src/email-verification/email-sender';
 import {
   autoConfirmVerificationEmails,
@@ -209,6 +210,8 @@ describe('Phase 1-4E — portail transversal d’isolation multi-tenant', () => 
         { _id: new Types.ObjectId(ORG_A), slug: 'gate-org-a', name: 'Gate A' },
         { _id: new Types.ObjectId(ORG_B), slug: 'gate-org-b', name: 'Gate B' },
       ]);
+      // 1-14C.1 : accès métier → période active explicite.
+      await activateTestSubscriptions(moduleFixture, [ORG_A, ORG_B]);
       await membershipModel.create([
         {
           organizationId: new Types.ObjectId(ORG_A),

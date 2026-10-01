@@ -40,6 +40,8 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
     jwtService: { verifyAsync: jest.Mock };
     usersService: { findByIdForAuth: jest.Mock };
     organizationsService: { resolveActiveContext: jest.Mock };
+    // 1-14C.1 : abonnement actif par défaut (cas inactifs : spec dédiée).
+    subscriptionsService: { getAccessDecision: jest.Mock; now: jest.Mock };
     logger: { warn: jest.Mock; error: jest.Mock };
   }
 
@@ -66,6 +68,7 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
       jwtService: deps.jwtService,
       usersService: deps.usersService,
       organizationsService: deps.organizationsService,
+      subscriptionsService: deps.subscriptionsService,
       logger: deps.logger,
     });
     const middleware = use.mock.calls[0][0] as (
@@ -79,9 +82,10 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
     const { use, middleware } = installAndInstall();
     const next = jest.fn();
     middleware(socket, next);
-    // Laisse la promesse interne du handler se résoudre.
-    await Promise.resolve();
-    await Promise.resolve();
+    // Laisse la promesse interne du handler se résoudre (toutes les
+    // micro-tâches en attente, quel que soit le nombre d'`await` internes —
+    // 1-14C.1 ajoute la lecture de l'abonnement).
+    await new Promise((resolve) => setImmediate(resolve));
     return { use, next };
   }
 
@@ -125,6 +129,15 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
           role: 'seller',
           permissions: [],
         }),
+      },
+      subscriptionsService: {
+        getAccessDecision: jest.fn().mockResolvedValue({
+          state: 'active',
+          active: true,
+          coverageEndsAt: new Date('2099-01-01T00:00:00.000Z'),
+          checkedAt: new Date(),
+        }),
+        now: jest.fn(() => new Date()),
       },
       logger: { warn: jest.fn(), error: jest.fn() },
     };

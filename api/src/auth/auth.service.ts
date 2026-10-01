@@ -19,8 +19,22 @@ import {
 } from '../organizations/organizations.service';
 import {
   OrganizationCurrency,
+  OrganizationRole,
   OrganizationStatus,
 } from '../organizations/permissions';
+import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import {
+  ACCESS_SCOPE_CLAIM,
+  AccessScope,
+  RESTRICTED_TOKEN_TTL_SECONDS,
+  SubscriptionAccessDecision,
+  SubscriptionAccessView,
+  subscriptionAccessLimitedException,
+  subscriptionInactiveException,
+  subscriptionStatusUnavailableException,
+  toSubscriptionAccessView,
+} from '../subscriptions/subscription-access';
 import type { InvitationAcceptanceResult } from '../organizations/organizations.service';
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
 import {
@@ -97,6 +111,7 @@ export class AuthService {
     private organizationsService: OrganizationsService,
     @InjectConnection() private connection: Connection,
     private emailVerificationService: EmailVerificationService,
+    private subscriptionsService: SubscriptionsService,
   ) {}
 
   /**
@@ -242,14 +257,7 @@ export class AuthService {
         userId,
         dto.organizationId,
       );
-      return {
-        access_token: this.sign(
-          userId,
-          context.organizationId,
-          currentSessionVersion(user),
-        ),
-        user: this.sanitize(user),
-      };
+      return this.loginForContext(user, context);
     }
 
     const organizations =
@@ -262,14 +270,13 @@ export class AuthService {
     }
 
     if (organizations.length === 1) {
-      return {
-        access_token: this.sign(
-          userId,
-          organizations[0].organizationId,
-          currentSessionVersion(user),
-        ),
-        user: this.sanitize(user),
-      };
+      // 1-14C.1 : contexte résolu (rôle réel requis pour `canRenew`) —
+      // mêmes contrôles membership/organisation, refus uniforme inchangé.
+      const context = await this.organizationsService.resolveActiveContext(
+        userId,
+        organizations[0].organizationId,
+      );
+      return this.loginForContext(user, context);
     }
 
     // Plusieurs organisations : le client doit choisir. Aucune donnée
@@ -292,15 +299,153 @@ export class AuthService {
     userId: string,
     dto: SwitchOrganizationDto,
     sessionVersion: number,
+    accessScope: AccessScope,
   ): Promise<{ access_token: string }> {
+    // 1-14C.1 : un jeton limité ne change jamais d'organisation (seul
+    // l'échange `subscription-access/complete` délivre un JWT applicatif).
+    if (accessScope !== AccessScope.APP) {
+      throw subscriptionAccessLimitedException();
+    }
     const context = await this.organizationsService.resolveActiveContext(
       userId,
       dto.organizationId,
     );
+    const decision = await this.readAccessDecision(context.organizationId);
     // 1-13B : le nouveau JWT hérite de la version VALIDÉE du JWT appelant,
-    // jamais d'une version relue plus récente. Une réinitialisation survenue
-    // pendant la requête est détectée ici (refus) ; si elle survient après
-    // ce contrôle, le JWT émis porte l'ancienne version et sera refusé.
+    // jamais d'une version relue plus récente. Contrôle APRÈS toutes les
+    // lectures : une réinitialisation survenue pendant la requête est
+    // détectée ici (refus) ; si elle survient après, le JWT émis porte
+    // l'ancienne version et sera refusé.
+    await this.assertSessionVersion(userId, sessionVersion);
+    if (!decision.active) {
+      throw this.inactiveWithRestrictedToken(context, decision, sessionVersion);
+    }
+    return {
+      access_token: this.sign(userId, context.organizationId, sessionVersion),
+    };
+  }
+
+  /**
+   * 1-14C.1 — échange d'un jeton LIMITÉ contre un JWT applicatif, une fois
+   * l'abonnement actif. Revalidés : compte, email et version de session
+   * (`JwtStrategy`), membership et organisation (`OrganizationGuard`, cette
+   * requête), abonnement actif (relu ici), puis version de session APRÈS
+   * toutes les lectures. Signé avec la version VALIDÉE du jeton limité,
+   * jamais une version relue. Aucune donnée du body.
+   */
+  async completeSubscriptionAccess(
+    principal: {
+      _id: { toString(): string };
+      sessionVersion: number;
+      accessScope: AccessScope;
+    },
+    context: ResolvedOrganizationContext,
+  ): Promise<{ access_token: string }> {
+    if (principal.accessScope !== AccessScope.SUBSCRIPTION_LIMITED) {
+      throw new BadRequestException({
+        code: 'RESTRICTED_TOKEN_REQUIRED',
+        message: 'Cet échange exige une session limitée.',
+      });
+    }
+    const userId = principal._id.toString();
+    const decision = await this.readAccessDecision(context.organizationId);
+    await this.assertSessionVersion(userId, principal.sessionVersion);
+    if (!decision.active) {
+      throw subscriptionInactiveException({
+        access: this.accessView(
+          decision,
+          context,
+          AccessScope.SUBSCRIPTION_LIMITED,
+        ),
+      });
+    }
+    return {
+      access_token: this.sign(
+        userId,
+        context.organizationId,
+        principal.sessionVersion,
+      ),
+    };
+  }
+
+  /** 1-14C.1 — projection d'accès de l'organisation courante. */
+  async accessViewFor(
+    context: ResolvedOrganizationContext,
+    scope: AccessScope,
+  ): Promise<SubscriptionAccessView> {
+    const decision = await this.readAccessDecision(context.organizationId);
+    return this.accessView(decision, context, scope);
+  }
+
+  /**
+   * Connexion pour un contexte VALIDÉ : abonnement actif → contrat
+   * habituel ; sinon 403 `SUBSCRIPTION_INACTIVE` avec un jeton limité,
+   * jamais de JWT applicatif. Version lue avec les identifiants (1-13B).
+   */
+  private async loginForContext(
+    user: UserDocument,
+    context: ResolvedOrganizationContext,
+  ): Promise<LoginResult> {
+    const version = currentSessionVersion(user);
+    const decision = await this.readAccessDecision(context.organizationId);
+    if (!decision.active) {
+      throw this.inactiveWithRestrictedToken(context, decision, version);
+    }
+    return {
+      access_token: this.sign(context.userId, context.organizationId, version),
+      user: this.sanitize(user),
+    };
+  }
+
+  private inactiveWithRestrictedToken(
+    context: ResolvedOrganizationContext,
+    decision: SubscriptionAccessDecision,
+    sessionVersion: number,
+  ) {
+    return subscriptionInactiveException({
+      restrictedToken: this.jwtService.sign(
+        {
+          sub: context.userId,
+          orgId: context.organizationId,
+          [SESSION_VERSION_CLAIM]: sessionVersion,
+          [ACCESS_SCOPE_CLAIM]: AccessScope.SUBSCRIPTION_LIMITED,
+        },
+        { expiresIn: RESTRICTED_TOKEN_TTL_SECONDS },
+      ),
+      access: this.accessView(
+        decision,
+        context,
+        AccessScope.SUBSCRIPTION_LIMITED,
+      ),
+    });
+  }
+
+  private accessView(
+    decision: SubscriptionAccessDecision,
+    context: ResolvedOrganizationContext,
+    scope: AccessScope,
+  ): SubscriptionAccessView {
+    return toSubscriptionAccessView(decision, {
+      isOwner: context.role === OrganizationRole.OWNER,
+      scope,
+    });
+  }
+
+  /** Échec technique de lecture → 503 contrôlé, jamais une « expiration ». */
+  private async readAccessDecision(
+    organizationId: string,
+  ): Promise<SubscriptionAccessDecision> {
+    try {
+      return await this.subscriptionsService.getAccessDecision(organizationId);
+    } catch {
+      throw subscriptionStatusUnavailableException();
+    }
+  }
+
+  private async assertSessionVersion(
+    userId: string,
+    sessionVersion: number,
+  ): Promise<void> {
     const user = await this.usersService.findByIdForAuth(userId);
     if (!user || currentSessionVersion(user) !== sessionVersion) {
       throw new UnauthorizedException({
@@ -308,9 +453,6 @@ export class AuthService {
         message: SESSION_REVOKED_MESSAGE,
       });
     }
-    return {
-      access_token: this.sign(userId, context.organizationId, sessionVersion),
-    };
   }
 
   private sign(
@@ -322,10 +464,12 @@ export class AuthService {
     // vient exclusivement du document User chargé par la stratégie.
     // 1-13B : `ver` = version de session lue avec les identifiants (login)
     // ou validée dans le JWT appelant (switch).
+    // 1-14C.1 : portée applicative EXPLICITE (claim signé).
     return this.jwtService.sign({
       sub: userId,
       orgId: organizationId,
       [SESSION_VERSION_CLAIM]: sessionVersion,
+      [ACCESS_SCOPE_CLAIM]: AccessScope.APP,
     });
   }
 

@@ -34,6 +34,7 @@ import {
   stopEphemeralMongoSafe,
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
+import { activateTestSubscriptions } from './e2e/subscription-fixtures';
 import {
   buildHttpCorsOptions,
   buildOriginAllowlist,
@@ -210,6 +211,8 @@ describe('App (e2e 1-11C.1) — idempotence POST /sales', () => {
       ]) {
         await organizationModel.create({ _id: id, slug, name: slug });
       }
+      // 1-14C.1 : accès métier → période active explicite.
+      await activateTestSubscriptions(moduleFixture, [ORG_A, ORG_B, ORG_C]);
       await seedUser('ownerA', ORG_A, 'owner');
       await seedUser('sellerA', ORG_A, 'seller');
       await seedUser('sellerA2', ORG_A, 'seller');

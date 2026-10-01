@@ -23,22 +23,35 @@ import {
   hasPermission,
   PERMISSION_DENIED_RESPONSE,
 } from '../organizations/permissions';
+import {
+  AllowInactiveSubscription,
+  CurrentSubscriptionAccess,
+} from '../subscriptions/subscription-access';
+import type { SubscriptionAccessDecision } from '../subscriptions/subscription-access';
 
 @Controller('sales')
 export class SalesController {
   constructor(private readonly salesService: SalesService) {}
 
+  // 1-14C.1 : exception `sale-replay` — JWT applicatif, membership et
+  // `sales.record` toujours exigés. Abonnement inactif : seule la
+  // confirmation d'une opération DÉJÀ appliquée est possible (aucune
+  // écriture) ; toute nouvelle vente → 403 `SUBSCRIPTION_INACTIVE`.
   @Post()
+  @AllowInactiveSubscription('sale-replay')
   @RequirePermissions('sales.record')
   create(
     @Body() dto: CreateSaleDto,
     @CurrentUser() user: User,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+    @CurrentSubscriptionAccess() access: SubscriptionAccessDecision | undefined,
   ) {
     return this.salesService.create(
       organizationContext.organizationId,
       dto,
       user._id.toString(),
+      // Fail-closed : sans décision du guard, aucune nouvelle écriture.
+      { newWritesAllowed: access?.active === true },
     );
   }
 

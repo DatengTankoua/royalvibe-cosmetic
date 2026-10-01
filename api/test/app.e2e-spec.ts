@@ -28,6 +28,7 @@ import {
   stopEphemeralMongoSafe,
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
+import { activateTestSubscriptions } from './e2e/subscription-fixtures';
 import {
   OriginConfigError,
   buildHttpCorsOptions,
@@ -237,6 +238,8 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
         slug: 'org-b',
         name: 'Org B',
       });
+      // 1-14C.1 : accès métier → période active explicite.
+      await activateTestSubscriptions(moduleFixture, [ORG_A_ID, ORG_B_ID]);
 
       // Fixtures memberships : admin (owner) et seller (seller) + leurs
       // 2 orgs respectives. Le `userId` est le ObjectId de l'utilisateur.

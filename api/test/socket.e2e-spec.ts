@@ -26,6 +26,7 @@ import {
   stopEphemeralMongoSafe,
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
+import { activateTestSubscriptions } from './e2e/subscription-fixtures';
 import { EMAIL_SENDER } from '../src/email-verification/email-sender';
 import {
   autoConfirmVerificationEmails,
@@ -466,6 +467,11 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
           slug: 'socket-e2e-org-b',
           name: 'Socket E2E Org B',
         },
+      ]);
+      // 1-14C.1 : accès métier → période active explicite.
+      await activateTestSubscriptions(moduleFixture, [
+        SOCKET_ORG_ID,
+        SOCKET_ORG_B_ID,
       ]);
       // ADMIN + SELLER existent déjà (registrés plus haut). Le user DELETED
       // est enregistré PLUS BAS (scénario « supprimé ») : sa membership est

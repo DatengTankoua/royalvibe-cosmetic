@@ -26,6 +26,7 @@ import { ProductsService } from '../products/products.service';
 import { EventsGateway } from '../events/events.gateway';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/schemas/audit-log.schema';
+import { subscriptionInactiveException } from '../subscriptions/subscription-access';
 
 @Injectable()
 export class SalesService {
@@ -76,8 +77,33 @@ export class SalesService {
     organizationId: string,
     dto: CreateSaleDto,
     sellerId: string,
+    options: { newWritesAllowed: boolean } = { newWritesAllowed: true },
   ): Promise<SaleDocument> {
     const input = normalizeCreateSale(dto);
+    // 1-14C.1 — abonnement inactif : AUCUNE nouvelle écriture. Seule une clé
+    // déjà appliquée est confirmée par le MÊME `replay` (mêmes contrôles
+    // vendeur / payload canonique / vente supprimée, aucun stock, audit ni
+    // événement). Clé absente ou inconnue → 403 avant toute écriture.
+    // `occurredAt` client n'intervient que dans la comparaison canonique.
+    if (!options.newWritesAllowed) {
+      if (dto.clientOperationId === undefined) {
+        throw subscriptionInactiveException();
+      }
+      const applied = await this.saleOperationModel
+        .findOne({
+          organizationId: new Types.ObjectId(organizationId),
+          clientOperationId: dto.clientOperationId,
+        })
+        .read('primary')
+        .exec();
+      if (!applied) throw subscriptionInactiveException();
+      return this.replay(
+        organizationId,
+        applied,
+        sellerId,
+        computeSaleRequestHash(input),
+      );
+    }
     if (dto.clientOperationId === undefined) {
       // Flux historique : aucune déduplication.
       return this.createFresh(

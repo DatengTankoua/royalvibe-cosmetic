@@ -1,8 +1,9 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Header } from '@nestjs/common';
 import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
 import { OwnerOnly } from '../auth/decorators/permissions.decorator';
 import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
 import { SubscriptionsService } from './subscriptions.service';
+import { AllowInactiveSubscription } from './subscription-access';
 
 /**
  * 1-14B — Lecture SEULE de l'état d'abonnement de l'organisation COURANTE
@@ -20,7 +21,12 @@ import { SubscriptionsService } from './subscriptions.service';
 export class SubscriptionsController {
   constructor(private readonly subscriptionsService: SubscriptionsService) {}
 
+  // 1-14C.1 : parcours de renouvellement — lisible avec un abonnement
+  // inactif et/ou un jeton limité, TOUJOURS réservé au propriétaire réel
+  // (`PermissionGuard`). N'ouvre ni branding, ni membres, ni données métier.
   @Get()
+  @Header('Cache-Control', 'no-store')
+  @AllowInactiveSubscription('identity')
   @OwnerOnly('billing.identity')
   async current(
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,

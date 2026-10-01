@@ -13,6 +13,8 @@ import {
   ORGANIZATION_ACCESS_DENIED,
   OrganizationsService,
 } from '../organizations/organizations.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { AccessScope } from '../subscriptions/subscription-access';
 import { EmailVerificationService } from '../email-verification/email-verification.service';
 
 const USER_OBJECT_ID = '112233445566778899001122';
@@ -78,6 +80,8 @@ describe('AuthService', () => {
   };
   let connectionFixture: ReturnType<typeof makeConnectionFixture>;
   let emailVerification: { issueForUser: jest.Mock };
+  // 1-14C.1 : contrôle commercial (actif par défaut ; cas inactifs dédiés).
+  let subscriptions: { getAccessDecision: jest.Mock };
 
   async function build() {
     usersService = {
@@ -87,12 +91,30 @@ describe('AuthService', () => {
     };
     jwt = { sign: jest.fn().mockReturnValue('signed-token') };
     organizations = {
-      resolveActiveContext: jest.fn(),
+      // 1-14C.1 : le login à organisation unique résout aussi le contexte
+      // (rôle réel) — défaut : membership active pour l'organisation demandée.
+      resolveActiveContext: jest.fn((userId: string, organizationId: string) =>
+        Promise.resolve({
+          userId,
+          organizationId,
+          membershipId: '99',
+          role: 'owner',
+          permissions: [],
+        }),
+      ),
       listActiveOrganizations: jest.fn(),
       createOwnerOrganization: jest.fn(),
     };
     connectionFixture = makeConnectionFixture();
     emailVerification = { issueForUser: jest.fn().mockResolvedValue('sent') };
+    subscriptions = {
+      getAccessDecision: jest.fn().mockResolvedValue({
+        state: 'active',
+        active: true,
+        coverageEndsAt: new Date('2099-01-01T00:00:00.000Z'),
+        checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      }),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
@@ -104,6 +126,7 @@ describe('AuthService', () => {
           useValue: connectionFixture.connection,
         },
         { provide: EmailVerificationService, useValue: emailVerification },
+        { provide: SubscriptionsService, useValue: subscriptions },
       ],
     }).compile();
     return module.get(AuthService);
@@ -460,6 +483,7 @@ describe('AuthService', () => {
         sub: USER_OBJECT_ID,
         orgId: ORG_A_ID,
         ver: 0,
+        accessScope: 'app',
       });
       expect(user.email).toBe('ada@example.com');
       expect(user.password).toBeUndefined();
@@ -543,6 +567,7 @@ describe('AuthService', () => {
         sub: USER_OBJECT_ID,
         orgId: ORG_A_ID,
         ver: 0,
+        accessScope: 'app',
       });
       // la liste n’est PAS consommée quand un choix est fourni :
       expect(organizations.listActiveOrganizations).not.toHaveBeenCalled();
@@ -589,7 +614,14 @@ describe('AuthService', () => {
       expect(jwt.sign).toHaveBeenCalledTimes(1);
       const payload = jwt.sign.mock.calls[0][0] as Record<string, unknown>;
       // 1-13B : `ver` = version de session (absente en base → 0).
-      expect(Object.keys(payload).sort()).toEqual(['orgId', 'sub', 'ver']);
+      // 1-14C.1 : portée applicative explicite.
+      expect(Object.keys(payload).sort()).toEqual([
+        'accessScope',
+        'orgId',
+        'sub',
+        'ver',
+      ]);
+      expect(payload.accessScope).toBe('app');
       expect(payload.ver).toBe(0);
       expect(payload.sub).toBe(USER_OBJECT_ID);
       expect(payload.orgId).toBe(ORG_A_ID);
@@ -613,6 +645,7 @@ describe('AuthService', () => {
         sub: USER_OBJECT_ID,
         orgId: ORG_A_ID,
         ver: 4,
+        accessScope: 'app',
       });
       const flat = JSON.stringify(result);
       expect(flat).not.toContain('authVersion');
@@ -642,6 +675,7 @@ describe('AuthService', () => {
           organizationId: ORG_B_ID,
         },
         3,
+        AccessScope.APP,
       );
 
       expect(access_token).toBe('signed-token');
@@ -654,6 +688,7 @@ describe('AuthService', () => {
         sub: USER_OBJECT_ID,
         orgId: ORG_B_ID,
         ver: 3,
+        accessScope: 'app',
       });
     });
 
@@ -670,7 +705,12 @@ describe('AuthService', () => {
         permissions: [],
       });
       const error: unknown = await service
-        .switchOrganization(USER_OBJECT_ID, { organizationId: ORG_B_ID }, 3)
+        .switchOrganization(
+          USER_OBJECT_ID,
+          { organizationId: ORG_B_ID },
+          3,
+          AccessScope.APP,
+        )
         .catch((e: unknown) => e);
       expect(error).toBeInstanceOf(UnauthorizedException);
       expect((error as UnauthorizedException).getResponse()).toMatchObject({
@@ -693,11 +733,13 @@ describe('AuthService', () => {
         USER_OBJECT_ID,
         { organizationId: ORG_B_ID },
         0,
+        AccessScope.APP,
       );
       expect(jwt.sign).toHaveBeenCalledWith({
         sub: USER_OBJECT_ID,
         orgId: ORG_B_ID,
         ver: 0,
+        accessScope: 'app',
       });
     });
 
@@ -710,7 +752,12 @@ describe('AuthService', () => {
         }),
       );
       const error: unknown = await service
-        .switchOrganization(USER_OBJECT_ID, { organizationId: ORG_B_ID }, 0)
+        .switchOrganization(
+          USER_OBJECT_ID,
+          { organizationId: ORG_B_ID },
+          0,
+          AccessScope.APP,
+        )
         .catch((e: unknown) => e);
       expect(error).toBeInstanceOf(ForbiddenException);
       expect(

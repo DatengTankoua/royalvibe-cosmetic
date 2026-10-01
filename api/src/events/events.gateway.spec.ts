@@ -5,6 +5,7 @@ import { EventsGateway } from './events.gateway';
 import { UsersService } from '../users/users.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { SocketRegistryService } from '../organizations/socket-registry.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
 /**
  * Tests unitaires du `EventsGateway` (phase 0B.3).
@@ -40,6 +41,7 @@ import { SocketRegistryService } from '../organizations/socket-registry.service'
  */
 
 const TEST_JWT_SECRET = 'unit-gateway-secret-not-production';
+const NOW = new Date('2026-06-01T00:00:00.000Z');
 
 /** Clés de métadonnées du décorateur `@WebSocketGateway` (valeur réelle —
  *  vérifiée dans @nestjs/websockets/constants : 'websockets:gateway_options'
@@ -69,6 +71,10 @@ describe('EventsGateway (unité)', () => {
           useValue: { resolveActiveContext: jest.fn() },
         },
         { provide: SocketRegistryService, useValue: socketRegistry },
+        {
+          provide: SubscriptionsService,
+          useValue: { getAccessDecision: jest.fn(), now: () => NOW },
+        },
       ],
     }).compile();
     gateway = module.get(EventsGateway);
@@ -291,17 +297,52 @@ describe('EventsGateway (unité)', () => {
       expect(socketRegistry.unregister).not.toHaveBeenCalled();
     });
 
-    it('émet uniquement via server.to(room).emit', () => {
-      const emit = jest.fn();
-      const to = jest.fn(() => ({ emit }));
-      gateway.server = { to } as never;
+    it('1-14C.1 : émet uniquement aux sockets de la room dont la couverture n’est pas échue', () => {
+      const live = {
+        data: { subscriptionCoverageEndsAt: NOW.getTime() + 1 },
+        emit: jest.fn(),
+      };
+      const ended = {
+        data: { subscriptionCoverageEndsAt: NOW.getTime() },
+        emit: jest.fn(),
+      };
+      const unknown = { data: {}, emit: jest.fn() };
+      const otherOrg = {
+        data: { subscriptionCoverageEndsAt: NOW.getTime() + 1 },
+        emit: jest.fn(),
+      };
+      const rooms = new Map([
+        [
+          'organization:aaaaaaaaaaaaaaaaaaaaaaaa',
+          new Set(['live', 'ended', 'unknown', 'gone']),
+        ],
+        ['organization:bbbbbbbbbbbbbbbbbbbbbbbb', new Set(['other'])],
+      ]);
+      const sockets = new Map<string, unknown>([
+        ['live', live],
+        ['ended', ended],
+        ['unknown', unknown],
+        ['other', otherOrg],
+      ]);
+      gateway.server = { sockets: { adapter: { rooms }, sockets } } as never;
 
       gateway.emitToOrganization('aaaaaaaaaaaaaaaaaaaaaaaa', 'sale:created', {
         id: 'sale-a',
       });
 
-      expect(to).toHaveBeenCalledWith('organization:aaaaaaaaaaaaaaaaaaaaaaaa');
-      expect(emit).toHaveBeenCalledWith('sale:created', { id: 'sale-a' });
+      expect(live.emit).toHaveBeenCalledWith('sale:created', { id: 'sale-a' });
+      expect(ended.emit).not.toHaveBeenCalled();
+      expect(unknown.emit).not.toHaveBeenCalled();
+      expect(otherOrg.emit).not.toHaveBeenCalled();
+    });
+
+    it('1-14C.1 : room absente → aucune émission, aucune erreur', () => {
+      gateway.server = {
+        sockets: { adapter: { rooms: new Map() }, sockets: new Map() },
+      } as never;
+      expect(() =>
+        gateway.emitToOrganization('cccccccccccccccccccccccc', 'x', {}),
+      ).not.toThrow();
     });
   });
 });

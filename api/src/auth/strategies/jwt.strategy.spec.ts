@@ -31,7 +31,13 @@ function expectedPrincipal(overrides: Record<string, unknown> = {}) {
   void _verified;
   // 1-13B : version de session validée, portée par le principal.
   const sessionVersion = typeof _version === 'number' ? _version : 0;
-  return { ...user, organizationId: ORG_ID, sessionVersion };
+  // 1-14C.1 : claim de portée absent (historique) → `app`.
+  return {
+    ...user,
+    organizationId: ORG_ID,
+    sessionVersion,
+    accessScope: 'app',
+  };
 }
 
 describe('JwtStrategy', () => {

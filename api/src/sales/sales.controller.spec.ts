@@ -116,15 +116,37 @@ describe('SalesController — transmission du tenant à la création (1-4C.1)', 
 
   const ctxA = makeContext(ORG_A);
 
+  const ACTIVE = {
+    state: 'active' as const,
+    active: true,
+    coverageEndsAt: new Date('2099-01-01T00:00:00.000Z'),
+    checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+  };
+
   it('create : transmet l’org du contexte AVANT le DTO et le sellerId', async () => {
-    await controller.create(saleDto, seller, ctxA);
+    await controller.create(saleDto, seller, ctxA, ACTIVE);
     expect(serviceStub.create).toHaveBeenCalledTimes(1);
-    expect(serviceStub.create).toHaveBeenCalledWith(ORG_A, saleDto, SELLER_ID);
+    expect(serviceStub.create).toHaveBeenCalledWith(ORG_A, saleDto, SELLER_ID, {
+      newWritesAllowed: true,
+    });
+  });
+
+  it('1-14C.1 : abonnement inactif ou décision absente → aucune nouvelle écriture autorisée', async () => {
+    await controller.create(saleDto, seller, ctxA, {
+      ...ACTIVE,
+      state: 'expired',
+      active: false,
+    });
+    await controller.create(saleDto, seller, ctxA, undefined);
+    expect(serviceStub.create.mock.calls.map((c) => c[3])).toEqual([
+      { newWritesAllowed: false },
+      { newWritesAllowed: false },
+    ]);
   });
 
   it('create : un `organizationId` falsifié dans le DTO n’influence jamais l’org transmise', async () => {
     const forgedDto = { ...saleDto, organizationId: ORG_B };
-    await controller.create(forgedDto, seller, ctxA);
+    await controller.create(forgedDto, seller, ctxA, ACTIVE);
     expect(serviceStub.create).toHaveBeenCalledTimes(1);
     // le service reçoit QUE A (celle du contexte) :
     expect(serviceStub.create.mock.calls[0][0]).toBe(ORG_A);

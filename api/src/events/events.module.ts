@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { UsersModule } from '../users/users.module';
+import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { EventsGateway } from './events.gateway';
 
 /**
@@ -11,7 +12,8 @@ import { EventsGateway } from './events.gateway';
  * périmètre.
  */
 @Module({
-  imports: [AuthModule, UsersModule, OrganizationsModule],
+  // 1-14C.1 : SubscriptionsModule — contrôle commercial des sockets.
+  imports: [AuthModule, UsersModule, OrganizationsModule, SubscriptionsModule],
   providers: [EventsGateway],
   exports: [EventsGateway],
 })

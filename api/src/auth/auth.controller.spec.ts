@@ -55,6 +55,7 @@ describe('AuthController', () => {
   const AUTH_USER = {
     _id: '112233445566778899001122',
     sessionVersion: 2,
+    accessScope: 'app',
   } as unknown;
 
   function callRegister(): unknown {
@@ -94,6 +95,14 @@ describe('AuthController', () => {
             login: loginMock,
             switchOrganization: switchMock,
             acceptInvitation: acceptInvitationMock,
+            // 1-14C.1 : projection d'accès (abonnement actif simulé).
+            accessViewFor: jest.fn().mockResolvedValue({
+              subscriptionState: 'active',
+              applicationAccess: true,
+              coverageEndsAt: '2099-01-01T00:00:00.000Z',
+              checkedAt: '2026-01-01T00:00:00.000Z',
+              canRenew: false,
+            }),
           },
         },
         {
@@ -204,6 +213,7 @@ describe('AuthController', () => {
       AUTH_USER._id,
       { organizationId: dto.organizationId },
       2,
+      'app',
     );
     // aucun champ utilisateur du body n'est transmis :
     expect(switchMock.mock.calls[0][1]).toEqual({
@@ -223,6 +233,7 @@ describe('AuthController', () => {
       AUTH_USER._id,
       { organizationId: dto.organizationId },
       2,
+      'app',
     );
   });
 
@@ -374,7 +385,7 @@ describe('AuthController', () => {
 
   // ---- contexte d'autorisation (1-9C) ----
 
-  it('context : renvoie exclusivement les champs de request.organizationContext (jamais un lookup)', () => {
+  it('context : renvoie exclusivement les champs de request.organizationContext (jamais un lookup)', async () => {
     const organizationContext = {
       userId: '111111111111111111111111',
       organizationId: '222222222222222222222222',
@@ -382,7 +393,7 @@ describe('AuthController', () => {
       role: OrganizationRole.SELLER,
       permissions: ['analytics.read'] as DelegablePermission[],
     };
-    const out = controller.context(organizationContext);
+    const out = await controller.context(AUTH_USER, organizationContext);
     expect(out).toEqual({
       userId: organizationContext.userId,
       organizationId: organizationContext.organizationId,
@@ -394,13 +405,23 @@ describe('AuthController', () => {
         'sales.view_own',
         'analytics.read',
       ]),
+      // 1-14C.1 : état commercial séparé des permissions réelles.
+      access: {
+        subscriptionState: 'active',
+        applicationAccess: true,
+        coverageEndsAt: '2099-01-01T00:00:00.000Z',
+        checkedAt: '2026-01-01T00:00:00.000Z',
+        canRenew: false,
+        tokenScope: 'app',
+        canRecordSales: true,
+      },
     });
     expect(out.effectivePermissions).toHaveLength(3);
     // jamais membershipId (donnée interne, hors contrat de réponse) :
     expect(out).not.toHaveProperty('membershipId');
   });
 
-  it('context : owner sans permission supplémentaire → effectivePermissions couvre déjà tout le délégable', () => {
+  it('context : owner sans permission supplémentaire → effectivePermissions couvre déjà tout le délégable', async () => {
     const organizationContext = {
       userId: '111111111111111111111111',
       organizationId: '222222222222222222222222',
@@ -408,7 +429,7 @@ describe('AuthController', () => {
       role: OrganizationRole.OWNER,
       permissions: [] as DelegablePermission[],
     };
-    const out = controller.context(organizationContext);
+    const out = await controller.context(AUTH_USER, organizationContext);
     expect(out.effectivePermissions).toEqual(
       expect.arrayContaining(ALL_DELEGABLE_PERMISSIONS as unknown as string[]),
     );

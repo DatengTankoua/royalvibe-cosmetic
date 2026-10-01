@@ -583,6 +583,8 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
     });
 
     it('admin (toutes permissions + rôle legacy admin) et vendeur → 403 PERMISSION_DENIED', async () => {
+      // 1-14C.1 : connexion pendant l'essai (heure serveur figée).
+      clockNow = new Date(T0.getTime() + DAY_MS);
       const adminToken = await seedMember(owner.orgId, 'admin', [
         'members.manage',
         'branding.manage',
@@ -841,7 +843,7 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
 
   // ─── 7. Isolation, suspension, absence de blocage ──────────────────────────
 
-  describe('7. Isolation, suspension et aucun blocage en 1-14B', () => {
+  describe('7. Isolation, suspension et blocage commercial (1-14C.1)', () => {
     it('isolation : une attribution ne touche jamais une autre organisation', async () => {
       clockNow = T0;
       const a = await registerOwner('iso-a');
@@ -873,10 +875,11 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
       expect(res.body.code).toBe('ORGANIZATION_ACCESS_DENIED');
     });
 
-    it('organisation expirée ou sans période : aucun nouveau blocage', async () => {
+    it('1-14C.1 : organisation expirée ou sans période → accès métier bloqué (ancien JWT compris), état lisible', async () => {
       clockNow = T0;
-      const expired = await registerOwner('no-block-expired');
+      const expired = await registerOwner('block-expired');
       clockNow = new Date(T0.getTime() + 365 * DAY_MS);
+      // Lecture d'état propriétaire toujours possible (renouvellement).
       expect((await getSubscription(expired.token)).body.state).toBe('expired');
 
       // Organisation locale historique : aucune période (aucune migration).
@@ -898,8 +901,15 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
         role: 'owner',
         status: 'active',
       });
-      const legacyToken = await login(legacyEmail);
-      const none = await getSubscription(legacyToken);
+      clearThrottle();
+      const legacyLogin = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: legacyEmail, password: PASSWORD });
+      expect(legacyLogin.status).toBe(403);
+      expect(legacyLogin.body.code).toBe('SUBSCRIPTION_INACTIVE');
+      expect(legacyLogin.body.access_token).toBeUndefined();
+      const restricted = legacyLogin.body.restrictedToken as string;
+      const none = await getSubscription(restricted);
       expect(none.body).toEqual({
         state: 'none',
         currentPeriod: null,
@@ -907,24 +917,33 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
         nextPeriodStartsAt: null,
       });
 
-      for (const token of [expired.token, legacyToken]) {
+      for (const [token, code] of [
+        [expired.token, 'SUBSCRIPTION_INACTIVE'],
+        [restricted, 'SUBSCRIPTION_ACCESS_LIMITED'],
+      ] as const) {
         const context = await request(app.getHttpServer())
           .get('/auth/context')
           .set('Authorization', `Bearer ${token}`);
         expect(context.status).toBe(200);
+        expect(context.body.access.applicationAccess).toBe(false);
         const products = await request(app.getHttpServer())
           .get('/products')
           .set('Authorization', `Bearer ${token}`);
-        expect(products.status).toBe(200);
+        expect(products.status).toBe(403);
+        expect(products.body.code).toBe(code);
         const section = await request(app.getHttpServer())
           .post('/sections')
           .set('Authorization', `Bearer ${token}`)
           .send({ name: `Rayon ${Date.now()}` });
-        expect(section.status).toBe(201);
+        expect(section.status).toBe(403);
+        expect(section.body.code).toBe(code);
       }
+      // Aucune période créée, aucun statut administratif modifié.
       expect(
         await periodModel.countDocuments({ organizationId: legacyOrg._id }),
       ).toBe(0);
+      const legacy = await organizationModel.findById(legacyOrg._id).lean();
+      expect(legacy!.status).toBe('active');
     });
   });
 

@@ -15,11 +15,13 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { OrganizationGuard } from './guards/organization.guard';
 import { PermissionGuard } from './guards/permission.guard';
+import { SubscriptionAccessGuard } from './guards/subscription-access.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { UsersModule } from '../users/users.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { EmailVerificationModule } from '../email-verification/email-verification.module';
 import { PasswordResetModule } from '../password-reset/password-reset.module';
+import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 
 @Module({
   imports: [
@@ -29,6 +31,8 @@ import { PasswordResetModule } from '../password-reset/password-reset.module';
     EmailVerificationModule,
     // 1-13B : réinitialisation du mot de passe.
     PasswordResetModule,
+    // 1-14C.1 : contrôle commercial (garde globale + jetons limités).
+    SubscriptionsModule,
     PassportModule,
     // Instance du JwtModule (secret `JWT_SECRET`, `signOptions.expiresIn: '7d'`)
     // — MÊME configuration que l'auth HTTP : le handshake Socket.IO (0B.3)
@@ -66,6 +70,11 @@ import { PasswordResetModule } from '../password-reset/password-reset.module';
     // 2. OrganizationGuard → 403 uniforme si membership/organisation inactive
     //    ; brancher `request.organizationContext` (jamais de mutation sur
     //    `request.user`).
+    // 2bis. SubscriptionAccessGuard (1-14C.1) → refus PAR DÉFAUT si le JWT
+    //    est limité (403 `SUBSCRIPTION_ACCESS_LIMITED`) ou si l'abonnement
+    //    n'est pas actif (403 `SUBSCRIPTION_INACTIVE`) ; exceptions explicites
+    //    par handler (`@AllowInactiveSubscription`). Après OrganizationGuard :
+    //    suspension et révocation restent prioritaires.
     // 3. PermissionGuard (1-7A) → 403 `PERMISSION_DENIED` si les permissions
     //    effectives (rôle ∪ `context.permissions`) ou l'exclusivité owner
     //    ne sont pas satisfaites ; lit UNIQUEMENT `organizationContext`.
@@ -73,6 +82,7 @@ import { PasswordResetModule } from '../password-reset/password-reset.module';
     // L'ordre est contractuel : les tests E2E / unitaires l'assertent.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: OrganizationGuard },
+    { provide: APP_GUARD, useClass: SubscriptionAccessGuard },
     { provide: APP_GUARD, useClass: PermissionGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],

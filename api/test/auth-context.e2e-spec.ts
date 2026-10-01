@@ -247,7 +247,9 @@ describe('GET /auth/context (e2e 1-9C)', () => {
     );
     const body: unknown = res.body;
     assertAuthContextBody(body);
+    // 1-14C.1 : bloc `access` (état commercial) ajouté au contrat.
     expect(Object.keys(body).sort()).toEqual([
+      'access',
       'effectivePermissions',
       'organizationId',
       'permissions',

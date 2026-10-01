@@ -15,6 +15,10 @@ import {
   currentSessionVersion,
   isSessionCurrent,
 } from '../session-version';
+import {
+  AccessScope,
+  accessScopeFromClaims,
+} from '../../subscriptions/subscription-access';
 
 interface JwtPayload {
   sub: string;
@@ -39,6 +43,11 @@ export interface AuthenticatedPrincipal {
    * sans jamais l'élever à une version plus récente. Jamais renvoyée au client.
    */
   sessionVersion: number;
+  /**
+   * 1-14C.1 : portée SIGNÉE du JWT (`app` | `subscription_limited`). Claim
+   * absent (JWT historique) = `app` ; présent mais invalide → 401.
+   */
+  accessScope: AccessScope;
 }
 
 // ObjectId canonique : une CHAÎNE strictement de 24 caractères hexadécimaux.
@@ -77,6 +86,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!isStrictObjectId(payload?.sub) || !isStrictObjectId(payload?.orgId)) {
       throw new UnauthorizedException();
     }
+    // 1-14C.1 : portée validée AVANT toute requête — aucune conversion
+    // permissive d'une valeur inconnue ou mal typée.
+    const accessScope = accessScopeFromClaims(
+      payload as unknown as Record<string, unknown>,
+    );
+    if (accessScope === null) {
+      throw new UnauthorizedException();
+    }
 
     const user = await this.usersService.findByIdForAuth(payload.sub);
     if (!user) {
@@ -109,6 +126,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       role: user.role,
       organizationId: payload.orgId,
       sessionVersion: currentSessionVersion(user),
+      accessScope,
     };
     return principal;
   }

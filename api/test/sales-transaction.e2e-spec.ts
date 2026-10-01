@@ -23,6 +23,7 @@ import {
   stopEphemeralMongoSafe,
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
+import { activateTestSubscriptions } from './e2e/subscription-fixtures';
 import {
   buildOriginAllowlist,
   parseCORSOrigin,
@@ -227,6 +228,8 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
         slug: 'trade-e2e',
         name: 'Org Vente E2E',
       });
+      // 1-14C.1 : accès métier → période active explicite.
+      await activateTestSubscriptions(moduleFixture, [String(TRADE_ORG_ID)]);
       await membershipModel.create({
         organizationId: new Types.ObjectId(TRADE_ORG_ID),
         userId: adminDoc._id,
@@ -249,6 +252,7 @@ describe('App (e2e 0B.7B) — transaction atomique vente–stock–audit', () =>
         slug: 'org-b-14c1',
         name: 'Org B 1-4C.1',
       });
+      await activateTestSubscriptions(moduleFixture, [String(ORG_B_ID)]);
       await membershipModel.create({
         organizationId: new Types.ObjectId(ORG_B_ID),
         userId: adminBUser._id,

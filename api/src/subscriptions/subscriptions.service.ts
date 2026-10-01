@@ -26,6 +26,7 @@ import {
   trialSourceReference,
 } from './subscription-terms';
 import { subscriptionDuplicateKeyIndex } from './subscription-period-indexes';
+import type { SubscriptionAccessDecision } from './subscription-access';
 import { SUBSCRIPTION_CLOCK } from './subscription-clock';
 import type { SubscriptionClock } from './subscription-clock';
 
@@ -205,6 +206,35 @@ export class SubscriptionsService {
       .lean()
       .exec();
     return computeSubscriptionState(periods, this.clock());
+  }
+
+  /**
+   * 1-14C.1 — décision d'accès commercial à l'heure serveur. Seul `active`
+   * ouvre l'accès applicatif (`none`, `expired`, `scheduled` le ferment).
+   * Une erreur de lecture est propagée : l'appelant refuse l'accès sans la
+   * présenter comme une expiration.
+   */
+  async getAccessDecision(
+    organizationId: string,
+  ): Promise<SubscriptionAccessDecision> {
+    const checkedAt = this.clock();
+    const periods = await this.periodModel
+      .find({ organizationId: new Types.ObjectId(organizationId) })
+      .select({ sequence: 1, kind: 1, term: 1, startsAt: 1, endsAt: 1 })
+      .lean()
+      .exec();
+    const view = computeSubscriptionState(periods, checkedAt);
+    return {
+      state: view.state,
+      active: view.state === 'active',
+      coverageEndsAt: view.coverageEndsAt,
+      checkedAt,
+    };
+  }
+
+  /** Heure serveur de référence (horloge injectée). */
+  now(): Date {
+    return this.clock();
   }
 
   private async applyGrant(

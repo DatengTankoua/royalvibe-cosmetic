@@ -13,6 +13,7 @@ import { Types } from 'mongoose';
 import { AuthModule } from '../auth.module';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { RolesGuard } from './roles.guard';
+import { SubscriptionAccessGuard } from './subscription-access.guard';
 import { extractOrganizationContext } from '../decorators/current-organization.decorator';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { SKIP_ORGANIZATION_CONTEXT_KEY } from '../decorators/skip-organization-context.decorator';
@@ -287,7 +288,7 @@ describe('OrganizationGuard (1-3B.2)', () => {
     expect(extractOrganizationContext(ctx)).toBe(organizationContext);
   });
 
-  it('10 — l’ordre des gardes globales dans AuthModule : Jwt → Organization → Permission → Roles', () => {
+  it('10 — l’ordre des gardes globales dans AuthModule : Jwt → Organization → SubscriptionAccess (1-14C.1) → Permission → Roles', () => {
     // `@Module` stocke la config de providers sous la métadonnée `'providers'`
     // (valeur publique constatée des clés NestJS). On ne dépend d'aucun
     // chemin interne `node_modules`.
@@ -300,10 +301,11 @@ describe('OrganizationGuard (1-3B.2)', () => {
         Boolean(p && p.provide === APP_GUARD),
       )
       .map((p) => p.useClass);
-    expect(globalGuards).toHaveLength(4);
+    expect(globalGuards).toHaveLength(5);
     expect(globalGuards[0]).toBe(JwtAuthGuard);
     expect(globalGuards[1]).toBe(OrganizationGuard);
-    expect(globalGuards[2]).toBe(PermissionGuard);
-    expect(globalGuards[3]).toBe(RolesGuard);
+    expect(globalGuards[2]).toBe(SubscriptionAccessGuard);
+    expect(globalGuards[3]).toBe(PermissionGuard);
+    expect(globalGuards[4]).toBe(RolesGuard);
   });
 });

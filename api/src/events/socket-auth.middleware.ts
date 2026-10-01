@@ -12,6 +12,12 @@ import {
   currentSessionVersion,
   isSessionCurrent,
 } from '../auth/session-version';
+import type { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import {
+  AccessScope,
+  accessScopeFromClaims,
+  type SubscriptionAccessDecision,
+} from '../subscriptions/subscription-access';
 
 /**
  * Contrôle authentifié des connexions Socket.IO — phase 0B.3.
@@ -84,6 +90,8 @@ export interface SocketAuthDependencies {
   jwtService: JwtService;
   usersService: UsersService;
   organizationsService: OrganizationsService;
+  /** 1-14C.1 : contrôle commercial (handshake + échéance de couverture). */
+  subscriptionsService: Pick<SubscriptionsService, 'getAccessDecision' | 'now'>;
   logger?: Logger;
 }
 
@@ -121,7 +129,12 @@ export function installSocketAuthMiddleware(
   server: Server,
   deps: SocketAuthDependencies,
 ): (socket: Socket, next: SocketMiddlewareNext) => void {
-  const { jwtService, usersService, organizationsService } = deps;
+  const {
+    jwtService,
+    usersService,
+    organizationsService,
+    subscriptionsService,
+  } = deps;
   const logger = deps.logger ?? new Logger('EventsGateway');
 
   const middleware = (socket: Socket, next: SocketMiddlewareNext): void => {
@@ -165,6 +178,16 @@ export function installSocketAuthMiddleware(
         if (!isStrictObjectId(sub) || !isStrictObjectId(orgId)) {
           logger.warn(
             'Socket.IO: connection rejected — JWT payload missing required fields',
+          );
+          finish(new Error('unauthorized'));
+          return;
+        }
+
+        // 1-14C.1 : seul un JWT APPLICATIF ouvre un socket — jeton limité ou
+        //    claim de portée invalide → refus, avant toute requête DB.
+        if (accessScopeFromClaims(payload) !== AccessScope.APP) {
+          logger.warn(
+            'Socket.IO: connection rejected — non-application access scope',
           );
           finish(new Error('unauthorized'));
           return;
@@ -223,6 +246,17 @@ export function installSocketAuthMiddleware(
         const organizationContext =
           await organizationsService.resolveActiveContext(sub, orgId);
 
+        // 1-14C.1 : abonnement actif requis (après les contrôles
+        //    administratifs). Échec de lecture → refus (catch générique).
+        const decision = await subscriptionsService.getAccessDecision(
+          organizationContext.organizationId,
+        );
+        if (!decision.active || !decision.coverageEndsAt) {
+          logger.warn('Socket.IO: connection rejected — subscription inactive');
+          finish(new Error('unauthorized'));
+          return;
+        }
+
         // 5 + 6. Principal dans `socket.data.user` — JAMAIS de `password`,
         //    du token ou du document Mongoose complet. `email`/`role` sont
         //    lus du document User (base) JAMAIS du token ; `orgId` vient du
@@ -238,6 +272,9 @@ export function installSocketAuthMiddleware(
         // 1-13B : version de session du handshake (fermeture ciblée des
         //    sockets antérieurs à une réinitialisation, sans timer).
         socket.data.authVersion = currentSessionVersion(user);
+        // 1-14C.1 : fin de couverture connue (filtre des émissions, timer).
+        socket.data.subscriptionCoverageEndsAt =
+          decision.coverageEndsAt.getTime();
 
         // 7. `next()` appelé EXACTEMENT UNE FOIS, sans erreur.
         finish();
@@ -247,6 +284,15 @@ export function installSocketAuthMiddleware(
         //    secondes epoch). Silencieux si `exp` est absent/invalid —
         //    jamais une raison supplémentaire de rejet.
         scheduleSocketDisconnectAtExpiry(socket, payload, logger);
+        // 1-14C.1 : contrôle commercial à l'échéance de couverture.
+        scheduleSocketSubscriptionCheck(socket, {
+          readDecision: () =>
+            subscriptionsService.getAccessDecision(
+              organizationContext.organizationId,
+            ),
+          now: () => subscriptionsService.now(),
+          logger,
+        });
       } catch {
         // Toute autre erreur (signature invalide, token expiré, payload
         //    corrompu, …) : message client UNIFIÉ et générique. Le JWT
@@ -315,6 +361,89 @@ export function scheduleSocketDisconnectAtExpiry(
     logger?.error('Socket.IO: could not schedule disconnect at token expiry');
     return undefined;
   }
+}
+
+/** Délai maximal d'un timer Node (au-delà, il se déclencherait aussitôt). */
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/** Fin de couverture connue d'un socket (ms epoch), ou `null`. */
+export function socketCoverageEndsAt(socket: Socket): number | null {
+  const value: unknown = (
+    socket.data as { subscriptionCoverageEndsAt?: unknown }
+  )?.subscriptionCoverageEndsAt;
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * 1-14C.1 — contrôle commercial d'un socket DÉJÀ ouvert, à l'échéance de
+ * sa couverture connue (`socket.data.subscriptionCoverageEndsAt`) :
+ * - à l'échéance, l'état est RELU côté serveur ;
+ * - couverture prolongée (renouvellement) → mise à jour + reprogrammation ;
+ * - sinon (inactif ou lecture impossible) → `socket.disconnect(true)`
+ *   (fail-closed ; une reconnexion repasse le handshake).
+ * Délai borné à `MAX_TIMER_DELAY_MS` (relecture intermédiaire si la
+ * couverture est plus lointaine). Timer `unref()`, nettoyé sur
+ * `disconnect` (aucune fuite, aucune lecture après déconnexion). Cumulé
+ * avec le timer d'expiration du JWT : la première échéance ferme le socket.
+ */
+export function scheduleSocketSubscriptionCheck(
+  socket: Socket,
+  deps: {
+    readDecision: () => Promise<SubscriptionAccessDecision>;
+    now: () => Date;
+    logger?: Logger;
+  },
+): void {
+  let timer: NodeJS.Timeout | undefined;
+  let stopped = false;
+  const onDisconnect = (): void => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+  };
+  socket.once('disconnect', onDisconnect);
+
+  const arm = (): void => {
+    if (stopped) return;
+    const end = socketCoverageEndsAt(socket) ?? 0;
+    const delay = Math.min(
+      Math.max(end - deps.now().getTime(), 0),
+      MAX_TIMER_DELAY_MS,
+    );
+    timer = setTimeout(() => void check(), delay);
+    timer.unref?.();
+  };
+
+  const check = async (): Promise<void> => {
+    timer = undefined;
+    if (stopped) return;
+    let decision: SubscriptionAccessDecision | null = null;
+    try {
+      decision = await deps.readDecision();
+    } catch {
+      deps.logger?.warn(
+        'Socket.IO: subscription status unavailable — closing socket',
+      );
+    }
+    if (stopped) return;
+    const end = decision?.coverageEndsAt?.getTime();
+    if (
+      decision?.active === true &&
+      typeof end === 'number' &&
+      end > deps.now().getTime()
+    ) {
+      (
+        socket.data as { subscriptionCoverageEndsAt?: number }
+      ).subscriptionCoverageEndsAt = end;
+      arm();
+      return;
+    }
+    stopped = true;
+    socket.off('disconnect', onDisconnect);
+    socket.disconnect(true);
+  };
+
+  arm();
 }
 
 /**

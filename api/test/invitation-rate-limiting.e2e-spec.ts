@@ -22,6 +22,7 @@ import {
   stopEphemeralMongoSafe,
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
+import { activateTestSubscriptions } from './e2e/subscription-fixtures';
 import {
   buildOriginAllowlist,
   parseCORSOrigin,
@@ -261,6 +262,8 @@ describe('Rate limiting invitations (e2e 1-10B) — POST /organizations/invitati
       slug: `org-b-rl110b-${Date.now()}`,
       status: 'active',
     });
+    // 1-14C.1 : accès métier → période active explicite.
+    await activateTestSubscriptions(moduleFixture, [orgB._id.toString()]);
     const ownerAUser = await userModel.findOne({ email: OWNER_A_EMAIL });
     await membershipModel.create({
       organizationId: orgB._id,

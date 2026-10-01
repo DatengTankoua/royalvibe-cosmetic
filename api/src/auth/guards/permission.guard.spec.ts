@@ -16,6 +16,7 @@ import { JwtAuthGuard } from './jwt-auth.guard';
 import { OrganizationGuard } from './organization.guard';
 import { PermissionGuard } from './permission.guard';
 import { RolesGuard } from './roles.guard';
+import { SubscriptionAccessGuard } from './subscription-access.guard';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import {
   OWNER_ONLY_KEY,
@@ -227,7 +228,7 @@ describe('PermissionGuard', () => {
     expect(guard.canActivate(makeHttpContext(request))).toBe(true);
   });
 
-  it('11 — ordre des gardes globales dans AuthModule : Jwt → Organization → Permission → Roles', () => {
+  it('11 — ordre des gardes globales dans AuthModule : Jwt → Organization → SubscriptionAccess (1-14C.1) → Permission → Roles', () => {
     const providers = Reflect.getMetadata('providers', AuthModule) as Array<{
       provide?: unknown;
       useClass?: unknown;
@@ -237,10 +238,11 @@ describe('PermissionGuard', () => {
         Boolean(p && p.provide === APP_GUARD),
       )
       .map((p) => p.useClass);
-    expect(globalGuards).toHaveLength(4);
+    expect(globalGuards).toHaveLength(5);
     expect(globalGuards[0]).toBe(JwtAuthGuard);
     expect(globalGuards[1]).toBe(OrganizationGuard);
-    expect(globalGuards[2]).toBe(PermissionGuard);
-    expect(globalGuards[3]).toBe(RolesGuard);
+    expect(globalGuards[2]).toBe(SubscriptionAccessGuard);
+    expect(globalGuards[3]).toBe(PermissionGuard);
+    expect(globalGuards[4]).toBe(RolesGuard);
   });
 });
