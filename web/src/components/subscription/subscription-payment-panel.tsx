@@ -757,6 +757,17 @@ export function SubscriptionPaymentPanel({
         </form>
       )}
 
+      {message && (
+        <p
+          role={message.tone === "error" ? "alert" : "status"}
+          aria-live={message.tone === "error" ? "assertive" : "polite"}
+          data-testid="payment-message"
+          className={`text-sm ${message.tone === "error" ? "text-destructive" : ""}`}
+        >
+          {message.text}
+        </p>
+      )}
+
       <section
         aria-labelledby="payment-history-title"
         className="space-y-3"
