@@ -55,9 +55,20 @@ services:
       EMAIL_FROM: ${EMAIL_FROM:-}
       # Inscription publique fermée par défaut (seule la valeur exacte `true` l'ouvre).
       PUBLIC_REGISTRATION_ENABLED: ${PUBLIC_REGISTRATION_ENABLED:-false}
-      # 0 = aucun proxy approuvé. À mesurer avant le déploiement : 1 uniquement
-      # si l'API n'est joignable QUE via un unique proxy nginx de confiance.
-      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+      # 1-14D.2E — Seule l'adresse FIXE de nginx sur le réseau `edge` est un
+      # proxy approuvé (`req.ip` = client vu par nginx). Un accès direct
+      # depuis un autre conteneur (web, minio, mongo, réseau `default`) n'est
+      # jamais approuvé : son `X-Forwarded-For` est ignoré. `TRUST_PROXY_HOPS`
+      # n'est volontairement PAS transmis : dans cette topologie, plusieurs
+      # chemins mènent à l'API et un nombre de sauts ne serait pas sûr.
+      TRUST_PROXY_ADDRESSES: ${PROXY_NGINX_EDGE_ADDRESS:-172.31.250.2}
+    # Aucun port publié : l'API n'est joignable QUE depuis les réseaux Docker
+    # du projet ; depuis Internet, uniquement à travers nginx.
+    networks:
+      default: {}
+      edge:
+        aliases:
+          - api-edge
 
   web:
     build:
@@ -84,10 +95,28 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
+    # 1-14D.2E — Adresse FIXE sur `edge` : l'unique proxy approuvé par l'API.
+    networks:
+      default: {}
+      edge:
+        ipv4_address: ${PROXY_NGINX_EDGE_ADDRESS:-172.31.250.2}
     depends_on:
       - api
       - web
       - minio
+
+# 1-14D.2E — Réseau dédié nginx ↔ API, sous-réseau fixe (adresse de nginx
+# déterministe). Seuls nginx et l'API y sont attachés. L'allocation
+# DYNAMIQUE (API) est limitée à `ip_range`, qui EXCLUT l'adresse fixe de
+# nginx : sinon l'API, démarrée avant nginx, pourrait recevoir cette adresse
+# (constaté par le harnais : « Address already in use »). À adapter
+# ensemble si le sous-réseau entre en conflit avec un réseau de l'hôte.
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: ${PROXY_EDGE_SUBNET:-172.31.250.0/29}
+          ip_range: ${PROXY_EDGE_DYNAMIC_RANGE:-172.31.250.4/30}
 
 volumes:
   mongo_data:
