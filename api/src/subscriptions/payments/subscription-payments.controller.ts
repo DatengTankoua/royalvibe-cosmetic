@@ -22,6 +22,7 @@ import type { ResolvedOrganizationContext } from '../../organizations/organizati
 import { AllowInactiveSubscription } from '../subscription-access';
 import {
   PAYMENT_READ_THROTTLER,
+  PAYMENT_WEBHOOK_THROTTLER,
   PAYMENT_WRITE_THROTTLER,
   SubscriptionPaymentThrottlerGuard,
 } from '../../common/subscription-payment-rate-limiting';
@@ -55,6 +56,7 @@ const OTHER_THROTTLERS = {
   'login-short': true,
   'login-long': true,
   'invitation-create': true,
+  [PAYMENT_WEBHOOK_THROTTLER]: true,
 } as const;
 
 const toContext = (

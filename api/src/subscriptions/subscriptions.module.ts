@@ -28,7 +28,16 @@ import {
   PAYMENT_PROVIDER,
   UnavailablePaymentProvider,
 } from './payments/payment-provider';
-import { SubscriptionPaymentThrottlerGuard } from '../common/subscription-payment-rate-limiting';
+import {
+  PaymentWebhookThrottlerGuard,
+  SubscriptionPaymentThrottlerGuard,
+} from '../common/subscription-payment-rate-limiting';
+import { CamPayWebhookController } from './payments/campay/campay-webhook.controller';
+import { CamPayWebhookService } from './payments/campay/campay-webhook.service';
+import {
+  CAMPAY_WEBHOOK_CONFIG,
+  DISABLED_CAMPAY_WEBHOOK,
+} from './payments/campay/campay-webhook.config';
 
 /**
  * 1-14B — Importé par `OrganizationsModule` (essai attribué à la création).
@@ -39,6 +48,11 @@ import { SubscriptionPaymentThrottlerGuard } from '../common/subscription-paymen
  * 1-14D.2B — paiements d'abonnement : `PAYMENT_PROVIDER` vaut
  * `UnavailablePaymentProvider` (aucun réseau, 503) tant qu'aucun adaptateur
  * réel n'est branché ; seuls les tests le remplacent (`overrideProvider`).
+ *
+ * 1-14D.2F — webhook CamPay : `CAMPAY_WEBHOOK_CONFIG` vaut
+ * `DISABLED_CAMPAY_WEBHOOK` (503 sans lecture, sans base ni prestataire).
+ * Aucune variable d'environnement ne l'active ; seuls les tests du lot le
+ * remplacent (`overrideProvider`).
  */
 @Module({
   imports: [
@@ -48,7 +62,11 @@ import { SubscriptionPaymentThrottlerGuard } from '../common/subscription-paymen
       { name: SubscriptionPayment.name, schema: SubscriptionPaymentSchema },
     ]),
   ],
-  controllers: [SubscriptionsController, SubscriptionPaymentsController],
+  controllers: [
+    SubscriptionsController,
+    SubscriptionPaymentsController,
+    CamPayWebhookController,
+  ],
   providers: [
     SubscriptionsService,
     SubscriptionPeriodIndexCheck,
@@ -61,6 +79,9 @@ import { SubscriptionPaymentThrottlerGuard } from '../common/subscription-paymen
     SubscriptionPaymentIndexCheck,
     SubscriptionPaymentThrottlerGuard,
     { provide: PAYMENT_PROVIDER, useClass: UnavailablePaymentProvider },
+    PaymentWebhookThrottlerGuard,
+    CamPayWebhookService,
+    { provide: CAMPAY_WEBHOOK_CONFIG, useValue: DISABLED_CAMPAY_WEBHOOK },
   ],
   exports: [SubscriptionsService],
 })

@@ -27,6 +27,11 @@ import {
   derivePaymentFingerprintKey,
   merchantReferenceFor,
 } from './../src/subscriptions/payments/payment-request';
+import { API_APPLICATION_OPTIONS } from './../src/common/application-options';
+import {
+  CAMPAY_WEBHOOK_CONFIG,
+  DISABLED_CAMPAY_WEBHOOK,
+} from './../src/subscriptions/payments/campay/campay-webhook.config';
 import { EMAIL_SENDER } from '../src/email-verification/email-sender';
 import {
   autoConfirmVerificationEmails,
@@ -43,6 +48,9 @@ import {
  * de `PAYMENT_PROVIDER`) : c'est la configuration de production tant
  * qu'aucun adaptateur réel n'est branché. Fichier séparé : une seule
  * application Nest par processus de test (stratégie Passport globale).
+ *
+ * 1-14D.2F : même configuration de production pour le webhook CamPay
+ * (désactivé par défaut, options de bootstrap de `main.ts`).
  */
 
 const TEST_JWT_SECRET = 'subscription-payments-default-14d2b-e2e-secret';
@@ -76,7 +84,7 @@ describe('Paiements : fournisseur par défaut indisponible (e2e 1-14D.2B)', () =
         .overrideProvider(SUBSCRIPTION_CLOCK)
         .useValue(testClock)
         .compile();
-      app = moduleFixture.createNestApplication();
+      app = moduleFixture.createNestApplication(API_APPLICATION_OPTIONS);
       app.useGlobalPipes(
         new ValidationPipe({
           whitelist: true,
@@ -221,5 +229,136 @@ describe('Paiements : fournisseur par défaut indisponible (e2e 1-14D.2B)', () =
         organizationId: new Types.ObjectId(orgId),
       }),
     ).toBe(1);
+  });
+
+  it('webhook CamPay (1-14D.2F) DÉSACTIVÉ par défaut : 503 sans lecture, sans base ni prestataire, quels que soient query, en-têtes ou environnement', async () => {
+    expect(moduleFixture.get(CAMPAY_WEBHOOK_CONFIG)).toBe(
+      DISABLED_CAMPAY_WEBHOOK,
+    );
+    // Fixture : paiement CamPay en attente (référence persistée).
+    const _id = new Types.ObjectId();
+    const reference = randomUUID();
+    await paymentModel.create({
+      _id,
+      organizationId: new Types.ObjectId(),
+      requestedBy: new Types.ObjectId(),
+      clientOperationId: randomUUID(),
+      requestFingerprint: 'f'.repeat(64),
+      term: SubscriptionTerm.MONTHLY,
+      amount: 3000,
+      currency: 'XAF',
+      pricingVersion: 1,
+      provider: 'campay',
+      merchantReference: merchantReferenceFor(_id),
+      providerReference: reference,
+      status: SubscriptionPaymentStatus.PENDING,
+      open: true,
+      payerPhoneMasked: '+237 6•• ••• •56',
+    });
+    const before = await paymentModel.findById(_id).lean().exec();
+    const provider =
+      moduleFixture.get<UnavailablePaymentProvider>(PAYMENT_PROVIDER);
+    const fetchStatus = jest.spyOn(provider, 'fetchStatus');
+    const findOne = jest.spyOn(paymentModel, 'findOne');
+    const findById = jest.spyOn(paymentModel, 'findById');
+    // Une variable d'environnement n'active rien (jamais lue par le webhook).
+    process.env.CAMPAY_WEBHOOK_KEY = 'fake-campay-webhook-key-14d2f-env';
+    process.env.CAMPAY_WEBHOOK_ENABLED = 'true';
+    const params = {
+      status: 'SUCCESSFUL',
+      reference,
+      amount: '3000',
+      currency: 'XAF',
+      signature: 'e30.e30.' + 'A'.repeat(43),
+      endpoint: 'collect',
+      external_reference: merchantReferenceFor(_id),
+      phone_number: '237677123456',
+    };
+    try {
+      const responses = [
+        await request(server())
+          .get('/payments/webhooks/campay')
+          .query({ ...params, enabled: 'true', webhook: '1' }),
+        await request(server())
+          .post('/payments/webhooks/campay?enabled=true')
+          .set('X-Webhook-Enabled', 'true')
+          .set('Content-Type', 'application/json')
+          .send(JSON.stringify(params)),
+        await request(server())
+          .post('/payments/webhooks/campay')
+          .set('Content-Type', 'application/json')
+          .send(JSON.stringify({ ...params, enabled: true })),
+      ];
+      for (const res of responses) {
+        expect(res.status).toBe(503);
+        expect(res.body).toEqual({
+          statusCode: 503,
+          code: 'PAYMENT_WEBHOOK_DISABLED',
+          message: 'Notifications de paiement désactivées.',
+        });
+        expect(res.headers['cache-control']).toBe('no-store');
+        expect(JSON.stringify(res.body)).not.toContain(params.signature);
+      }
+      expect(fetchStatus).not.toHaveBeenCalled();
+      expect(findOne).not.toHaveBeenCalled();
+      expect(findById).not.toHaveBeenCalled();
+      expect(await paymentModel.findById(_id).lean().exec()).toEqual(before);
+    } finally {
+      delete process.env.CAMPAY_WEBHOOK_KEY;
+      delete process.env.CAMPAY_WEBHOOK_ENABLED;
+      fetchStatus.mockRestore();
+      findOne.mockRestore();
+      findById.mockRestore();
+    }
+  });
+
+  it('webhook désactivé (1-14D.2F) : variantes de chemin et JSON malformé sans donnée sensible ni journal', async () => {
+    const markers = [
+      'FAKESIGMARKER7Q',
+      '237699000111',
+      'BODYSEC',
+      'ignature',
+      '?',
+    ];
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map(
+      (method) => jest.spyOn(console, method).mockImplementation(),
+    );
+    try {
+      for (const path of [
+        '/PAYMENTS/WEBHOOKS/CAMPAY',
+        '/payments/webhooks/campay/',
+        '/Payments/Webhooks/Campay/',
+      ]) {
+        clearThrottle();
+        const disabled = await request(server()).get(path).query({
+          signature: 'FAKESIGMARKER7Q.a.b',
+          phone_number: '237699000111',
+        });
+        expect(disabled.status).toBe(503);
+        expect(disabled.body.code).toBe('PAYMENT_WEBHOOK_DISABLED');
+        const malformed = await request(server())
+          .post(`${path}?signature=FAKESIGMARKER7Q`)
+          .set('Content-Type', 'application/json')
+          .send(
+            '{"signature":BODYSECRETMARKER9Z,"phone_number":"237699000111"}',
+          );
+        expect(malformed.status).toBe(400);
+        expect(malformed.body.message).toBe(
+          'Notification de paiement invalide.',
+        );
+        for (const res of [disabled, malformed]) {
+          expect(res.headers['cache-control']).toBe('no-store');
+          for (const marker of markers) expect(res.text).not.toContain(marker);
+        }
+      }
+      for (const spy of spies) {
+        const text = JSON.stringify(spy.mock.calls);
+        for (const marker of markers.slice(0, 4)) {
+          expect(text).not.toContain(marker);
+        }
+      }
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+    }
   });
 });

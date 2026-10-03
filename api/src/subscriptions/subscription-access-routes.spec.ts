@@ -14,6 +14,7 @@ import { SectionsController } from '../sections/sections.controller';
 import { TrashController } from '../trash/trash.controller';
 import { SubscriptionsController } from './subscriptions.controller';
 import { SubscriptionPaymentsController } from './payments/subscription-payments.controller';
+import { CamPayWebhookController } from './payments/campay/campay-webhook.controller';
 import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
 import { SKIP_ORGANIZATION_CONTEXT_KEY } from '../auth/decorators/skip-organization-context.decorator';
 import {
@@ -43,6 +44,7 @@ const CONTROLLERS = [
   SectionsController,
   SubscriptionsController,
   SubscriptionPaymentsController,
+  CamPayWebhookController,
   TrashController,
 ];
 
@@ -101,10 +103,12 @@ const byCategory = (category: Category) =>
     .map((r) => r.route);
 
 describe('Matrice des routes — contrôle commercial (1-14C.1)', () => {
-  it('publiques : inchangées (inscription, login, invitations, email, mot de passe, health)', () => {
+  it('publiques : inscription, login, invitations, email, mot de passe, health, webhook CamPay (1-14D.2F, signature HS256)', () => {
     expect(byCategory('public')).toEqual(
       [
         'GET /health',
+        'GET /payments/webhooks/campay',
+        'POST /payments/webhooks/campay',
         'POST /auth/email-verification/confirm',
         'POST /auth/email-verification/request',
         'POST /auth/invitations/accept',

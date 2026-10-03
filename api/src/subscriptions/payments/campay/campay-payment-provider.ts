@@ -16,6 +16,7 @@ import {
   CamPayTransportError,
   fetchCamPayTransport,
 } from './campay-transport';
+import { CAMPAY_PROVIDER_NAME } from './campay-provider-name';
 
 /**
  * 1-14D.2D — Adaptateur CamPay (contrat officiel vérifié le 2026-10-02 :
@@ -192,7 +193,7 @@ export function parseCamPayAmount(
  * explicites, sans valeur par défaut, jamais journalisés ni exposés.
  */
 export class CamPayPaymentProvider implements PaymentProvider {
-  readonly name = 'campay';
+  readonly name = CAMPAY_PROVIDER_NAME;
   readonly available = true;
   readonly supportsMerchantReferenceLookup = false;
   readonly idempotentInitiation = false;

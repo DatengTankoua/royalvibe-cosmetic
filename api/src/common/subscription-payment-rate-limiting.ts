@@ -53,6 +53,21 @@ export const PAYMENT_READ_LIMIT = 60;
 export const PAYMENT_READ_TTL = seconds(60);
 export const PAYMENT_READ_BLOCK = seconds(30);
 
+/**
+ * 1-14D.2F — Webhook CamPay (route publique, sans utilisateur) : tracker =
+ * adresse calculée par EXPRESS (`req.ip`, normalisée par le tracker par
+ * défaut de `@nestjs/throttler`), selon la politique `trust proxy` de
+ * 0B.6/1-14D.2E. Aucune lecture directe d'un en-tête de transfert. Évaluée
+ * AVANT la lecture des paramètres, la signature, la base et le prestataire.
+ * Derrière une entrée qui masque l'adresse cliente (Railway sans réglage
+ * validé, 1-14D.2E.1), toutes les notifications partagent ce compteur.
+ */
+export const PAYMENT_WEBHOOK_THROTTLER = 'payment-webhook';
+export const PAYMENT_WEBHOOK_LIMIT = 60;
+export const PAYMENT_WEBHOOK_TTL = seconds(60);
+export const PAYMENT_WEBHOOK_BLOCK = seconds(60);
+export const PAYMENT_WEBHOOK_RATE_LIMIT_CODE = 'PAYMENT_WEBHOOK_RATE_LIMITED';
+
 export function createPaymentThrottlerWindows(): ThrottlerOptions[] {
   return [
     {
@@ -67,6 +82,12 @@ export function createPaymentThrottlerWindows(): ThrottlerOptions[] {
       ttl: PAYMENT_READ_TTL,
       blockDuration: PAYMENT_READ_BLOCK,
     },
+    {
+      name: PAYMENT_WEBHOOK_THROTTLER,
+      limit: PAYMENT_WEBHOOK_LIMIT,
+      ttl: PAYMENT_WEBHOOK_TTL,
+      blockDuration: PAYMENT_WEBHOOK_BLOCK,
+    },
   ];
 }
 
@@ -74,6 +95,7 @@ export function createPaymentThrottlerWindows(): ThrottlerOptions[] {
 export const SKIP_PAYMENT_THROTTLERS = Object.freeze({
   [PAYMENT_WRITE_THROTTLER]: true,
   [PAYMENT_READ_THROTTLER]: true,
+  [PAYMENT_WEBHOOK_THROTTLER]: true,
 });
 
 @Injectable()
@@ -123,6 +145,64 @@ export class SubscriptionPaymentThrottlerGuard extends ThrottlerGuard {
         statusCode: HttpStatus.TOO_MANY_REQUESTS,
         code: PAYMENT_RATE_LIMIT_CODE,
         message: PAYMENT_RATE_LIMIT_MESSAGE,
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
+  }
+}
+
+/**
+ * 1-14D.2F — Garde du webhook : tracker PAR DÉFAUT de la bibliothèque
+ * (`normalizeIp(req.ip)`), jamais surchargé. Clé de stockage COMMUNE aux
+ * handlers GET et POST (la clé par défaut inclut le nom du handler, ce qui
+ * doublerait la limite effective). Refus `429` générique : la réponse ne
+ * reprend ni l'URL ni les paramètres reçus.
+ */
+@Injectable()
+export class PaymentWebhookThrottlerGuard extends ThrottlerGuard {
+  private initialized = false;
+
+  constructor(
+    @InjectThrottlerOptions() options: ThrottlerModuleOptions,
+    @InjectThrottlerStorage() storage: ThrottlerStorage,
+    reflector: Reflector,
+  ) {
+    super(options, storage, reflector);
+  }
+
+  override async canActivate(context: ExecutionContext): Promise<boolean> {
+    if (!this.initialized) {
+      await this.onModuleInit();
+      this.initialized = true;
+    }
+    return super.canActivate(context);
+  }
+
+  protected override generateKey(
+    _context: ExecutionContext,
+    tracker: string,
+    throttlerName: string,
+  ): string {
+    return `${throttlerName}:${tracker}`;
+  }
+
+  protected override throwThrottlingException(
+    context: ExecutionContext,
+    limitDetail: ThrottlerLimitDetail,
+  ): Promise<void> {
+    const { res } = this.getRequestResponse(context);
+    const retryAfter = computeRetryAfterSeconds(
+      limitDetail.timeToBlockExpire * 1000,
+    );
+    if (retryAfter !== undefined) {
+      res.setHeader('Retry-After', String(retryAfter));
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    throw new HttpException(
+      {
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        code: PAYMENT_WEBHOOK_RATE_LIMIT_CODE,
+        message: 'Trop de notifications. Réessayez plus tard.',
       },
       HttpStatus.TOO_MANY_REQUESTS,
     );

@@ -107,7 +107,7 @@ const iso = (date: Date | null | undefined): string | null =>
  *   atomiquement le droit d'initier : un seul appel réseau par paiement,
  *   jamais relancé.
  * - Confirmation (`confirmPayment`) : UNIQUE point d'entrée (refresh
- *   propriétaire, futurs webhook et scripts). Statut lu hors transaction,
+ *   propriétaire, webhook 1-14D.2F inactif en production, futurs scripts). Statut lu hors transaction,
  *   concordance vérifiée, puis attribution `source: payment` et marquage
  *   `succeeded` dans UNE transaction (`runInGrantTransaction`), sans réseau.
  * - Aucun échec automatique sur délai : seul un refus CONFIRMÉ par le
@@ -381,6 +381,49 @@ export class SubscriptionPaymentsService {
         break;
     }
     return this.viewById(payment._id);
+  }
+
+  /**
+   * 1-14D.2F — Localisation d'un paiement EXISTANT pour une notification du
+   * prestataire, en LECTURE SEULE (aucune création, aucune référence
+   * adoptée) :
+   * - `found` : référence prestataire PERSISTÉE identique → le déclencheur
+   *   appellera `confirmPayment` (statut relu chez le prestataire) ;
+   * - `not-ready` : aucune correspondance, mais l'indice marchand (non
+   *   prouvé) désigne un paiement encore `initiating` sans référence
+   *   prestataire : notification possiblement arrivée avant l'enregistrement
+   *   de la réponse d'initiation → réponse temporaire ;
+   * - `unknown` : rien à faire.
+   */
+  async locateProviderNotification(
+    providerName: string,
+    providerReference: string,
+    merchantReferenceHint: string | null,
+  ): Promise<
+    | { kind: 'found'; paymentId: Types.ObjectId }
+    | { kind: 'not-ready' }
+    | { kind: 'unknown' }
+  > {
+    const payment = await this.paymentModel
+      .findOne({ provider: providerName, providerReference })
+      .select({ _id: 1 })
+      .lean<{ _id: Types.ObjectId }>()
+      .exec();
+    if (payment) return { kind: 'found', paymentId: payment._id };
+    if (merchantReferenceHint) {
+      const initiating = await this.paymentModel
+        .findOne({
+          provider: providerName,
+          merchantReference: merchantReferenceHint,
+          status: SubscriptionPaymentStatus.INITIATING,
+          providerReference: null,
+        })
+        .select({ _id: 1 })
+        .lean()
+        .exec();
+      if (initiating) return { kind: 'not-ready' };
+    }
+    return { kind: 'unknown' };
   }
 
   // ─── Internes ──────────────────────────────────────────────────────────────

@@ -852,7 +852,27 @@ describe('Fournisseur de production inchangé (aucune activation de CamPay)', ()
     expect(providers).not.toContain(CamPayPaymentProvider);
   });
 
-  it('aucun fichier de production hors `campay/` n’importe l’adaptateur', () => {
+  // 1-14D.2F : le webhook (`campay-webhook*`, inactif) est enregistré par
+  // `SubscriptionsModule` ; le garde-fou vise donc précisément l'ADAPTATEUR
+  // et son TRANSPORT, jamais importés hors de `campay/` ni par le webhook.
+  const ADAPTER_IMPORT =
+    /(from\s+|require\(\s*)['"][^'"]*campay-(payment-provider|transport)['"]/i;
+
+  it('le webhook (1-14D.2F) n’importe ni l’adaptateur ni son transport', () => {
+    const webhookFiles = readdirSync(__dirname).filter(
+      (name) =>
+        name.startsWith('campay-webhook') &&
+        name.endsWith('.ts') &&
+        !name.endsWith('.spec.ts'),
+    );
+    expect(webhookFiles.length).toBeGreaterThanOrEqual(5);
+    for (const name of webhookFiles) {
+      const source = readFileSync(join(__dirname, name), 'utf8');
+      expect(ADAPTER_IMPORT.test(source)).toBe(false);
+    }
+  });
+
+  it('aucun fichier de production hors `campay/` n’importe l’adaptateur ni son transport', () => {
     const root = join(__dirname, '..', '..', '..');
     const offenders: string[] = [];
     const walk = (dir: string) => {
@@ -863,10 +883,8 @@ describe('Fournisseur de production inchangé (aucune activation de CamPay)', ()
         } else if (
           entry.name.endsWith('.ts') &&
           !entry.name.endsWith('.spec.ts') &&
-          // Import ou `require` d'un module `campay` (pas une simple mention).
-          /(from\s+|require\(\s*)['"][^'"]*campay[^'"]*['"]/i.test(
-            readFileSync(path, 'utf8'),
-          )
+          // Import ou `require` (pas une simple mention).
+          ADAPTER_IMPORT.test(readFileSync(path, 'utf8'))
         ) {
           offenders.push(path);
         }

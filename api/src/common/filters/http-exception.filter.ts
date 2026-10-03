@@ -7,6 +7,11 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { NO_STORE_ERROR_CODES } from '../../subscriptions/subscription-access';
+import {
+  PAYMENT_WEBHOOK_ERROR_CODE_PREFIX,
+  genericPaymentWebhookErrorMessage,
+  isPaymentWebhookPath,
+} from '../../subscriptions/payments/payment-webhook-paths';
 
 @Catch(HttpException)
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -35,6 +40,31 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const code = (extra as { code?: unknown }).code;
     if (typeof code === 'string' && NO_STORE_ERROR_CODES.has(code)) {
       response.setHeader('Cache-Control', 'no-store');
+    }
+
+    // 1-14D.2F : notifications de paiement (toute casse, comme le routeur) →
+    // `no-store`, chemin seul (jamais la query : signature, téléphone, URL de
+    // redirection d'un callback GET), et message repris SEULEMENT s'il porte
+    // un code propre au webhook ; sinon message générique (le message d'une
+    // erreur du parseur JSON cite un extrait du corps reçu).
+    if (
+      typeof request.path === 'string' &&
+      isPaymentWebhookPath(request.path)
+    ) {
+      response.setHeader('Cache-Control', 'no-store');
+      const own =
+        typeof code === 'string' &&
+        code.startsWith(PAYMENT_WEBHOOK_ERROR_CODE_PREFIX);
+      response.status(status).json({
+        statusCode: status,
+        error: HttpStatus[status] ?? 'Error',
+        ...(own
+          ? { message, code }
+          : { message: genericPaymentWebhookErrorMessage(status) }),
+        path: request.path,
+        timestamp: new Date().toISOString(),
+      });
+      return;
     }
 
     response.status(status).json({

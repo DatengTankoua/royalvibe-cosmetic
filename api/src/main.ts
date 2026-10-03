@@ -12,6 +12,7 @@ import {
   resolveTrustProxySetting,
 } from './common/trust-proxy';
 import type { ExpressSettings } from './common/trust-proxy';
+import { API_APPLICATION_OPTIONS } from './common/application-options';
 
 async function bootstrap() {
   // CORS HTTP fermé (phase 0B.4) : la config est parsée UNE FOIS au
@@ -32,7 +33,7 @@ async function bootstrap() {
   // toute valeur invalide → erreur fatale au démarrage.
   const trustProxy = resolveTrustProxySetting(process.env);
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, API_APPLICATION_OPTIONS);
 
   // trust proxy : réglé UNIQUEMENT si un proxy est approuvé. Express calcule
   // alors `req.ip` depuis les sauts/adresses approuvés ; sinon `req.ip` est
