@@ -70,7 +70,7 @@ export class SubscriptionPaymentIndexError extends Error {
   }
 }
 
-interface IndexDescription {
+export interface IndexDescription {
   name?: string;
   key: Record<string, unknown>;
   unique?: boolean;
@@ -81,7 +81,7 @@ interface IndexDescription {
 }
 
 /** Égalité STRUCTURELLE, ordre des clés compris (MongoDB le conserve). */
-function sameValue(actual: unknown, expected: unknown): boolean {
+export function sameValue(actual: unknown, expected: unknown): boolean {
   if (
     typeof expected !== 'object' ||
     expected === null ||
@@ -102,7 +102,7 @@ function sameValue(actual: unknown, expected: unknown): boolean {
   );
 }
 
-function describeOne(
+export function describeOne(
   indexes: readonly IndexDescription[],
   required: RequiredPaymentIndex,
 ): string | null {

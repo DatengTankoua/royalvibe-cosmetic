@@ -40,6 +40,8 @@ import {
   paymentGrantReference,
 } from './payment-request';
 import { subscriptionPaymentDuplicateKeyIndex } from './subscription-payment-indexes';
+import { paymentConcordanceMismatches } from './payment-concordance';
+import type { MongooseSession } from '../subscriptions.service';
 import {
   invalidPayerPhone,
   paymentAlreadyPending,
@@ -87,7 +89,7 @@ export interface SubscriptionPaymentView {
   failedAt: string | null;
 }
 
-type PaymentRecord = SubscriptionPayment & { _id: Types.ObjectId };
+export type PaymentRecord = SubscriptionPayment & { _id: Types.ObjectId };
 
 /** États pouvant encore aboutir à un succès VÉRIFIÉ (jamais `review`). */
 const FINALIZABLE_STATUSES: readonly SubscriptionPaymentStatus[] =
@@ -450,15 +452,8 @@ export class SubscriptionPaymentsService {
     status: ProviderPaymentStatus,
   ): boolean {
     return (
-      status.merchantReference === payment.merchantReference &&
-      typeof status.providerReference === 'string' &&
-      status.providerReference.length > 0 &&
-      (payment.providerReference === null ||
-        status.providerReference === payment.providerReference) &&
-      typeof status.amount === 'number' &&
-      Number.isSafeInteger(status.amount) &&
-      status.amount === payment.amount &&
-      status.currency === payment.currency
+      paymentConcordanceMismatches(payment, status, payment.providerReference)
+        .length === 0
     );
   }
 
@@ -490,36 +485,7 @@ export class SubscriptionPaymentsService {
           if (!this.concordant(current, verified)) {
             return 'mismatch' as const;
           }
-          const granted = await this.subscriptions.grantSubscriptionInSession(
-            {
-              organizationId: current.organizationId.toHexString(),
-              term: current.term,
-              source: SubscriptionSource.PAYMENT,
-              sourceReference: paymentGrantReference(current._id),
-              grantedBy: `payment:${current.provider}`,
-            },
-            session,
-          );
-          const marked = await this.paymentModel
-            .updateOne(
-              { _id: current._id, status: current.status, periodId: null },
-              {
-                $set: {
-                  status: SubscriptionPaymentStatus.SUCCEEDED,
-                  open: false,
-                  periodId: new Types.ObjectId(granted.periodId),
-                  providerReference: verified.providerReference,
-                  confirmedAt: this.clock(),
-                },
-              },
-              { session },
-            )
-            .exec();
-          // Écriture conditionnelle vérifiée : sinon la transaction est
-          // annulée (aucune période sans paiement marqué).
-          if (marked.modifiedCount !== 1) {
-            throw new Error('Subscription payment finalization lost its race');
-          }
+          await this.grantAndMarkSucceededInSession(session, current, verified);
           return 'granted' as const;
         },
         { budgetMs: PAYMENT_CONFIRMATION_BUDGET_MS },
@@ -545,6 +511,51 @@ export class SubscriptionPaymentsService {
       throw error;
     }
     if (outcome === 'mismatch') await this.markReview(paymentId);
+  }
+
+  /**
+   * Attribution `source: payment` (`payment:<id>`, `payment:<prestataire>`)
+   * et marquage `succeeded` + période, dans la transaction ACTIVE de
+   * l'appelant (aucun réseau). Écriture conditionnelle vérifiée sur l'état
+   * LU dans la session : sinon exception, donc annulation de la transaction
+   * (aucune période sans paiement marqué). Partagé par la confirmation
+   * (`finalize`) et le rapprochement opérateur (1-14D.2G).
+   */
+  async grantAndMarkSucceededInSession(
+    session: MongooseSession,
+    current: PaymentRecord,
+    verified: ProviderPaymentStatus,
+  ): Promise<Types.ObjectId> {
+    const granted = await this.subscriptions.grantSubscriptionInSession(
+      {
+        organizationId: current.organizationId.toHexString(),
+        term: current.term,
+        source: SubscriptionSource.PAYMENT,
+        sourceReference: paymentGrantReference(current._id),
+        grantedBy: `payment:${current.provider}`,
+      },
+      session,
+    );
+    const periodId = new Types.ObjectId(granted.periodId);
+    const marked = await this.paymentModel
+      .updateOne(
+        { _id: current._id, status: current.status, periodId: null },
+        {
+          $set: {
+            status: SubscriptionPaymentStatus.SUCCEEDED,
+            open: false,
+            periodId,
+            providerReference: verified.providerReference,
+            confirmedAt: this.clock(),
+          },
+        },
+        { session },
+      )
+      .exec();
+    if (marked.modifiedCount !== 1) {
+      throw new Error('Subscription payment finalization lost its race');
+    }
+    return periodId;
   }
 
   /** Collecte acceptée / en attente : référence prestataire adoptée. */

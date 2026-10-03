@@ -25,6 +25,11 @@ import { SubscriptionPaymentsService } from './payments/subscription-payments.se
 import { SubscriptionPaymentsController } from './payments/subscription-payments.controller';
 import { SubscriptionPaymentIndexCheck } from './payments/subscription-payment-indexes';
 import {
+  SubscriptionPaymentReconciliation,
+  SubscriptionPaymentReconciliationSchema,
+} from './payments/reconciliation/subscription-payment-reconciliation.schema';
+import { PaymentReconciliationService } from './payments/reconciliation/payment-reconciliation.service';
+import {
   PAYMENT_PROVIDER,
   UnavailablePaymentProvider,
 } from './payments/payment-provider';
@@ -60,6 +65,10 @@ import {
       { name: SubscriptionPeriod.name, schema: SubscriptionPeriodSchema },
       { name: Organization.name, schema: OrganizationSchema },
       { name: SubscriptionPayment.name, schema: SubscriptionPaymentSchema },
+      {
+        name: SubscriptionPaymentReconciliation.name,
+        schema: SubscriptionPaymentReconciliationSchema,
+      },
     ]),
   ],
   controllers: [
@@ -82,6 +91,9 @@ import {
     PaymentWebhookThrottlerGuard,
     CamPayWebhookService,
     { provide: CAMPAY_WEBHOOK_CONFIG, useValue: DISABLED_CAMPAY_WEBHOOK },
+    // 1-14D.2G : rapprochement opérateur, utilisé par le CLI uniquement
+    // (aucun contrôleur ; fournisseur injecté `PAYMENT_PROVIDER`).
+    PaymentReconciliationService,
   ],
   exports: [SubscriptionsService],
 })
