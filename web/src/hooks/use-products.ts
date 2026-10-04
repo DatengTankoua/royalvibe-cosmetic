@@ -12,14 +12,16 @@ import {
   type ApiProduct,
 } from "@/lib/api";
 import { useSocket } from "@/contexts/socket-context";
-import { useOrganizationShell } from "@/contexts/organization-shell-context";
-import { hasPermission } from "@/lib/organization-permissions";
 import { useSaleInvalidation } from "@/hooks/use-sale-invalidation";
+import { useLiveRefresh } from "@/hooks/use-live-refresh";
+import { createResponseOrder } from "@/lib/refresh-coordinator";
 
-// 1-12H : les diffusions Socket.IO ne portent que les champs standard. Un
-// membre qui voit davantage recharge ses champs étendus via l'API autorisée
-// (rechargement silencieux, sans état « Chargement… »).
-const EVENT_REFRESH_DELAY_MS = 300;
+// 1-12H : les diffusions Socket.IO ne portent que les champs standard ; les
+// champs étendus (selon les permissions) ne viennent que de l'API.
+// 1-15A : toute diffusion produit ou vente concernant la liste déclenche une
+// relecture SILENCIEUSE regroupée (`useLiveRefresh`), pour tous les membres :
+// seule une lecture serveur réussie fait avancer `loadedAt` (1-11C.3), donc
+// une fusion d'événement ne masque jamais une vente locale confirmée.
 
 export function useProducts(sectionId?: string) {
   const [products, setProducts] = useState<ApiProduct[]>([]);
@@ -29,11 +31,9 @@ export function useProducts(sectionId?: string) {
   // réponse HTTP (401/403/404/5xx) — seule éligible au repli hors ligne.
   const [isOffline, setIsOffline] = useState(false);
   const socket = useSocket();
-  const { authContext } = useOrganizationShell();
-  const seesExtendedFields =
-    hasPermission(authContext, "products.view_stock_details") ||
-    hasPermission(authContext, "products.view_financials");
-  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 1-15A : une réponse périmée (requête plus ancienne arrivée en retard)
+  // n'écrase jamais une liste plus récente.
+  const order = useRef(createResponseOrder());
 
   // 1-11C.3 : début de la dernière requête RÉUSSIE — une vente locale
   // confirmée après cet instant n'est pas encore reflétée dans `products`.
@@ -43,8 +43,10 @@ export function useProducts(sectionId?: string) {
     async (options: { silent?: boolean } = {}) => {
       if (!options.silent) setIsLoading(true);
       const requestedAt = Date.now();
+      const ticket = order.current.begin();
       try {
         const data = await fetchProducts(sectionId);
+        if (!order.current.accept(ticket)) return;
         setProducts(data);
         setLoadedAt(requestedAt);
         setError(null);
@@ -66,16 +68,13 @@ export function useProducts(sectionId?: string) {
     void load();
   }, [load]);
 
+  const scheduleRefresh = useLiveRefresh(
+    () => load({ silent: true }),
+    loadedAt,
+  );
+
   useEffect(() => {
     if (!socket) return;
-    const scheduleRefresh = () => {
-      if (!seesExtendedFields) return;
-      if (refreshTimer.current) clearTimeout(refreshTimer.current);
-      refreshTimer.current = setTimeout(
-        () => void load({ silent: true }),
-        EVENT_REFRESH_DELAY_MS,
-      );
-    };
     // Payload standard `{ product, status }` : jamais de champ restreint.
     const onCreated = (data: Parameters<typeof flattenProductEvent>[0]) => {
       const p = flattenProductEvent(data);
@@ -103,9 +102,8 @@ export function useProducts(sectionId?: string) {
       socket.off("product:created", onCreated);
       socket.off("product:updated", onUpdated);
       socket.off("product:deleted", onDeleted);
-      if (refreshTimer.current) clearTimeout(refreshTimer.current);
     };
-  }, [socket, sectionId, seesExtendedFields, load]);
+  }, [socket, sectionId, scheduleRefresh]);
 
   const addProduct = useCallback(
     async (payload: {
@@ -160,7 +158,7 @@ export function useProducts(sectionId?: string) {
   // autorisé, agrégats rechargés silencieusement via l'API.
   useSaleInvalidation(
     (productId) => products.some((p) => p._id === productId),
-    () => void load({ silent: true }),
+    scheduleRefresh,
   );
 
   return {

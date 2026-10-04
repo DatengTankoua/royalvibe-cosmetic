@@ -41,8 +41,12 @@ Pilotage (terminal 2, recette démarrée) :
 
 Campagne navigateur (stack démarrée en mode simulated) :
   scenarios [ids...] --playwright=<dossier contenant node_modules/playwright> [--chromium=<chrome.exe>] [--out=<dossier>]
+  realtime [RT1..RT9] (mêmes options)     temps réel 1-15A : collègues, organisations, droits, coupure, outbox, analyse, corbeille
 
 Contrôles d'isolement (.env) :
+  isolated selftest               auto-test Jest : .env factices, garde, témoin sans garde
+  isolated api-unit|api-e2e       suites API (jest) isolées des .env réels
+  isolated web-build              next build dans la copie isolée (recette arrêtée)
   env-guard-selftest              garde JavaScript (canaris, témoin sans garde)
   web-canary-check [--out=<f>]    vrai next build / next start avec canaris (témoin, garde, copie isolée)
 `;
@@ -383,7 +387,8 @@ async function main(argv) {
         C.WORK_DIR,
       );
     }
-    case 'scenarios': {
+    case 'scenarios':
+    case 'realtime': {
       C.requireRunningState();
       const playwright = flags.playwright;
       if (typeof playwright !== 'string')
@@ -398,7 +403,10 @@ async function main(argv) {
       process.stdout.write(`Résultats : ${out}
 `);
       return runInherited(
-        path.join(__dirname, 'scenarios.js'),
+        path.join(
+          __dirname,
+          command === 'realtime' ? 'realtime-scenarios.js' : 'scenarios.js',
+        ),
         rest,
         C.baseEnv({
           RECIPE_PLAYWRIGHT_DIR: path.resolve(playwright),
@@ -410,6 +418,8 @@ async function main(argv) {
         C.WORK_DIR,
       );
     }
+    case 'isolated':
+      return require('./isolated-checks').main(rest[0]);
     case 'web-canary-check': {
       const result = await require('./web-canary').webCanaryCheck();
       if (typeof flags.out === 'string')

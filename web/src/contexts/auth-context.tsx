@@ -15,6 +15,7 @@ import {
   getStoredUser,
   setStoredUser,
   clearAuth,
+  isAuthStorageKey,
   type StoredUser,
 } from "@/lib/auth";
 import {
@@ -100,13 +101,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // installation ou fin de session limitée. Une réponse tardive (échange de
   // reprise) d'une époque révolue n'installe JAMAIS rien.
   const epochRef = useRef(0);
+  // 1-15A : session (jeton + utilisateur) reflétée par l'état de CET onglet.
+  const installedRef = useRef<{ token: string | null; user: string | null }>({
+    token: null,
+    user: null,
+  });
+  const markInstalled = useCallback(() => {
+    installedRef.current = {
+      token: getToken(),
+      user: JSON.stringify(getStoredUser()),
+    };
+  }, []);
 
   useEffect(() => {
     const stored = getStoredUser();
     const token = getToken();
     if (stored && token) setUser(stored);
+    markInstalled();
     setRestrictedState(getRestrictedToken());
     setIsLoading(false);
+  }, [markInstalled]);
+
+  // 1-15A — la session applicative est partagée par les onglets (même
+  // `localStorage`). Une connexion ou une déconnexion dans un AUTRE onglet
+  // remplace le jeton utilisé par cet onglet pour ses requêtes : l'onglet
+  // adopte immédiatement la nouvelle session (nouvelle `sessionVersion` :
+  // contexte relu, socket rouvert, pages remontées) ou la quitte, au lieu
+  // d'afficher l'ancienne organisation avec des réponses de la nouvelle.
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (!isAuthStorageKey(event.key)) return;
+      const token = getToken();
+      const stored = getStoredUser();
+      const installed = installedRef.current;
+      const userJson = JSON.stringify(stored);
+      if (token === installed.token && userJson === installed.user) return;
+      const tokenChanged = token !== installed.token;
+      installedRef.current = { token, user: userJson };
+      epochRef.current += 1;
+      if (!token || !stored) {
+        setUser(null);
+        return;
+      }
+      setUser(stored);
+      if (tokenChanged) setSessionVersion((v) => v + 1);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
 
   const endRestrictedSession = useCallback(() => {
@@ -146,6 +187,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           role: result.user.role,
         };
         setStoredUser(stored);
+        markInstalled();
         setUser(stored);
         setSessionVersion((v) => v + 1);
         return { status: "success" };
@@ -157,6 +199,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (inactive?.restrictedToken) {
           await clearTenantBrand();
           clearAuth();
+          markInstalled();
           setUser(null);
           setRestrictedToken(inactive.restrictedToken);
           setRestrictedState(inactive.restrictedToken);
@@ -167,7 +210,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new LoginError(getApiErrorMessage(err), getApiErrorCode(err));
       }
     },
-    [],
+    [markInstalled],
   );
 
   // 1-11B : purge du catalogue hors ligne AVANT de terminer la déconnexion —
@@ -177,10 +220,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     epochRef.current += 1;
     await purgeAllOfflineData();
     clearAuth();
+    markInstalled();
     clearRestrictedToken();
     setRestrictedState(null);
     setUser(null);
-  }, []);
+  }, [markInstalled]);
 
   // 1-14C.2 — Reprise d'une session LIMITÉE : uniquement par l'échange
   // serveur (`POST /auth/subscription-access/complete`, corps vide). Le
@@ -212,6 +256,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           role: me.role,
         };
         setStoredUser(stored);
+        markInstalled();
         setUser(stored);
         setSessionVersion((v) => v + 1);
         return "installed";
@@ -224,7 +269,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         return "unavailable";
       }
-    }, [endRestrictedSession]);
+    }, [endRestrictedSession, markInstalled]);
 
   return (
     <AuthContext.Provider

@@ -34,9 +34,28 @@ if (!globalThis.__STOCKMASTER_RECIPE_ENV_GUARD__) {
     return null; // descripteur numérique : rien à contrôler
   };
 
+  // 1-15A — exception OPTIONNELLE (absente par défaut) : préfixes absolus
+  // de dossiers créés par un test pour ses PROPRES `.env` factices (ex.
+  // `%TEMP%/reconcile-cli-14d2g-`). Jamais un dossier du dépôt.
+  const allowedPrefixes = (process.env.RECIPE_ENV_GUARD_ALLOW_PREFIXES || '')
+    .split(path.delimiter)
+    .filter(Boolean)
+    .map((prefix) => path.resolve(prefix));
+
+  const isAllowed = (target) => {
+    if (allowedPrefixes.length === 0) return false;
+    let full;
+    if (typeof target === 'string') full = path.resolve(target);
+    else if (Buffer.isBuffer(target)) full = path.resolve(target.toString());
+    else if (target instanceof URL && target.protocol === 'file:')
+      full = path.resolve(decodeURIComponent(target.pathname));
+    else return false;
+    return allowedPrefixes.some((prefix) => full.startsWith(prefix));
+  };
+
   const isEnvFile = (target) => {
     const name = targetName(target);
-    return name !== null && ENV_FILE.test(name);
+    return name !== null && ENV_FILE.test(name) && !isAllowed(target);
   };
 
   const record = (operation, target) => {

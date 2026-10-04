@@ -869,6 +869,28 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     expect(err).toBeInstanceOf(NotFoundException);
   });
 
+  it('1-15A : une émission en échec ne transforme jamais une mutation écrite en erreur', async () => {
+    await build();
+    eventsGateway.emitToOrganization.mockImplementation(() => {
+      throw new Error('socket indisponible');
+    });
+    productOneChain.exec.mockResolvedValue(null);
+    sectionOneChain.exec.mockResolvedValue(sectionDoc());
+    countChain.exec.mockResolvedValue(0);
+    productModel.create.mockResolvedValue(productDoc());
+    await expect(
+      service.create(ORG_A, DTO, 'http://s3/x.png', 'actor'),
+    ).resolves.toBeDefined();
+    expect(productModel.create).toHaveBeenCalledTimes(1);
+
+    updateChain.exec.mockResolvedValue(productDoc());
+    await expect(
+      service.remove(ORG_A, PRODUCT_ID, 'actor'),
+    ).resolves.toBeDefined();
+    await expect(service.restore(ORG_A, PRODUCT_ID)).resolves.toBeDefined();
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledTimes(3);
+  });
+
   it('restore : MÊME filtre + $set deletedAt:null ; invisible → 404', async () => {
     await build();
     updateChain.exec.mockResolvedValue(productDoc());

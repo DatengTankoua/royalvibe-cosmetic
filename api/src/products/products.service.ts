@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -49,6 +50,8 @@ type MongooseSession = Awaited<ReturnType<Connection['startSession']>>;
 
 @Injectable()
 export class ProductsService {
+  private readonly logger = new Logger(ProductsService.name);
+
   constructor(
     @InjectModel(Product.name) private productModel: Model<ProductDocument>,
     @InjectModel(Sale.name) private saleModel: Model<SaleDocument>,
@@ -57,6 +60,24 @@ export class ProductsService {
     private eventsGateway: EventsGateway,
     private auditService: AuditService,
   ) {}
+
+  /**
+   * 1-15A — diffusion APRÈS l'écriture, en best effort (comme les ventes) :
+   * une panne d'émission ne transforme jamais une mutation déjà écrite en
+   * erreur (le client pourrait sinon la rejouer). Les autres membres
+   * rattrapent l'état par relecture à leur prochaine connexion du socket.
+   */
+  private emitBestEffort(
+    organizationId: string,
+    event: 'product:created' | 'product:updated' | 'product:deleted',
+    payload: unknown,
+  ): void {
+    try {
+      this.eventsGateway.emitToOrganization(organizationId, event, payload);
+    } catch {
+      this.logger.warn(`${event} non émis (best effort).`);
+    }
+  }
 
   /** Throws 409 if another product (OF THE SAME TENANT) shares the name */
   private async assertUniqueProductName(
@@ -199,7 +220,7 @@ export class ProductsService {
       },
     );
     // 1-12H — diffusion commune : champs standard uniquement.
-    this.eventsGateway.emitToOrganization(
+    this.emitBestEffort(
       organizationId,
       'product:created',
       toProductMetricsView(product, COMMON_VISIBILITY),
@@ -397,7 +418,7 @@ export class ProductsService {
     }
     // 1-12H — diffusion commune (standard seul) ; chaque client recharge
     // ses champs étendus via l'API selon ses propres permissions.
-    this.eventsGateway.emitToOrganization(
+    this.emitBestEffort(
       organizationId,
       'product:updated',
       toProductMetricsView(saved, COMMON_VISIBILITY),
@@ -436,11 +457,7 @@ export class ProductsService {
         name: product.name,
       },
     );
-    this.eventsGateway.emitToOrganization(
-      organizationId,
-      'product:deleted',
-      id,
-    );
+    this.emitBestEffort(organizationId, 'product:deleted', id);
     return toProductView(product, visibility);
   }
 
@@ -474,7 +491,7 @@ export class ProductsService {
       )
       .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
-    this.eventsGateway.emitToOrganization(
+    this.emitBestEffort(
       organizationId,
       'product:created',
       toProductMetricsView(product, COMMON_VISIBILITY),

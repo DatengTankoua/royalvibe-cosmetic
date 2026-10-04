@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -144,6 +144,22 @@ function visibleNavItems(authContext: ApiAuthContext | null): ShellNavItem[] {
 
 const MOBILE_PRIMARY_COUNT = 4;
 
+// 1-15A — identité d'autorisation d'un contexte serveur : utilisateur,
+// organisation, rôle, permissions effectives et accord de saisie. Quand elle
+// change (droits modifiés en session ouverte, autre utilisateur ou autre
+// organisation), les pages sont REMONTÉES : leurs données (champs projetés
+// selon les anciens droits) et leurs requêtes en cours sont abandonnées, puis
+// relues avec le nouveau contexte. Inchangée → aucun remontage.
+function authorizationKey(ctx: ApiAuthContext): string {
+  return [
+    ctx.userId,
+    ctx.organizationId,
+    ctx.role,
+    [...ctx.effectivePermissions].sort().join(","),
+    ctx.access?.canRecordSales === true ? "sale" : "nosale",
+  ].join("|");
+}
+
 // Correctif 1-11C.3 : seule route /app servie hors ligne par le service
 // worker (document d'app shell précaché).
 const OFFLINE_AVAILABLE_HREF = "/app/catalog";
@@ -272,6 +288,23 @@ export default function AppShellLayout({
   const [verifying, setVerifying] = useState(false);
   const [verifyMessage, setVerifyMessage] = useState<string | null>(null);
   const [managerReloadKey, setManagerReloadKey] = useState(0);
+  // 1-15A : refus serveur du contexte (membership suspendue ou révoquée,
+  // organisation suspendue, jeton refusé) — les pages métier sont retirées
+  // (leurs données ne sont plus autorisées), seules les ventes locales et la
+  // déconnexion restent proposées. Levé uniquement par un contexte valide.
+  const [accessRefused, setAccessRefused] = useState(false);
+  // 1-15A : session (utilisateur + version du jeton) à laquelle appartient
+  // l'état du contexte ; les pages ne sont jamais montées avec le contexte
+  // d'une session précédente (autre onglet, reprise d'une session limitée).
+  const [contextSessionKey, setContextSessionKey] = useState<string | null>(
+    null,
+  );
+  const [contentGeneration, setContentGeneration] = useState(0);
+  const authorizationKeyRef = useRef<string | null>(null);
+  // 1-15A : déconnexion décidée par le serveur (droits modifiés…) : si le
+  // contexte relu reste valide, un nouveau socket est ouvert.
+  const serverDisconnectedRef = useRef(false);
+  const [socketRestartKey, setSocketRestartKey] = useState(0);
   const authContextRef = useRef<ApiAuthContext | null>(null);
   useEffect(() => {
     authContextRef.current = authContext;
@@ -280,8 +313,12 @@ export default function AppShellLayout({
   // 1-11C.2 : synchronisation des ventes hors ligne — partition issue du
   // contexte SERVEUR uniquement ; inactive sans contexte ou file vide.
   // 1-14C.2 : inactive aussi dès que l'accès commercial est bloqué.
+  const sessionKey = user ? `${user._id}:${sessionVersion}` : null;
+  const contextIsCurrent = contextSessionKey === sessionKey;
   useOfflineSalesSync(
-    !commercialBlock && hasApplicationAccess(authContext) ? authContext : null,
+    contextIsCurrent && !commercialBlock && hasApplicationAccess(authContext)
+      ? authContext
+      : null,
   );
 
   // 1-14C.2 : un appel du JWT applicatif COURANT refusé commercialement
@@ -333,9 +370,23 @@ export default function AppShellLayout({
     }
   }, [user, isLoading, router, restrictedToken]);
 
+  const effectSessionRef = useRef<string | null>(null);
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
+    const currentSession = `${user._id}:${sessionVersion}`;
+    // 1-15A : nouvelle session → aucun état de l'ancienne n'est conservé.
+    if (effectSessionRef.current !== currentSession) {
+      effectSessionRef.current = currentSession;
+      setAuthContext(null);
+      setOrganization(null);
+      setOfflineIdentity(null);
+      setCommercialBlock(null);
+      setAccessRefused(false);
+      setContextReady(false);
+      setListLoaded(false);
+      setOrganizations([]);
+    }
     setLoadingOrg(true);
     setBrandingError(null);
     setListError(null);
@@ -366,6 +417,7 @@ export default function AppShellLayout({
       } else {
         setOfflineIdentity(identity);
       }
+      setContextSessionKey(currentSession);
       setContextReady(true);
     };
     if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -397,6 +449,7 @@ export default function AppShellLayout({
           // aucune expiration annoncée ; rien n'est effacé.
           setOfflineIdentity(null);
           setStatusUnavailable(true);
+          setContextSessionKey(currentSession);
           setContextReady(true);
         } else {
           setOfflineIdentity(null);
@@ -405,6 +458,9 @@ export default function AppShellLayout({
           // ni identité visuelle du commerce.
           void clearSalesCapability();
           void clearTenantBrand();
+          // 1-15A : pages métier retirées (données devenues interdites).
+          setAccessRefused(true);
+          setContextSessionKey(currentSession);
           setContextReady(true);
         }
         setLoadingOrg(false);
@@ -419,6 +475,18 @@ export default function AppShellLayout({
       const token = getToken();
       setAuthContext(ctx);
       setOfflineIdentity(null);
+      setAccessRefused(false);
+      setContextSessionKey(currentSession);
+      // 1-15A : droits, rôle, organisation ou utilisateur changés → pages
+      // remontées (données et requêtes de l'ancien contexte abandonnées).
+      const nextKey = authorizationKey(ctx);
+      if (
+        authorizationKeyRef.current !== null &&
+        authorizationKeyRef.current !== nextKey
+      ) {
+        setContentGeneration((v) => v + 1);
+      }
+      authorizationKeyRef.current = nextKey;
 
       // 1-14C.2 — accès commercial BLOQUÉ : aucun appel métier (branding
       // compris), capacité hors ligne retirée, refus mémorisé. Le pointeur
@@ -447,6 +515,12 @@ export default function AppShellLayout({
       forgetCommercialBlock(identity);
       setCommercialBlock(null);
       setContextReady(true);
+      // 1-15A : socket fermé par le serveur mais contexte toujours valide
+      // (ex. permissions modifiées) → un seul nouveau socket.
+      if (serverDisconnectedRef.current) {
+        serverDisconnectedRef.current = false;
+        setSocketRestartKey((v) => v + 1);
+      }
 
       // `allSettled` : une organisation courante suspendue (403) ne doit
       // jamais empêcher l'exploitation d'une liste d'organisations valide,
@@ -715,9 +789,20 @@ export default function AppShellLayout({
   }
 
   return (
-    <SocketProvider onServerDisconnect={() => setRefreshTick((v) => v + 1)}>
+    <SocketProvider
+      restartKey={socketRestartKey}
+      onServerDisconnect={() => {
+        serverDisconnectedRef.current = true;
+        setRefreshTick((v) => v + 1);
+      }}
+    >
       <OrganizationShellContext.Provider
-        value={{ organization, authContext, refreshShell, offlineIdentity }}
+        value={{
+          organization,
+          authContext: contextIsCurrent ? authContext : null,
+          refreshShell,
+          offlineIdentity: contextIsCurrent ? offlineIdentity : null,
+        }}
       >
         <OfflineSalesProvider>
           {/* 1-12A : jetons --tenant-* posés sur la racine du shell
@@ -871,13 +956,31 @@ export default function AppShellLayout({
                   </button>
                   <PendingSalesIfAny />
                 </div>
-              ) : !contextReady ? (
+              ) : !contextReady || !contextIsCurrent ? (
                 <p
                   role="status"
                   className="mx-auto mt-10 text-sm text-muted-foreground"
                 >
                   Chargement…
                 </p>
+              ) : accessRefused ? (
+                <div
+                  data-testid="access-refused"
+                  className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4 text-center"
+                >
+                  <p role="alert" className="text-sm text-muted-foreground">
+                    Ton accès à cette organisation n&apos;est plus actif.
+                    Contacte un administrateur ou déconnecte-toi.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted"
+                  >
+                    Se déconnecter
+                  </button>
+                  <PendingSalesIfAny />
+                </div>
               ) : noActiveOrganization ? (
                 <div className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
                   <p className="text-sm text-muted-foreground">
@@ -894,7 +997,7 @@ export default function AppShellLayout({
                   <PendingSalesIfAny />
                 </div>
               ) : (
-                children
+                <Fragment key={contentGeneration}>{children}</Fragment>
               )}
             </main>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchTrash,
   restoreSection,
@@ -11,6 +11,13 @@ import {
   type ApiTrashedSection,
   type ApiTrashedProduct,
 } from "@/lib/api";
+import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
+import { createResponseOrder } from "@/lib/refresh-coordinator";
+
+// 1-15A : mise à la corbeille (`product:deleted`) ou restauration
+// (`product:created`) par un autre membre → corbeille relue silencieusement.
+// La suppression définitive et les sections n'émettent aucun événement.
+const TRASH_SIGNALS = ["product:deleted", "product:created"] as const;
 
 // `enabled` (1-9D) : la corbeille est gardée par `trash.manage` côté backend
 // — sans cette permission, ne JAMAIS déclencher `GET /trash` (403 inutile).
@@ -19,19 +26,31 @@ export function useTrash(enabled = true) {
   const [products, setProducts] = useState<ApiTrashedProduct[]>([]);
   const [isLoading, setIsLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
+  const order = useRef(createResponseOrder());
 
-  const load = useCallback(async () => {
-    setIsLoading(true);
+  const load = useCallback(async (options: { silent?: boolean } = {}) => {
+    if (!options.silent) setIsLoading(true);
+    const requestedAt = Date.now();
+    const ticket = order.current.begin();
     try {
       const data = await fetchTrash();
+      if (!order.current.accept(ticket)) return;
       setSections(data.sections);
       setProducts(data.products);
+      setLoadedAt(requestedAt);
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      if (!options.silent) setError(getApiErrorMessage(err));
     } finally {
-      setIsLoading(false);
+      if (!options.silent) setIsLoading(false);
     }
   }, []);
+
+  const scheduleRefresh = useLiveRefresh(
+    () => (enabled ? load({ silent: true }) : Promise.resolve()),
+    enabled ? loadedAt : undefined,
+  );
+  useSocketSignals(TRASH_SIGNALS, enabled ? scheduleRefresh : () => {});
 
   useEffect(() => {
     if (!enabled) {
@@ -81,12 +100,14 @@ export function useTrash(enabled = true) {
     setProducts((prev) => prev.filter((p) => !ids.includes(p._id)));
   }, []);
 
+  const reload = useCallback(() => load(), [load]);
+
   return {
     sections,
     products,
     isLoading,
     error,
-    reload: load,
+    reload,
     doRestoreSection,
     doPermanentDeleteSection,
     doRestoreProduct,

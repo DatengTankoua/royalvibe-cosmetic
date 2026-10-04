@@ -14,9 +14,6 @@ export const SALE_INVALIDATION_EVENTS = [
   "sale:deleted",
 ] as const;
 
-// Regroupe les événements rapprochés en UN seul rechargement.
-export const SALE_INVALIDATION_DELAY_MS = 400;
-
 interface SaleInvalidationPayload {
   _id?: unknown;
   productId?: unknown;
@@ -24,9 +21,13 @@ interface SaleInvalidationPayload {
 
 /**
  * `matches(productId)` : le produit concerné est-il affiché ? `onInvalidate`
- * n'est jamais appelé hors ligne (le socket y est déjà fermé, et
- * `navigator.onLine` est revérifié au déclenchement) et ne touche ni
- * l'outbox ni l'état de synchronisation des ventes locales.
+ * ne touche ni l'outbox ni l'état de synchronisation des ventes locales.
+ *
+ * 1-15A : appelé à CHAQUE événement concerné — le regroupement et la
+ * sérialisation des relectures sont faits par l'appelant (`useLiveRefresh`),
+ * qui conserve aussi une invalidation arrivée pendant un chargement (l'ancien
+ * minuteur local de 400 ms ne le faisait pas). Hors ligne, le socket est
+ * fermé et `useLiveRefresh` revérifie `navigator.onLine`.
  */
 export function useSaleInvalidation(
   matches: (productId: string) => boolean,
@@ -43,22 +44,15 @@ export function useSaleInvalidation(
 
   useEffect(() => {
     if (!socket) return;
-    let timer: ReturnType<typeof setTimeout> | null = null;
     const handler = (payload: SaleInvalidationPayload) => {
       const productId =
         typeof payload?.productId === "string" ? payload.productId : null;
       if (!productId || !matchesRef.current(productId)) return;
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        if (typeof navigator !== "undefined" && !navigator.onLine) return;
-        invalidateRef.current();
-      }, SALE_INVALIDATION_DELAY_MS);
+      invalidateRef.current();
     };
     for (const event of SALE_INVALIDATION_EVENTS) socket.on(event, handler);
     return () => {
       for (const event of SALE_INVALIDATION_EVENTS) socket.off(event, handler);
-      if (timer) clearTimeout(timer);
     };
   }, [socket]);
 }

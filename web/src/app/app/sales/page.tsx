@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ClockIcon } from "lucide-react";
 import { fetchSales, getApiErrorMessage, type ApiSale } from "@/lib/api";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
@@ -12,6 +12,9 @@ import { PendingSalesAnchor } from "@/components/sales/pending-sales-nav";
 import { hasPermission } from "@/lib/organization-permissions";
 import { fmtXof } from "@/lib/currency";
 import { Card, CardContent } from "@/components/ui/card";
+import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
+import { SALE_INVALIDATION_EVENTS } from "@/hooks/use-sale-invalidation";
+import { createResponseOrder } from "@/lib/refresh-coordinator";
 
 const fmt = fmtXof;
 
@@ -33,6 +36,31 @@ export default function SalesPage() {
   // 1-11C.3 : liste rechargée après confirmation d'une vente locale.
   const { unfinalizedCount, syncedVersion } = useOfflineSales();
   const pendingLink = usePendingSalesHref();
+  // 1-15A : début de la dernière lecture réussie (rattrapage après
+  // reconnexion) ; une réponse périmée n'écrase jamais une liste plus récente.
+  const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
+  const order = useRef(createResponseOrder());
+
+  const load = useCallback(async (options: { silent?: boolean } = {}) => {
+    if (!options.silent) {
+      setIsLoading(true);
+      setError(null);
+    }
+    const requestedAt = Date.now();
+    const ticket = order.current.begin();
+    try {
+      const data = await fetchSales();
+      if (!order.current.accept(ticket)) return;
+      setSales(data);
+      setError(null);
+      setLoadedAt(requestedAt);
+    } catch (err) {
+      // Une relecture silencieuse en échec conserve la liste affichée.
+      if (!options.silent) setError(getApiErrorMessage(err));
+    } finally {
+      if (!options.silent) setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!authContext) return;
@@ -40,13 +68,17 @@ export default function SalesPage() {
       setIsLoading(false);
       return;
     }
-    setIsLoading(true);
-    setError(null);
-    fetchSales()
-      .then(setSales)
-      .catch((err) => setError(getApiErrorMessage(err)))
-      .finally(() => setIsLoading(false));
-  }, [authContext, canView, retryKey, syncedVersion]);
+    void load();
+  }, [authContext, canView, retryKey, syncedVersion, load]);
+
+  // 1-15A : vente enregistrée, modifiée ou supprimée par n'importe quel
+  // membre → liste relue silencieusement (l'API applique `view_own` /
+  // `view_all` : jamais la vente d'un collègue sans `sales.view_all`).
+  const scheduleRefresh = useLiveRefresh(
+    () => (canView ? load({ silent: true }) : Promise.resolve()),
+    canView ? loadedAt : undefined,
+  );
+  useSocketSignals(SALE_INVALIDATION_EVENTS, scheduleRefresh);
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 sm:py-10">

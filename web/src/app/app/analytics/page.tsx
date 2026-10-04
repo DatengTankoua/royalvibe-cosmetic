@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   AreaChart,
@@ -38,6 +38,18 @@ import {
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
 import { hasPermission } from "@/lib/organization-permissions";
 import { fmtXof } from "@/lib/currency";
+import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
+import { SALE_INVALIDATION_EVENTS } from "@/hooks/use-sale-invalidation";
+import { createResponseOrder } from "@/lib/refresh-coordinator";
+
+// 1-15A : toute vente (création, modification, suppression) et tout
+// changement de produit modifient les indicateurs — relecture silencieuse.
+const ANALYTICS_SIGNALS = [
+  ...SALE_INVALIDATION_EVENTS,
+  "product:created",
+  "product:updated",
+  "product:deleted",
+] as const;
 
 const fmt = fmtXof;
 const pct = (n: number) => `${n.toFixed(1)}%`;
@@ -100,25 +112,31 @@ export default function AnalyticsPage() {
     [],
   );
   const [outOfStockOpen, setOutOfStockOpen] = useState(false);
+  // 1-15A : début de la dernière lecture réussie (rattrapage après
+  // reconnexion) ; une réponse périmée (autre mois, relecture plus ancienne)
+  // n'écrase jamais une plus récente.
+  const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
+  const order = useRef(createResponseOrder());
 
-  useEffect(() => {
-    if (!authContext) return;
-    if (!canRead) {
-      setLoading(false);
-      return;
-    }
-    // monthly trend and out-of-stock list are always global (no month filter)
-    const month = selectedMonth || undefined;
-    setLoading(true);
-    setError(null);
-    Promise.all([
-      fetchOverview(month),
-      fetchProductsRanking(month),
-      fetchSellersRanking(month),
-      fetchMonthlyTrend(),
-      fetchProducts(),
-    ])
-      .then(([ov, pr, sr, mt, allProducts]) => {
+  const load = useCallback(
+    async (options: { silent?: boolean } = {}) => {
+      // monthly trend and out-of-stock list are always global (no month filter)
+      const month = selectedMonth || undefined;
+      if (!options.silent) {
+        setLoading(true);
+        setError(null);
+      }
+      const requestedAt = Date.now();
+      const ticket = order.current.begin();
+      try {
+        const [ov, pr, sr, mt, allProducts] = await Promise.all([
+          fetchOverview(month),
+          fetchProductsRanking(month),
+          fetchSellersRanking(month),
+          fetchMonthlyTrend(),
+          fetchProducts(),
+        ]);
+        if (!order.current.accept(ticket)) return;
         setOverview(ov);
         setProducts(pr);
         setSellers(sr);
@@ -128,10 +146,32 @@ export default function AnalyticsPage() {
             (p) => p.status === "out_of_stock",
           ),
         );
-      })
-      .catch((err) => setError(getApiErrorMessage(err)))
-      .finally(() => setLoading(false));
-  }, [authContext, canRead, selectedMonth, retryKey]);
+        setError(null);
+        setLoadedAt(requestedAt);
+      } catch (err) {
+        // Une relecture silencieuse en échec conserve les indicateurs affichés.
+        if (!options.silent) setError(getApiErrorMessage(err));
+      } finally {
+        if (!options.silent) setLoading(false);
+      }
+    },
+    [selectedMonth],
+  );
+
+  useEffect(() => {
+    if (!authContext) return;
+    if (!canRead) {
+      setLoading(false);
+      return;
+    }
+    void load();
+  }, [authContext, canRead, retryKey, load]);
+
+  const scheduleRefresh = useLiveRefresh(
+    () => (canRead ? load({ silent: true }) : Promise.resolve()),
+    canRead ? loadedAt : undefined,
+  );
+  useSocketSignals(ANALYTICS_SIGNALS, scheduleRefresh);
 
   if (authContext && !canRead) {
     return (

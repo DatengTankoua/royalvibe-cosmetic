@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import {
@@ -30,6 +30,9 @@ import { hasPermission } from "@/lib/organization-permissions";
 import { fmtXof } from "@/lib/currency";
 import { productInfoItems } from "@/lib/product-info";
 import { useSaleInvalidation } from "@/hooks/use-sale-invalidation";
+import { useLiveRefresh } from "@/hooks/use-live-refresh";
+import { useSocket } from "@/contexts/socket-context";
+import { createResponseOrder } from "@/lib/refresh-coordinator";
 
 const fmt = fmtXof;
 
@@ -118,17 +121,25 @@ export default function ProductDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editSale, setEditSale] = useState<ApiSale | null>(null);
+  // 1-15A : produit placé dans la corbeille par un autre membre.
+  const [deleted, setDeleted] = useState(false);
 
   // 1-11C.3 : début de la dernière requête réussie (voir `reservesStock`).
   const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
+  // 1-15A : une réponse périmée n'écrase jamais une fiche plus récente.
+  const order = useRef(createResponseOrder());
 
   const load = useCallback(
     async (options: { silent?: boolean } = {}) => {
       if (!options.silent) setIsLoading(true);
       const requestedAt = Date.now();
+      const ticket = order.current.begin();
       try {
         const data = await fetchProduct(params.id);
+        if (!order.current.accept(ticket)) return;
         setDetail(data);
+        setDeleted(false);
+        setError(null);
         setLoadedAt(requestedAt);
       } catch (err) {
         // Un rechargement silencieux en échec conserve la fiche affichée.
@@ -141,12 +152,47 @@ export default function ProductDetailPage() {
   );
   const reload = useCallback(() => load(), [load]);
 
+  // 1-15A : relectures silencieuses regroupées, sérialisées, et rattrapage
+  // après une reconnexion du socket.
+  const scheduleRefresh = useLiveRefresh(
+    () => load({ silent: true }),
+    loadedAt,
+  );
+
   // 1-12H (correctif) : vente d'un collègue (ou la sienne) sur ce produit →
   // stock, agrégats autorisés et historique scopé rechargés via l'API.
-  useSaleInvalidation(
-    (productId) => productId === params.id,
-    () => void load({ silent: true }),
-  );
+  useSaleInvalidation((productId) => productId === params.id, scheduleRefresh);
+
+  // 1-15A : modification (prix, stock ajouté, nom), restauration ou mise à la
+  // corbeille du produit par un autre membre. La diffusion ne porte que les
+  // champs standard : la fiche est relue via l'API (permissions appliquées).
+  const socket = useSocket();
+  useEffect(() => {
+    if (!socket) return;
+    const productIdOf = (data: unknown): string | null => {
+      const product =
+        data && typeof data === "object" && "product" in data
+          ? (data as { product?: { _id?: unknown } }).product
+          : null;
+      return typeof product?._id === "string" ? product._id : null;
+    };
+    const onChanged = (data: unknown) => {
+      if (productIdOf(data) === params.id) scheduleRefresh();
+    };
+    const onDeleted = (id: unknown) => {
+      if (id !== params.id) return;
+      setDeleted(true);
+      setDetail(null);
+    };
+    socket.on("product:updated", onChanged);
+    socket.on("product:created", onChanged);
+    socket.on("product:deleted", onDeleted);
+    return () => {
+      socket.off("product:updated", onChanged);
+      socket.off("product:created", onChanged);
+      socket.off("product:deleted", onDeleted);
+    };
+  }, [socket, params.id, scheduleRefresh]);
 
   useEffect(() => {
     void load();
@@ -181,6 +227,11 @@ export default function ProductDetailPage() {
 
       {isLoading && (
         <p className="text-sm text-muted-foreground">Chargement…</p>
+      )}
+      {!isLoading && deleted && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Ce produit a été placé dans la corbeille.
+        </p>
       )}
       {!isLoading && error && (
         <div className="flex items-center gap-3">

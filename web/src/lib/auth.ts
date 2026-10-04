@@ -31,6 +31,14 @@ export function setStoredUser(user: StoredUser): void {
   localStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
+/**
+ * 1-15A : clé de session applicative (jeton ou utilisateur) modifiée dans un
+ * AUTRE onglet — `null` = `localStorage.clear()`.
+ */
+export function isAuthStorageKey(key: string | null): boolean {
+  return key === null || key === TOKEN_KEY || key === USER_KEY;
+}
+
 export function clearAuth(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);

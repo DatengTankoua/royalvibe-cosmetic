@@ -24,20 +24,36 @@ import { useOnlineStatus } from "@/hooks/use-online-status";
 // `online`.
 const SocketContext = createContext<Socket | null>(null);
 
+// 1-15A — instant (horloge locale) de la DERNIÈRE connexion établie du socket
+// courant : première connexion, reconnexion automatique de Socket.IO après
+// une perte de transport, nouveau socket au retour du réseau ou après un
+// redémarrage. Les événements émis avant l'entrée dans la room ne sont
+// jamais rejoués : une donnée dont la dernière lecture a COMMENCÉ avant cet
+// instant doit être relue (rattrapage). `null` tant qu'aucune connexion.
+const SocketConnectedAtContext = createContext<number | null>(null);
+
 // 1-14C.2 : monté UNIQUEMENT quand l'accès applicatif est ouvert (le shell
 // ne le rend pas sous un blocage commercial ; jamais avec un jeton limité).
 // Une déconnexion décidée par le SERVEUR (`io server disconnect`, ex.
 // échéance de couverture) n'est jamais suivie d'une reconnexion automatique
 // (comportement Socket.IO) : `onServerDisconnect` demande au shell de relire
 // le contexte, qui bascule si besoin sur l'écran de blocage — aucune boucle.
+//
+// 1-15A : `restartKey` — changé par le shell quand le contexte relu après
+// une déconnexion serveur reste valide (droits modifiés, membership
+// toujours active) : un seul nouveau socket, avec le token courant. Sans
+// cela, le temps réel restait coupé jusqu'au rechargement de la page.
 export function SocketProvider({
   children,
   onServerDisconnect,
+  restartKey = 0,
 }: {
   children: React.ReactNode;
   onServerDisconnect?: () => void;
+  restartKey?: number;
 }) {
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
   const onServerDisconnectRef = useRef(onServerDisconnect);
   useEffect(() => {
     onServerDisconnectRef.current = onServerDisconnect;
@@ -55,6 +71,7 @@ export function SocketProvider({
       transports: ["websocket"],
       auth: token ? { token } : undefined,
     });
+    instance.on("connect", () => setConnectedAt(Date.now()));
     instance.on("disconnect", (reason) => {
       if (reason === "io server disconnect") onServerDisconnectRef.current?.();
     });
@@ -64,13 +81,21 @@ export function SocketProvider({
       instance.disconnect();
       setSocket(null);
     };
-  }, [userId, sessionVersion, online]);
+  }, [userId, sessionVersion, online, restartKey]);
 
   return (
-    <SocketContext.Provider value={socket}>{children}</SocketContext.Provider>
+    <SocketContext.Provider value={socket}>
+      <SocketConnectedAtContext.Provider value={connectedAt}>
+        {children}
+      </SocketConnectedAtContext.Provider>
+    </SocketContext.Provider>
   );
 }
 
 export function useSocket(): Socket | null {
   return useContext(SocketContext);
+}
+
+export function useSocketConnectedAt(): number | null {
+  return useContext(SocketConnectedAtContext);
 }
