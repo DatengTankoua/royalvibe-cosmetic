@@ -69,7 +69,11 @@ export class ProductsService {
    */
   private emitBestEffort(
     organizationId: string,
-    event: 'product:created' | 'product:updated' | 'product:deleted',
+    event:
+      | 'product:created'
+      | 'product:updated'
+      | 'product:deleted'
+      | 'product:purged',
     payload: unknown,
   ): void {
     try {
@@ -522,6 +526,15 @@ export class ProductsService {
         organizationId: new Types.ObjectId(organizationId),
       })
       .exec();
+    // 1-15B — suppression DÉFINITIVE, distincte de la mise à la corbeille
+    // (`product:deleted`) : le produit n'est plus restaurable. Identifiant
+    // seul, émis seulement si cette requête a réellement supprimé le
+    // document (aucune émission sur 404 ni sur échec).
+    if (deleted) {
+      this.emitBestEffort(organizationId, 'product:purged', {
+        _id: String(deleted._id),
+      });
+    }
     return toProductView(deleted ?? product, visibility);
   }
 

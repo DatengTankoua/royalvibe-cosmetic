@@ -913,6 +913,43 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     expect(err).toBeInstanceOf(NotFoundException);
   });
 
+  it('1-15B : suppression définitive → `product:purged` `{ _id }` seul, APRÈS la suppression ; distinct de la corbeille ; rien si rien n’est supprimé', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+    deleteChain.exec.mockResolvedValue(productDoc());
+    await service.permanentDelete(ORG_A, PRODUCT_ID);
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledTimes(1);
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
+      ORG_A,
+      'product:purged',
+      { _id: PRODUCT_ID },
+    );
+    expect(
+      eventsGateway.emitToOrganization.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(
+      productModel.findOneAndDelete.mock.invocationCallOrder[0],
+    );
+
+    // Supprimé entre-temps par une autre requête : aucune émission.
+    eventsGateway.emitToOrganization.mockClear();
+    deleteChain.exec.mockResolvedValue(null);
+    await service.permanentDelete(ORG_A, PRODUCT_ID);
+    // Produit étranger ou absent : 404 sans émission.
+    productOneChain.exec.mockResolvedValue(null);
+    await service.permanentDelete(ORG_A, PRODUCT_ID).catch(() => undefined);
+    expect(eventsGateway.emitToOrganization).not.toHaveBeenCalled();
+
+    // Panne d'émission : la suppression déjà faite reste un succès.
+    productOneChain.exec.mockResolvedValue(productDoc());
+    deleteChain.exec.mockResolvedValue(productDoc());
+    eventsGateway.emitToOrganization.mockImplementation(() => {
+      throw new Error('socket indisponible');
+    });
+    await expect(
+      service.permanentDelete(ORG_A, PRODUCT_ID),
+    ).resolves.toBeDefined();
+  });
+
   it('permanentDelete : S3 deleteFile puis purge {_id, organizationId} UNIQUEMENT', async () => {
     await build();
     const doc = productDoc();

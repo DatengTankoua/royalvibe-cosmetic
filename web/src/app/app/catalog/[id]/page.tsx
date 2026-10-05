@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeftIcon, FolderIcon, SearchIcon } from "lucide-react";
@@ -27,6 +27,10 @@ import { useOrganizationShell } from "@/contexts/organization-shell-context";
 import { useOfflineSales } from "@/contexts/offline-sales-context";
 import { hasPermission } from "@/lib/organization-permissions";
 import type { OfflineCatalogSection } from "@/lib/offline-catalog-db";
+import { useSocket } from "@/contexts/socket-context";
+import { useLiveRefresh } from "@/hooks/use-live-refresh";
+import { SECTION_SIGNALS, readSectionSignal } from "@/hooks/use-sections";
+import { createResponseOrder } from "@/lib/refresh-coordinator";
 
 type ContentMode = "loading" | "subsections" | "products" | "empty";
 
@@ -58,8 +62,18 @@ export default function CatalogSectionPage() {
   const canEditProduct = canManageProducts || canAdjustStock;
 
   const [section, setSection] = useState<ApiSection | null>(null);
+  // 1-15B : section courante supprimée définitivement par un collègue.
+  const [sectionPurged, setSectionPurged] = useState(false);
   const [subSections, setSubSections] = useState<ApiSection[]>([]);
   const [subSectionsLoading, setSubSectionsLoading] = useState(true);
+  // 1-15B : ordre des réponses (en-tête, sous-catalogues), début de la
+  // dernière lecture réussie (rattrapage), sections purgées jamais réaffichées.
+  const sectionOrder = useRef(createResponseOrder());
+  const subOrder = useRef(createResponseOrder());
+  const purged = useRef(new Set<string>());
+  const [sectionLoadedAt, setSectionLoadedAt] = useState<number | undefined>(
+    undefined,
+  );
   const [editTarget, setEditTarget] = useState<ApiProduct | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -81,17 +95,40 @@ export default function CatalogSectionPage() {
   }, [syncedVersion, reloadProducts]);
   const { writeSectionScope } = useOfflineCatalog();
 
-  const loadSubSections = useCallback(async () => {
-    setSubSectionsLoading(true);
-    try {
-      const data = await fetchSections(params.id);
-      setSubSections(data);
-    } catch (err: unknown) {
-      toast.error(getApiErrorMessage(err));
-    } finally {
-      setSubSectionsLoading(false);
-    }
-  }, [params.id]);
+  const loadSubSections = useCallback(
+    async (options: { silent?: boolean } = {}) => {
+      if (!options.silent) setSubSectionsLoading(true);
+      const ticket = subOrder.current.begin();
+      try {
+        const data = await fetchSections(params.id);
+        if (!subOrder.current.accept(ticket)) return;
+        setSubSections(data.filter((s) => !purged.current.has(s._id)));
+      } catch (err: unknown) {
+        if (!options.silent) toast.error(getApiErrorMessage(err));
+      } finally {
+        if (!options.silent) setSubSectionsLoading(false);
+      }
+    },
+    [params.id],
+  );
+
+  // 1-15B : en-tête (nom, description, état corbeille) relu via l'API.
+  const loadSection = useCallback(
+    async (options: { silent?: boolean } = {}) => {
+      const requestedAt = Date.now();
+      const ticket = sectionOrder.current.begin();
+      try {
+        const data = await fetchSection(params.id);
+        if (purged.current.has(params.id)) return;
+        if (!sectionOrder.current.accept(ticket)) return;
+        setSection(data);
+        setSectionLoadedAt(requestedAt);
+      } catch (err: unknown) {
+        if (!options.silent) toast.error(getApiErrorMessage(err));
+      }
+    },
+    [params.id],
+  );
 
   const isLoading = subSectionsLoading || productsLoading;
 
@@ -145,14 +182,57 @@ export default function CatalogSectionPage() {
   );
 
   useEffect(() => {
-    fetchSection(params.id)
-      .then(setSection)
-      .catch((err: unknown) => toast.error(getApiErrorMessage(err)));
-  }, [params.id]);
+    void loadSection();
+  }, [loadSection]);
 
   useEffect(() => {
     void loadSubSections();
   }, [loadSubSections]);
+
+  // 1-15B : signaux de section d'un collègue → en-tête et sous-catalogues
+  // relus silencieusement, regroupés, rattrapés à la reconnexion.
+  const scheduleRefresh = useLiveRefresh(
+    () =>
+      Promise.all([
+        loadSection({ silent: true }),
+        loadSubSections({ silent: true }),
+      ]),
+    sectionLoadedAt,
+  );
+  const socket = useSocket();
+  const subSectionsRef = useRef(subSections);
+  useEffect(() => {
+    subSectionsRef.current = subSections;
+  });
+  useEffect(() => {
+    if (!socket) return;
+    const handlers = SECTION_SIGNALS.map((event) => {
+      const handler = (payload: unknown) => {
+        const signal = readSectionSignal(payload);
+        if (!signal) return;
+        if (event === "section:purged") {
+          purged.current.add(signal._id);
+          setSubSections((prev) => prev.filter((x) => x._id !== signal._id));
+          if (signal._id === params.id) {
+            setSectionPurged(true);
+            return;
+          }
+        }
+        if (
+          signal._id === params.id ||
+          signal.parentId === params.id ||
+          subSectionsRef.current.some((x) => x._id === signal._id)
+        ) {
+          scheduleRefresh();
+        }
+      };
+      socket.on(event, handler);
+      return [event, handler] as const;
+    });
+    return () => {
+      for (const [event, handler] of handlers) socket.off(event, handler);
+    };
+  }, [socket, params.id, scheduleRefresh]);
 
   const backHref = section?.parentId
     ? `/app/catalog/${section.parentId}`
@@ -255,6 +335,17 @@ export default function CatalogSectionPage() {
           />
         </div>
       )}
+
+      {/* 1-15B : état de la section courante modifié par un collègue. */}
+      {sectionPurged ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Ce catalogue a été supprimé définitivement.
+        </p>
+      ) : section?.deletedAt ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Ce catalogue a été placé dans la corbeille.
+        </p>
+      ) : null}
 
       {isLoading && (
         <p className="text-sm text-muted-foreground">Chargement…</p>

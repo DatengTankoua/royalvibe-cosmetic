@@ -49,6 +49,8 @@ const ANALYTICS_SIGNALS = [
   "product:created",
   "product:updated",
   "product:deleted",
+  // 1-15B : suppression définitive (capital investi, épuisés…).
+  "product:purged",
 ] as const;
 
 const fmt = fmtXof;

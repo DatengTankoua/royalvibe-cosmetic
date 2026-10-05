@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -10,6 +11,22 @@ import { Section, SectionDocument } from './schemas/section.schema';
 import { CreateSectionDto } from './dto/create-section.dto';
 import { UpdateSectionDto } from './dto/update-section.dto';
 import { Product, ProductDocument } from '../products/schemas/product.schema';
+import { EventsGateway } from '../events/events.gateway';
+
+/**
+ * 1-15B — événements de section : SIGNAUX d'invalidation pour les collègues
+ * de la même organisation (room `organization:<id>`). Payload minimal
+ * `{ _id, parentId }` : de quoi savoir quelle liste relire, jamais le
+ * document ; le client relit via l'API autorisée.
+ * - `section:created` / `section:updated` / `section:deleted` (corbeille) /
+ *   `section:restored` / `section:purged` (suppression définitive).
+ */
+export type SectionEvent =
+  | 'section:created'
+  | 'section:updated'
+  | 'section:deleted'
+  | 'section:restored'
+  | 'section:purged';
 
 /**
  * Isolation multi-tenant : `organizationId` (string, claim vérifié par la
@@ -19,10 +36,34 @@ import { Product, ProductDocument } from '../products/schemas/product.schema';
  */
 @Injectable()
 export class SectionsService {
+  private readonly logger = new Logger(SectionsService.name);
+
   constructor(
     @InjectModel(Section.name) private sectionModel: Model<SectionDocument>,
     @InjectModel(Product.name) private productModel: Model<ProductDocument>,
+    private readonly eventsGateway: EventsGateway,
   ) {}
+
+  /**
+   * Émission APRÈS l'écriture réussie (aucune transaction sur les sections),
+   * en best effort : une panne d'émission ne transforme jamais une écriture
+   * validée en erreur HTTP. Les clients manquants rattrapent par relecture
+   * à leur prochaine connexion du socket (1-15A).
+   */
+  private emitBestEffort(
+    organizationId: string,
+    event: SectionEvent,
+    section: { _id: Types.ObjectId; parentId?: Types.ObjectId | null },
+  ): void {
+    try {
+      this.eventsGateway.emitToOrganization(organizationId, event, {
+        _id: section._id.toString(),
+        parentId: section.parentId ? section.parentId.toString() : null,
+      });
+    } catch {
+      this.logger.warn(`${event} non émis (best effort).`);
+    }
+  }
 
   /** Throws 409 if another section shares the same name within the same tenant+parent */
   private async assertUniqueName(
@@ -81,12 +122,14 @@ export class SectionsService {
     await this.assertUniqueName(dto.name, parentId, tenant);
     // Champs whitelistés + org serveur : un `organizationId` d'origine
     // client (DTO falsifié) ne peut JAMAIS être enregistré.
-    return this.sectionModel.create({
+    const created = await this.sectionModel.create({
       name: dto.name,
       description: dto.description,
       parentId,
       organizationId: tenant,
     });
+    this.emitBestEffort(organizationId, 'section:created', created);
+    return created;
   }
 
   async findAll(
@@ -146,6 +189,7 @@ export class SectionsService {
       )
       .exec();
     if (!section) throw new NotFoundException(`Section ${id} not found`);
+    this.emitBestEffort(organizationId, 'section:updated', section);
     return section;
   }
 
@@ -159,6 +203,7 @@ export class SectionsService {
       )
       .exec();
     if (!section) throw new NotFoundException(`Section ${id} not found`);
+    this.emitBestEffort(organizationId, 'section:deleted', section);
     return section;
   }
 
@@ -172,6 +217,7 @@ export class SectionsService {
       )
       .exec();
     if (!section) throw new NotFoundException(`Section ${id} not found`);
+    this.emitBestEffort(organizationId, 'section:restored', section);
     return section;
   }
 
@@ -187,6 +233,7 @@ export class SectionsService {
       })
       .exec();
     if (!section) throw new NotFoundException(`Section ${id} not found`);
+    this.emitBestEffort(organizationId, 'section:purged', section);
     return section;
   }
 }

@@ -23,6 +23,8 @@ export interface ApiSection {
   description: string;
   parentId?: string | null;
   createdAt: string;
+  // Renseigné quand la section est dans la corbeille (`GET /sections/:id`).
+  deletedAt?: string | null;
 }
 
 // 1-12H — projection serveur selon les permissions effectives : un champ

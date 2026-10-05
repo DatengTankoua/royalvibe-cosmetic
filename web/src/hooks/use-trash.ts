@@ -11,13 +11,32 @@ import {
   type ApiTrashedSection,
   type ApiTrashedProduct,
 } from "@/lib/api";
-import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
+import { useLiveRefresh } from "@/hooks/use-live-refresh";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
+import { useSocket } from "@/contexts/socket-context";
 
 // 1-15A : mise à la corbeille (`product:deleted`) ou restauration
 // (`product:created`) par un autre membre → corbeille relue silencieusement.
-// La suppression définitive et les sections n'émettent aucun événement.
-const TRASH_SIGNALS = ["product:deleted", "product:created"] as const;
+// 1-15B : sections (corbeille, restauration, suppression définitive) et
+// suppression définitive d'un produit (`product:purged`, `{ _id }`).
+const TRASH_SIGNALS = [
+  "product:deleted",
+  "product:created",
+  "product:purged",
+  "section:deleted",
+  "section:restored",
+  "section:purged",
+] as const;
+
+/** Identifiant porté par un signal (`id` brut ou `{ _id }`), sinon `null`. */
+function signalId(payload: unknown): string | null {
+  if (typeof payload === "string") return payload;
+  if (payload && typeof payload === "object") {
+    const id = (payload as { _id?: unknown })._id;
+    if (typeof id === "string") return id;
+  }
+  return null;
+}
 
 // `enabled` (1-9D) : la corbeille est gardée par `trash.manage` côté backend
 // — sans cette permission, ne JAMAIS déclencher `GET /trash` (403 inutile).
@@ -28,6 +47,9 @@ export function useTrash(enabled = true) {
   const [error, setError] = useState<string | null>(null);
   const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
   const order = useRef(createResponseOrder());
+  // 1-15B : éléments supprimés définitivement — une réponse retenue avant la
+  // suppression ne les fait jamais réapparaître (identifiants non réutilisés).
+  const purgedIds = useRef(new Set<string>());
 
   const load = useCallback(async (options: { silent?: boolean } = {}) => {
     if (!options.silent) setIsLoading(true);
@@ -36,8 +58,8 @@ export function useTrash(enabled = true) {
     try {
       const data = await fetchTrash();
       if (!order.current.accept(ticket)) return;
-      setSections(data.sections);
-      setProducts(data.products);
+      setSections(data.sections.filter((x) => !purgedIds.current.has(x._id)));
+      setProducts(data.products.filter((x) => !purgedIds.current.has(x._id)));
       setLoadedAt(requestedAt);
     } catch (err) {
       if (!options.silent) setError(getApiErrorMessage(err));
@@ -50,7 +72,28 @@ export function useTrash(enabled = true) {
     () => (enabled ? load({ silent: true }) : Promise.resolve()),
     enabled ? loadedAt : undefined,
   );
-  useSocketSignals(TRASH_SIGNALS, enabled ? scheduleRefresh : () => {});
+  const socket = useSocket();
+  useEffect(() => {
+    if (!socket || !enabled) return;
+    const handlers = TRASH_SIGNALS.map((event) => {
+      const handler = (payload: unknown) => {
+        if (event === "product:purged" || event === "section:purged") {
+          const id = signalId(payload);
+          if (id) {
+            purgedIds.current.add(id);
+            setSections((prev) => prev.filter((x) => x._id !== id));
+            setProducts((prev) => prev.filter((x) => x._id !== id));
+          }
+        }
+        scheduleRefresh();
+      };
+      socket.on(event, handler);
+      return [event, handler] as const;
+    });
+    return () => {
+      for (const [event, handler] of handlers) socket.off(event, handler);
+    };
+  }, [socket, enabled, scheduleRefresh]);
 
   useEffect(() => {
     if (!enabled) {

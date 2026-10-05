@@ -306,6 +306,46 @@ const getsOf = (user, pattern, since = 0) =>
       r.at >= since,
   );
 
+// 1-15B — sections par l'API (routes existantes, droits du jeton fourni).
+async function apiSection(token, name, parentId) {
+  const res = await L.http('POST', '/sections', {
+    token,
+    body: parentId ? { name, parentId } : { name },
+  });
+  ok(res.status === 201, `section ${res.status} ${res.text}`);
+  return { _id: String(res.body._id), name };
+}
+
+async function apiRenameSection(token, id, name) {
+  const res = await L.http('PATCH', `/sections/${id}`, {
+    token,
+    body: { name },
+  });
+  ok(res.status === 200, `renommage section ${res.status} ${res.text}`);
+}
+
+/** 1-15B — sentinelle : enregistre toute apparition du texte dans la page. */
+async function armReappearance(page, text) {
+  await page.evaluate((wanted) => {
+    window.__rtReappeared = false;
+    const check = () => {
+      if (document.body.innerText.includes(wanted))
+        window.__rtReappeared = true;
+    };
+    check();
+    new MutationObserver(check).observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+  }, text);
+}
+const reappeared = (page) =>
+  page.evaluate(() => window.__rtReappeared === true);
+
+const sectionFrames = (user, since = 0) =>
+  user.frames.filter((f) => f.event.startsWith('section:') && f.at >= since);
+
 const FORBIDDEN_KEYS = [
   'purchasePrice',
   'initialQuantity',
@@ -1010,6 +1050,477 @@ async function main() {
         'corbeille : aucun rechargement complet',
       );
       return 'produit apparu à la mise à la corbeille, retiré à la restauration, sans rechargement';
+    },
+  );
+
+  // ─── 1-15B : sections et suppression définitive ────────────────────────────
+
+  // RT10 — opérations de section d'un collègue : listes, filtre, en-tête,
+  // sous-catalogues, corbeille, restauration, suppression définitive.
+  await scenario(
+    'RT10',
+    'Sections : création, renommage, filtre, corbeille, restauration, suppression définitive',
+    async (ctx) => {
+      const { ownerA, std } = await setupOrganizations();
+      const admin = await L.inviteMember(ownerA.token, 'admin', 'rtAdm10');
+      const tAdmin = await apiLogin(admin.email);
+      const tag = Date.now().toString(36);
+      const parent = await apiSection(ownerA.token, `RT10 Parent ${tag}`);
+      const target = await apiSection(ownerA.token, `RT10 Cible ${tag}`);
+
+      const root = await openUser(ctx.browser, 'std-root');
+      const sub = await openUser(ctx.browser, 'std-parent');
+      const head = await openUser(ctx.browser, 'std-section');
+      const trash = await openUser(ctx.browser, 'admin-trash');
+      ctx.users.push(root, sub, head, trash);
+      for (const [u, email] of [
+        [root, std.email],
+        [sub, std.email],
+        [head, std.email],
+        [trash, admin.email],
+      ])
+        await loginUi(u.page, email);
+      await root.page.goto(`${WEB}/app/catalog`);
+      await root.page.getByText(target.name).first().waitFor();
+      await sub.page.goto(`${WEB}/app/catalog/${parent._id}`);
+      await sub.page.getByText('Ce catalogue est vide.').waitFor();
+      await head.page.goto(`${WEB}/app/catalog/${target._id}`);
+      await head.page.getByRole('heading', { name: target.name }).waitFor();
+      await trash.page.goto(`${WEB}/app/trash`);
+      await trash.page
+        .getByText('Aucun catalogue dans la corbeille.')
+        .waitFor();
+      for (const u of [root, sub, head, trash]) await markNoReload(u.page);
+
+      // a) Création d'une section racine et d'un sous-catalogue.
+      const created = await apiSection(ownerA.token, `RT10 Nouvelle ${tag}`);
+      await root.page
+        .getByText(created.name)
+        .first()
+        .waitFor({ timeout: 15000 });
+      const child = await apiSection(
+        ownerA.token,
+        `RT10 Enfant ${tag}`,
+        parent._id,
+      );
+      await sub.page.getByText(child.name).first().waitFor({ timeout: 15000 });
+
+      // b) Filtre actif sur la liste racine : un renommage le fait entrer
+      //    puis sortir des résultats.
+      await root.page.fill(
+        'input[placeholder="Rechercher un catalogue…"]',
+        `zeta${tag}`,
+      );
+      await root.page.getByText(`Aucun résultat pour « zeta${tag} »`).waitFor();
+      await apiRenameSection(ownerA.token, target._id, `Zeta${tag} renommée`);
+      await root.page
+        .getByText(`Zeta${tag} renommée`)
+        .first()
+        .waitFor({ timeout: 15000 });
+      await head.page
+        .getByRole('heading', { name: `Zeta${tag} renommée` })
+        .waitFor({ timeout: 15000 });
+      await apiRenameSection(ownerA.token, target._id, `RT10 Cible2 ${tag}`);
+      await root.page
+        .getByText(`Aucun résultat pour « zeta${tag} »`)
+        .waitFor({ timeout: 15000 });
+      await root.page.fill('input[placeholder="Rechercher un catalogue…"]', '');
+      await root.page
+        .getByText(`RT10 Cible2 ${tag}`)
+        .first()
+        .waitFor({ timeout: 15000 });
+
+      // c) Mise à la corbeille : retirée de la liste, signalée sur sa page,
+      //    ajoutée à la corbeille de l'administrateur.
+      const del = await L.http('DELETE', `/sections/${target._id}`, {
+        token: ownerA.token,
+      });
+      ok(del.status === 200, `DELETE section ${del.status}`);
+      await until(
+        async () =>
+          (await root.page.getByText(`RT10 Cible2 ${tag}`).count()) === 0,
+        'section retirée de la liste racine',
+      );
+      await head.page
+        .getByText('Ce catalogue a été placé dans la corbeille.')
+        .waitFor({ timeout: 15000 });
+      await trash.page
+        .getByText(`RT10 Cible2 ${tag}`)
+        .first()
+        .waitFor({ timeout: 15000 });
+
+      // d) Restauration : de retour dans la liste, plus dans la corbeille.
+      const res = await L.http('PATCH', `/sections/${target._id}/restore`, {
+        token: tAdmin,
+      });
+      ok(res.status === 200, `restauration section ${res.status}`);
+      await root.page
+        .getByText(`RT10 Cible2 ${tag}`)
+        .first()
+        .waitFor({ timeout: 15000 });
+      await until(
+        async () =>
+          (await head.page
+            .getByText('Ce catalogue a été placé dans la corbeille.')
+            .count()) === 0,
+        'page de la section : bandeau retiré après restauration',
+      );
+      await trash.page
+        .getByText('Aucun catalogue dans la corbeille.')
+        .waitFor({ timeout: 15000 });
+
+      // e) Corbeille puis suppression définitive du sous-catalogue.
+      ok(
+        (
+          await L.http('DELETE', `/sections/${child._id}`, {
+            token: ownerA.token,
+          })
+        ).status === 200,
+        'corbeille enfant',
+      );
+      await until(
+        async () => (await sub.page.getByText(child.name).count()) === 0,
+        'enfant retiré du parent',
+      );
+      await trash.page
+        .getByText(child.name)
+        .first()
+        .waitFor({ timeout: 15000 });
+      const purge = await L.http('DELETE', `/sections/${child._id}/permanent`, {
+        token: tAdmin,
+      });
+      ok(purge.status === 200, `purge section ${purge.status}`);
+      await until(
+        async () => (await trash.page.getByText(child.name).count()) === 0,
+        'enfant retiré de la corbeille',
+      );
+
+      for (const u of [root, sub, head, trash])
+        ok(
+          await stillSameDocument(u.page),
+          `${u.label} : aucun rechargement complet`,
+        );
+      for (const u of [root, sub, head])
+        for (const f of sectionFrames(u)) {
+          const keys = Object.keys(f.payload || {})
+            .sort()
+            .join(',');
+          ok(keys === '_id,parentId', `${f.event} : clés ${keys}`);
+        }
+      return 'création, sous-catalogue, filtre, en-tête, corbeille, restauration, purge : visibles sans rechargement ; frames {_id, parentId}';
+    },
+  );
+
+  // RT11 — suppression définitive d'un produit : corbeille et fiche ouverte.
+  await scenario(
+    'RT11',
+    'Produit supprimé définitivement : corbeille et fiche ouverte',
+    async (ctx) => {
+      const { ownerA, fin, std } = await setupOrganizations();
+      const admin = await L.inviteMember(ownerA.token, 'admin', 'rtAdm11');
+      const tAdmin = await apiLogin(admin.email);
+      const p = await seedNamedProduct(ownerA.token, ownerA.orgId, 'rt11', 9);
+      const trash = await openUser(ctx.browser, 'admin-trash');
+      const sheet = await openUser(ctx.browser, 'fin-sheet');
+      const noTrash = await openUser(ctx.browser, 'std-trash');
+      ctx.users.push(trash, sheet, noTrash);
+      await loginUi(trash.page, admin.email);
+      await loginUi(sheet.page, fin.email);
+      await loginUi(noTrash.page, std.email);
+      await trash.page.goto(`${WEB}/app/trash`);
+      await trash.page.getByText('Aucun produit dans la corbeille.').waitFor();
+      await openProduct(sheet.page, p.productId);
+      await noTrash.page.goto(`${WEB}/app/trash`);
+      await noTrash.page
+        .getByText('pas la permission de gérer la corbeille')
+        .waitFor();
+      for (const u of [trash, sheet]) await markNoReload(u.page);
+
+      ok(
+        (
+          await L.http('DELETE', `/products/${p.productId}`, {
+            token: ownerA.token,
+          })
+        ).status === 200,
+        'corbeille',
+      );
+      await trash.page.getByText(p.name).first().waitFor({ timeout: 15000 });
+      await sheet.page
+        .getByText('Ce produit a été placé dans la corbeille.')
+        .waitFor({ timeout: 15000 });
+      const since = Date.now();
+      const purge = await L.http(
+        'DELETE',
+        `/products/${p.productId}/permanent`,
+        { token: tAdmin },
+      );
+      ok(purge.status === 200, `purge produit ${purge.status}`);
+      await until(
+        async () => (await trash.page.getByText(p.name).count()) === 0,
+        'produit retiré de la corbeille',
+      );
+      await trash.page.getByText('Aucun produit dans la corbeille.').waitFor();
+      await sheet.page
+        .getByText('Ce produit a été supprimé définitivement.')
+        .waitFor({ timeout: 15000 });
+      ok(
+        (await sheet.page.getByText('placé dans la corbeille').count()) === 0,
+        'fiche : plus présenté comme restaurable',
+      );
+      await observeFor(1000);
+      ok(
+        getsOf(noTrash, /^\/trash$/, 0).length === 0,
+        'sans trash.manage : aucune requête /trash',
+      );
+      for (const f of sheet.frames.filter(
+        (x) => x.event === 'product:purged' && x.at >= since,
+      )) {
+        const keys = Object.keys(f.payload || {})
+          .sort()
+          .join(',');
+        ok(keys === '_id', `product:purged : clés ${keys}`);
+      }
+      ok(
+        sheet.frames.some((x) => x.event === 'product:purged' && x.at >= since),
+        'événement product:purged reçu',
+      );
+      for (const u of [trash, sheet])
+        ok(
+          await stillSameDocument(u.page),
+          `${u.label} : aucun rechargement complet`,
+        );
+      return 'corbeille vidée, fiche « supprimé définitivement », frame {_id} ; sans trash.manage : 0 requête';
+    },
+  );
+
+  // RT12 — réponses retenues avant la suppression définitive.
+  await scenario(
+    'RT12',
+    'Réponse retenue avant suppression définitive : aucune réapparition',
+    async (ctx) => {
+      const { ownerA, fin } = await setupOrganizations();
+      const admin = await L.inviteMember(ownerA.token, 'admin', 'rtAdm12');
+      const tAdmin = await apiLogin(admin.email);
+      const p = await seedNamedProduct(ownerA.token, ownerA.orgId, 'rt12', 9);
+      const trash = await openUser(ctx.browser, 'admin-trash');
+      const sheet = await openUser(ctx.browser, 'fin-sheet');
+      ctx.users.push(trash, sheet);
+      await loginUi(trash.page, admin.email);
+      await loginUi(sheet.page, fin.email);
+      await trash.page.goto(`${WEB}/app/trash`);
+      await trash.page.getByText('Aucun produit dans la corbeille.').waitFor();
+      await openProduct(sheet.page, p.productId);
+
+      // Fiche : relecture retenue (contenu : produit actif), puis corbeille et purge.
+      const productPath = new RegExp(`/products/${p.productId}$`);
+      const sheetBarrier = await holdResponses(sheet.page, (url) =>
+        productPath.test(new URL(url).pathname),
+      );
+      ok(
+        (
+          await L.http('PATCH', `/products/${p.productId}`, {
+            token: ownerA.token,
+            body: { salePrice: 470 },
+          })
+        ).status === 200,
+        'PATCH',
+      );
+      await until(
+        () => sheetBarrier.held.length >= 1,
+        'relecture de la fiche retenue',
+      );
+      // Corbeille : relecture retenue (contenu : produit dans la corbeille).
+      const trashBarrier = await holdResponses(
+        trash.page,
+        (url) => new URL(url).pathname === '/trash',
+      );
+      ok(
+        (
+          await L.http('DELETE', `/products/${p.productId}`, {
+            token: ownerA.token,
+          })
+        ).status === 200,
+        'corbeille',
+      );
+      await until(
+        () => trashBarrier.held.length >= 1,
+        'relecture de la corbeille retenue',
+      );
+      ok(
+        (
+          await L.http('DELETE', `/products/${p.productId}/permanent`, {
+            token: tAdmin,
+          })
+        ).status === 200,
+        'purge',
+      );
+      await sheet.page
+        .getByText('Ce produit a été supprimé définitivement.')
+        .waitFor({ timeout: 15000 });
+      await until(
+        async () => (await trash.page.getByText(p.name).count()) === 0,
+        'corbeille : produit retiré à la purge',
+      );
+      // Sentinelles : TOUTE réapparition, même transitoire, est enregistrée.
+      await armReappearance(trash.page, p.name);
+      await armReappearance(sheet.page, 'Stock restant');
+      sheetBarrier.release();
+      trashBarrier.release();
+      await observeFor(1500);
+      ok(
+        !(await reappeared(trash.page)),
+        'corbeille : le produit n’est jamais réapparu, même brièvement',
+      );
+      ok(
+        !(await reappeared(sheet.page)),
+        'fiche : le produit n’est jamais réapparu, même brièvement',
+      );
+      ok(
+        (await trash.page.getByText(p.name).count()) === 0,
+        'corbeille : le produit ne réapparaît pas',
+      );
+      ok(
+        (await sheet.page
+          .getByText('Ce produit a été supprimé définitivement.')
+          .count()) === 1 && (await stockItems(sheet.page)).length === 0,
+        'fiche : le produit ne réapparaît pas',
+      );
+      await sheetBarrier.stop();
+      await trashBarrier.stop();
+      return 'deux réponses retenues (fiche, corbeille) libérées après la purge : aucune réapparition';
+    },
+  );
+
+  // RT13 — coupure, opérations pendant la coupure, reconnexion.
+  await scenario(
+    'RT13',
+    'Sections et suppression définitive pendant une coupure : rattrapage',
+    async (ctx) => {
+      const { ownerA, std } = await setupOrganizations();
+      const admin = await L.inviteMember(ownerA.token, 'admin', 'rtAdm13');
+      const tAdmin = await apiLogin(admin.email);
+      const tag = Date.now().toString(36);
+      const parent = await apiSection(ownerA.token, `RT13 Parent ${tag}`);
+      const p = await seedNamedProduct(ownerA.token, ownerA.orgId, 'rt13', 5);
+      ok(
+        (
+          await L.http('DELETE', `/products/${p.productId}`, {
+            token: ownerA.token,
+          })
+        ).status === 200,
+        'corbeille',
+      );
+      const sub = await openUser(ctx.browser, 'std-parent');
+      const trash = await openUser(ctx.browser, 'admin-trash');
+      ctx.users.push(sub, trash);
+      await loginUi(sub.page, std.email);
+      await loginUi(trash.page, admin.email);
+      await sub.page.goto(`${WEB}/app/catalog/${parent._id}`);
+      await sub.page.getByText('Ce catalogue est vide.').waitFor();
+      await trash.page.goto(`${WEB}/app/trash`);
+      await trash.page.getByText(p.name).first().waitFor();
+      for (const u of [sub, trash]) await markNoReload(u.page);
+
+      await sub.context.setOffline(true);
+      await trash.context.setOffline(true);
+      const child = await apiSection(
+        ownerA.token,
+        `RT13 Enfant ${tag}`,
+        parent._id,
+      );
+      await apiRenameSection(
+        ownerA.token,
+        parent._id,
+        `RT13 Parent renommé ${tag}`,
+      );
+      ok(
+        (
+          await L.http('DELETE', `/products/${p.productId}/permanent`, {
+            token: tAdmin,
+          })
+        ).status === 200,
+        'purge',
+      );
+      await sub.context.setOffline(false);
+      await trash.context.setOffline(false);
+      await sub.page.getByText(child.name).first().waitFor({ timeout: 20000 });
+      await sub.page
+        .getByRole('heading', { name: `RT13 Parent renommé ${tag}` })
+        .waitFor({ timeout: 20000 });
+      await until(
+        async () => (await trash.page.getByText(p.name).count()) === 0,
+        'corbeille rattrapée',
+        20000,
+      );
+      for (const u of [sub, trash])
+        ok(
+          await stillSameDocument(u.page),
+          `${u.label} : aucun rechargement complet`,
+        );
+      return 'sous-catalogue, renommage et purge survenus hors ligne rattrapés à la reconnexion';
+    },
+  );
+
+  // RT14 — seconde organisation : aucune frame ni invalidation.
+  await scenario(
+    'RT14',
+    'Seconde organisation : aucune frame de section ou de purge',
+    async (ctx) => {
+      const { ownerA, ownerB } = await setupOrganizations();
+      const tag = Date.now().toString(36);
+      const sB = await apiSection(ownerB.token, `RT14 B ${tag}`);
+      const pA = await seedNamedProduct(ownerA.token, ownerA.orgId, 'rt14', 3);
+      ok(
+        (
+          await L.http('DELETE', `/products/${pA.productId}`, {
+            token: ownerA.token,
+          })
+        ).status === 200,
+        'corbeille A',
+      );
+      const b = await openUser(ctx.browser, 'ownerB');
+      const bTrash = await openUser(ctx.browser, 'ownerB-trash');
+      ctx.users.push(b, bTrash);
+      await loginUi(b.page, ownerB.email);
+      await loginUi(bTrash.page, ownerB.email);
+      await b.page.goto(`${WEB}/app/catalog`);
+      await b.page.getByText(sB.name).first().waitFor();
+      await bTrash.page.goto(`${WEB}/app/trash`);
+      await bTrash.page.getByText('Aucun produit dans la corbeille.').waitFor();
+      const since = Date.now();
+      const sA = await apiSection(ownerA.token, `RT14 A ${tag}`);
+      await apiRenameSection(ownerA.token, sA._id, `RT14 A2 ${tag}`);
+      ok(
+        (await L.http('DELETE', `/sections/${sA._id}`, { token: ownerA.token }))
+          .status === 200,
+        'corbeille section A',
+      );
+      ok(
+        (
+          await L.http('DELETE', `/products/${pA.productId}/permanent`, {
+            token: ownerA.token,
+          })
+        ).status === 200,
+        'purge A',
+      );
+      await observeFor(2000);
+      for (const u of [b, bTrash]) {
+        const frames = u.frames.filter(
+          (f) =>
+            f.at >= since &&
+            (f.event.startsWith('section:') || f.event.startsWith('product:')),
+        );
+        ok(frames.length === 0, `${u.label} : ${frames.length} frame(s) de A`);
+        ok(
+          getsOf(u, /^\/(sections|trash)/, since).length === 0,
+          `${u.label} : aucune relecture`,
+        );
+      }
+      ok(
+        (await b.page.getByText(`RT14 A`).count()) === 0,
+        'B : aucune section de A',
+      );
+      return 'B : 0 frame section/produit, 0 relecture, aucune donnée de A';
     },
   );
 

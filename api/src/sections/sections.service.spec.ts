@@ -11,6 +11,7 @@ import { Section } from './schemas/section.schema';
 import { Product } from '../products/schemas/product.schema';
 import { CreateSectionDto } from './dto/create-section.dto';
 import { UpdateSectionDto } from './dto/update-section.dto';
+import { EventsGateway } from '../events/events.gateway';
 
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const ORG_B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
@@ -39,6 +40,7 @@ describe('SectionsService — isolation multi-tenant (1-4A)', () => {
     findOneAndDelete: jest.Mock;
   };
   let productModel: { countDocuments: jest.Mock };
+  let eventsGateway: { emitToOrganization: jest.Mock };
   let findChain: { sort: jest.Mock; exec: jest.Mock };
   let findOneChain: { exec: jest.Mock };
   let updateChain: { exec: jest.Mock };
@@ -58,11 +60,13 @@ describe('SectionsService — isolation multi-tenant (1-4A)', () => {
       findOneAndDelete: jest.fn(() => deleteChain),
     };
     productModel = { countDocuments: jest.fn() };
+    eventsGateway = { emitToOrganization: jest.fn() };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SectionsService,
         { provide: getModelToken(Section.name), useValue: sectionModel },
         { provide: getModelToken(Product.name), useValue: productModel },
+        { provide: EventsGateway, useValue: eventsGateway },
       ],
     }).compile();
     service = module.get(SectionsService);
@@ -404,5 +408,108 @@ describe('SectionsService — isolation multi-tenant (1-4A)', () => {
       async () => service.permanentDelete(ORG_A, SECTION_ID),
       SECTION_ID,
     );
+  });
+
+  // ---- 1-15B : signaux temps réel ----
+
+  const ROOT_PAYLOAD = { _id: SECTION_ID, parentId: null };
+
+  it('1-15B : chaque écriture réussie émet UNE fois, après l’écriture, `{ _id, parentId }` seul, à l’organisation SERVEUR', async () => {
+    await build();
+    findOneChain.exec.mockResolvedValue(null); // unicité : aucun doublon
+    sectionModel.create.mockResolvedValue(sectionDoc());
+    await service.create(ORG_A, { name: 'Nom' } as CreateSectionDto);
+    expect(eventsGateway.emitToOrganization).toHaveBeenLastCalledWith(
+      ORG_A,
+      'section:created',
+      ROOT_PAYLOAD,
+    );
+    expect(
+      eventsGateway.emitToOrganization.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(sectionModel.create.mock.invocationCallOrder[0]);
+
+    updateChain.exec.mockResolvedValue(sectionDoc({ name: 'Autre' }));
+    await service.update(ORG_A, SECTION_ID, { description: 'x' });
+    expect(eventsGateway.emitToOrganization).toHaveBeenLastCalledWith(
+      ORG_A,
+      'section:updated',
+      ROOT_PAYLOAD,
+    );
+
+    updateChain.exec.mockResolvedValue(sectionDoc());
+    await service.remove(ORG_A, SECTION_ID);
+    expect(eventsGateway.emitToOrganization).toHaveBeenLastCalledWith(
+      ORG_A,
+      'section:deleted',
+      ROOT_PAYLOAD,
+    );
+    await service.restore(ORG_A, SECTION_ID);
+    expect(eventsGateway.emitToOrganization).toHaveBeenLastCalledWith(
+      ORG_A,
+      'section:restored',
+      ROOT_PAYLOAD,
+    );
+
+    deleteChain.exec.mockResolvedValue(
+      sectionDoc({ parentId: new Types.ObjectId(PARENT_ID) }),
+    );
+    await service.permanentDelete(ORG_A, SECTION_ID);
+    expect(eventsGateway.emitToOrganization).toHaveBeenLastCalledWith(
+      ORG_A,
+      'section:purged',
+      { _id: SECTION_ID, parentId: PARENT_ID },
+    );
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledTimes(5);
+    for (const [, , payload] of eventsGateway.emitToOrganization.mock.calls as [
+      string,
+      string,
+      Record<string, unknown>,
+    ][]) {
+      expect(Object.keys(payload).sort()).toEqual(['_id', 'parentId']);
+    }
+  });
+
+  it('1-15B : aucune émission quand l’écriture échoue (404, doublon, parent avec produits)', async () => {
+    await build();
+    updateChain.exec.mockResolvedValue(null);
+    deleteChain.exec.mockResolvedValue(null);
+    await service.remove(ORG_A, SECTION_ID).catch(() => undefined);
+    await service.restore(ORG_A, SECTION_ID).catch(() => undefined);
+    await service
+      .update(ORG_A, SECTION_ID, { description: 'x' })
+      .catch(() => undefined);
+    await service.permanentDelete(ORG_A, SECTION_ID).catch(() => undefined);
+
+    findOneChain.exec.mockResolvedValue(sectionDoc()); // doublon de nom
+    await service
+      .create(ORG_A, { name: 'Nom' } as CreateSectionDto)
+      .catch(() => undefined);
+
+    findOneChain.exec.mockResolvedValue(sectionDoc({ _id: PARENT_ID }));
+    productModel.countDocuments.mockResolvedValue(1); // parent avec produits
+    await service
+      .create(ORG_A, {
+        name: 'Enfant',
+        parentId: PARENT_ID,
+      } as CreateSectionDto)
+      .catch(() => undefined);
+
+    expect(sectionModel.create).not.toHaveBeenCalled();
+    expect(eventsGateway.emitToOrganization).not.toHaveBeenCalled();
+  });
+
+  it('1-15B : une émission en échec ne transforme jamais une écriture validée en erreur', async () => {
+    await build();
+    eventsGateway.emitToOrganization.mockImplementation(() => {
+      throw new Error('socket indisponible');
+    });
+    updateChain.exec.mockResolvedValue(sectionDoc());
+    deleteChain.exec.mockResolvedValue(sectionDoc());
+    await expect(service.remove(ORG_A, SECTION_ID)).resolves.toBeDefined();
+    await expect(service.restore(ORG_A, SECTION_ID)).resolves.toBeDefined();
+    await expect(
+      service.permanentDelete(ORG_A, SECTION_ID),
+    ).resolves.toBeDefined();
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledTimes(3);
   });
 });

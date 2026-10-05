@@ -34,6 +34,9 @@ export function useProducts(sectionId?: string) {
   // 1-15A : une réponse périmée (requête plus ancienne arrivée en retard)
   // n'écrase jamais une liste plus récente.
   const order = useRef(createResponseOrder());
+  // 1-15B : produits supprimés définitivement — jamais réaffichés par une
+  // réponse retenue (identifiants non réutilisés).
+  const purged = useRef(new Set<string>());
 
   // 1-11C.3 : début de la dernière requête RÉUSSIE — une vente locale
   // confirmée après cet instant n'est pas encore reflétée dans `products`.
@@ -47,7 +50,7 @@ export function useProducts(sectionId?: string) {
       try {
         const data = await fetchProducts(sectionId);
         if (!order.current.accept(ticket)) return;
-        setProducts(data);
+        setProducts(data.filter((p) => !purged.current.has(p._id)));
         setLoadedAt(requestedAt);
         setError(null);
         setIsOffline(false);
@@ -79,6 +82,7 @@ export function useProducts(sectionId?: string) {
     const onCreated = (data: Parameters<typeof flattenProductEvent>[0]) => {
       const p = flattenProductEvent(data);
       if (sectionId && p.sectionId !== sectionId) return;
+      if (purged.current.has(p._id)) return;
       setProducts((prev) =>
         prev.some((x) => x._id === p._id) ? prev : [p, ...prev],
       );
@@ -95,13 +99,22 @@ export function useProducts(sectionId?: string) {
     };
     const onDeleted = (id: string) =>
       setProducts((prev) => prev.filter((x) => x._id !== id));
+    // 1-15B : suppression définitive, `{ _id }` seul.
+    const onPurged = (data: { _id?: unknown }) => {
+      if (typeof data?._id !== "string") return;
+      const id = data._id;
+      purged.current.add(id);
+      setProducts((prev) => prev.filter((x) => x._id !== id));
+    };
     socket.on("product:created", onCreated);
     socket.on("product:updated", onUpdated);
     socket.on("product:deleted", onDeleted);
+    socket.on("product:purged", onPurged);
     return () => {
       socket.off("product:created", onCreated);
       socket.off("product:updated", onUpdated);
       socket.off("product:deleted", onDeleted);
+      socket.off("product:purged", onPurged);
     };
   }, [socket, sectionId, scheduleRefresh]);
 

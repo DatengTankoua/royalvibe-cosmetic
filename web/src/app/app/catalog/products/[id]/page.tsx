@@ -122,7 +122,10 @@ export default function ProductDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [editSale, setEditSale] = useState<ApiSale | null>(null);
   // 1-15A : produit placé dans la corbeille par un autre membre.
-  const [deleted, setDeleted] = useState(false);
+  // 1-15B : ou supprimé définitivement (`product:purged`) — jamais présenté
+  // comme restaurable, et plus aucune relecture appliquée ensuite.
+  const [removal, setRemoval] = useState<"trashed" | "purged" | null>(null);
+  const purgedRef = useRef(false);
 
   // 1-11C.3 : début de la dernière requête réussie (voir `reservesStock`).
   const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
@@ -131,19 +134,23 @@ export default function ProductDetailPage() {
 
   const load = useCallback(
     async (options: { silent?: boolean } = {}) => {
+      if (purgedRef.current) return;
       if (!options.silent) setIsLoading(true);
       const requestedAt = Date.now();
       const ticket = order.current.begin();
       try {
         const data = await fetchProduct(params.id);
+        if (purgedRef.current) return;
         if (!order.current.accept(ticket)) return;
         setDetail(data);
-        setDeleted(false);
+        setRemoval(null);
         setError(null);
         setLoadedAt(requestedAt);
       } catch (err) {
         // Un rechargement silencieux en échec conserve la fiche affichée.
-        if (!options.silent) setError(getApiErrorMessage(err));
+        if (!options.silent && !purgedRef.current) {
+          setError(getApiErrorMessage(err));
+        }
       } finally {
         if (!options.silent) setIsLoading(false);
       }
@@ -179,18 +186,37 @@ export default function ProductDetailPage() {
     const onChanged = (data: unknown) => {
       if (productIdOf(data) === params.id) scheduleRefresh();
     };
+    // Toute réponse demandée AVANT l'événement est désormais périmée : une
+    // relecture retenue ne fait pas réapparaître le produit.
+    const invalidateInFlight = () =>
+      order.current.accept(order.current.begin());
     const onDeleted = (id: unknown) => {
-      if (id !== params.id) return;
-      setDeleted(true);
+      if (id !== params.id || purgedRef.current) return;
+      invalidateInFlight();
+      setRemoval("trashed");
       setDetail(null);
+    };
+    const onPurged = (data: unknown) => {
+      const id =
+        data && typeof data === "object"
+          ? (data as { _id?: unknown })._id
+          : null;
+      if (id !== params.id) return;
+      purgedRef.current = true;
+      invalidateInFlight();
+      setRemoval("purged");
+      setDetail(null);
+      setError(null);
     };
     socket.on("product:updated", onChanged);
     socket.on("product:created", onChanged);
     socket.on("product:deleted", onDeleted);
+    socket.on("product:purged", onPurged);
     return () => {
       socket.off("product:updated", onChanged);
       socket.off("product:created", onChanged);
       socket.off("product:deleted", onDeleted);
+      socket.off("product:purged", onPurged);
     };
   }, [socket, params.id, scheduleRefresh]);
 
@@ -228,9 +254,14 @@ export default function ProductDetailPage() {
       {isLoading && (
         <p className="text-sm text-muted-foreground">Chargement…</p>
       )}
-      {!isLoading && deleted && (
+      {!isLoading && removal === "trashed" && (
         <p role="status" className="text-sm text-muted-foreground">
           Ce produit a été placé dans la corbeille.
+        </p>
+      )}
+      {removal === "purged" && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Ce produit a été supprimé définitivement.
         </p>
       )}
       {!isLoading && error && (
