@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PencilIcon, Crown } from "lucide-react";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
@@ -21,6 +21,11 @@ import { EditMemberDialog } from "@/components/organization/edit-member-dialog";
 import { ROLE_LABELS, PERMISSION_LABELS } from "@/lib/organization-permissions";
 import { describeOrganizationError } from "@/lib/organization-errors";
 import { fetchMembers, transferOwnership, type ApiMember } from "@/lib/api";
+import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
+import { createResponseOrder } from "@/lib/refresh-coordinator";
+
+// 1-15C : droits, rôle, statut, transfert ou nouveau membre (payload vide).
+const MEMBER_SIGNALS = ["members:changed"] as const;
 
 // /app/organization/members (1-9C) — vue minimale renvoyée par
 // `GET /organizations/members` uniquement (jamais de champ inventé).
@@ -39,6 +44,30 @@ export default function OrganizationMembersPage() {
     authContext?.effectivePermissions.includes("members.manage");
   const isOwner = authContext?.role === "owner";
 
+  // 1-15C : ordre des réponses et début de la dernière lecture appliquée
+  // (rattrapage après reconnexion). Les pages sont remontées à tout
+  // changement de session ou de droits (1-15A) : une réponse d'un ancien
+  // contexte n'est jamais appliquée.
+  const order = useRef(createResponseOrder());
+  const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
+  const load = useCallback(async (options: { silent?: boolean } = {}) => {
+    if (!options.silent) setLoading(true);
+    const requestedAt = Date.now();
+    const ticket = order.current.begin();
+    try {
+      const data = await fetchMembers();
+      if (!order.current.accept(ticket)) return;
+      setMembers(data);
+      setError(null);
+      setLoadedAt(requestedAt);
+    } catch (err: unknown) {
+      // Une relecture silencieuse en échec conserve la liste affichée.
+      if (!options.silent) setError(describeOrganizationError(err));
+    } finally {
+      if (!options.silent) setLoading(false);
+    }
+  }, []);
+
   // Aucune requête tant que la permission n'est pas confirmée (accès direct
   // par URL sans passer par l'onglet, déjà filtré par permission) : évite un
   // 403 inutile, le backend reste de toute façon l'autorité finale.
@@ -48,22 +77,16 @@ export default function OrganizationMembersPage() {
       setLoading(false);
       return;
     }
-    let cancelled = false;
-    setLoading(true);
-    fetchMembers()
-      .then((data) => {
-        if (!cancelled) setMembers(data);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(describeOrganizationError(err));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [authContext, canManage]);
+    void load();
+  }, [authContext, canManage, load]);
+
+  // 1-15C : relecture silencieuse sur signal, SEULEMENT avec
+  // `members.manage` (jamais de requête protégée sans le droit).
+  const scheduleRefresh = useLiveRefresh(
+    () => (canManage ? load({ silent: true }) : Promise.resolve()),
+    canManage ? loadedAt : undefined,
+  );
+  useSocketSignals(MEMBER_SIGNALS, canManage ? scheduleRefresh : () => {});
 
   const handleTransfer = async () => {
     if (!transferring) return;

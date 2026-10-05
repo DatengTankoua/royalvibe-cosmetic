@@ -19,10 +19,17 @@ const DIST = path.join(API_DIR, 'dist');
 const PRELOAD = path.join(__dirname, 'preload.cjs');
 
 const HOST = '127.0.0.1';
-const PORTS = Object.freeze({ web: 3200, api: 4200, control: 4299 });
+// 1-15C : `storage` = stockage objet simulé de la recette (`storage-sim.js`).
+const PORTS = Object.freeze({
+  web: 3200,
+  api: 4200,
+  control: 4299,
+  storage: 4298,
+});
 const WEB_ORIGIN = `http://${HOST}:${PORTS.web}`;
 const API_URL = `http://${HOST}:${PORTS.api}`;
 const CONTROL_URL = `http://${HOST}:${PORTS.control}`;
+const STORAGE_URL = `http://${HOST}:${PORTS.storage}`;
 
 const DB_NAME = 'stockmaster_recipe';
 const MONGODB_BINARY_VERSION = '8.2.6';
@@ -140,8 +147,9 @@ function apiEnv(uri, extra = {}) {
     PORT: String(PORTS.api),
     PUBLIC_REGISTRATION_ENABLED: 'true',
     PUBLIC_APP_URL: WEB_ORIGIN,
-    // Stockage objet inaccessible (127.0.0.1:9) : aucun appel attendu.
-    S3_ENDPOINT: `http://${HOST}:9`,
+    // 1-15C : stockage objet SIMULÉ de la recette (`storage-sim.js`, en
+    // mémoire, 127.0.0.1) : vrai client et vraies validations côté API.
+    S3_ENDPOINT: STORAGE_URL,
     S3_REGION: 'us-east-1',
     S3_ACCESS_KEY: 'recipe-fictitious',
     S3_SECRET_KEY: 'recipe-fictitious',
@@ -264,6 +272,7 @@ module.exports = {
   WEB_ORIGIN,
   API_URL,
   CONTROL_URL,
+  STORAGE_URL,
   DB_NAME,
   MONGODB_BINARY_VERSION,
   FAKE,

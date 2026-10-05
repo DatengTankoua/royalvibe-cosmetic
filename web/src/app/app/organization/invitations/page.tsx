@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Ban } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -25,6 +25,11 @@ import {
   revokeInvitation,
   type ApiInvitation,
 } from "@/lib/api";
+import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
+import { createResponseOrder } from "@/lib/refresh-coordinator";
+
+// 1-15C : création, révocation ou acceptation (payload vide).
+const INVITATION_SIGNALS = ["invitations:changed"] as const;
 
 const STATUS_LABELS: Record<ApiInvitation["status"], string> = {
   pending: "En attente",
@@ -57,6 +62,27 @@ export default function OrganizationInvitationsPage() {
   const canInvite =
     authContext?.effectivePermissions.includes("members.invite");
 
+  // 1-15C : ordre des réponses, début de la dernière lecture appliquée
+  // (rattrapage après reconnexion).
+  const order = useRef(createResponseOrder());
+  const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
+  const load = useCallback(async (options: { silent?: boolean } = {}) => {
+    if (!options.silent) setLoading(true);
+    const requestedAt = Date.now();
+    const ticket = order.current.begin();
+    try {
+      const data = await fetchInvitations();
+      if (!order.current.accept(ticket)) return;
+      setInvitations(data);
+      setError(null);
+      setLoadedAt(requestedAt);
+    } catch (err: unknown) {
+      if (!options.silent) setError(describeOrganizationError(err));
+    } finally {
+      if (!options.silent) setLoading(false);
+    }
+  }, []);
+
   // Aucune requête tant que la permission n'est pas confirmée (accès direct
   // par URL, l'onglet étant déjà filtré) : le backend reste de toute façon
   // l'autorité finale.
@@ -66,12 +92,16 @@ export default function OrganizationInvitationsPage() {
       setLoading(false);
       return;
     }
-    setLoading(true);
-    fetchInvitations()
-      .then(setInvitations)
-      .catch((err: unknown) => setError(describeOrganizationError(err)))
-      .finally(() => setLoading(false));
-  }, [authContext, canInvite]);
+    void load();
+  }, [authContext, canInvite, load]);
+
+  // 1-15C : relecture silencieuse sur signal, SEULEMENT avec
+  // `members.invite` (jamais de requête protégée sans le droit).
+  const scheduleRefresh = useLiveRefresh(
+    () => (canInvite ? load({ silent: true }) : Promise.resolve()),
+    canInvite ? loadedAt : undefined,
+  );
+  useSocketSignals(INVITATION_SIGNALS, canInvite ? scheduleRefresh : () => {});
 
   const handleRevoke = async () => {
     if (!revoking) return;

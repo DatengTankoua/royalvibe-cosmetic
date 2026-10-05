@@ -9,9 +9,12 @@ interface OrganizationShellValue {
   // `User.role`. `null` tant que non chargé ou en échec (masquage frontend
   // uniquement ; le backend reste l'autorité sur chaque route).
   authContext: ApiAuthContext | null;
-  // Force un rechargement du branding/liste/contexte (ex. après édition du
-  // branding) sans recharger toute la page.
+  // Force un rechargement du branding/liste/contexte sans recharger toute la
+  // page (relit aussi le contexte et relance une passe de l'outbox).
   refreshShell: () => void;
+  // 1-15C : relit SEULEMENT `GET /organizations/current` (nom, couleur,
+  // logo) — ni contexte, ni outbox, ni socket.
+  refreshOrganization: () => void;
   // 1-11B : identité vérifiée localement (fingerprint du token courant),
   // renseignée par AppShellLayout UNIQUEMENT sur une vraie panne réseau du
   // GET /auth/context — jamais sur un 401/403 (fail-closed dans ce cas).
@@ -22,6 +25,7 @@ export const OrganizationShellContext = createContext<OrganizationShellValue>({
   organization: null,
   authContext: null,
   refreshShell: () => {},
+  refreshOrganization: () => {},
   offlineIdentity: null,
 });
 

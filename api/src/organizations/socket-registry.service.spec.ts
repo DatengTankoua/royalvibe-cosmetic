@@ -109,4 +109,34 @@ describe('SocketRegistryService (1-7C)', () => {
       expect(registry.disconnectUserSessionsBefore(USER_A, 3)).toBe(0);
     });
   });
+  describe('signalOrganization (1-15C)', () => {
+    it('sans passerelle branchée : aucun effet, aucune erreur', () => {
+      const registry = new SocketRegistryService();
+      expect(() =>
+        registry.signalOrganization('org-a', 'members:changed'),
+      ).not.toThrow();
+    });
+
+    it('délègue à la passerelle : organisation, événement, payload VIDE', () => {
+      const registry = new SocketRegistryService();
+      const emitter = jest.fn();
+      registry.attachOrganizationEmitter(emitter);
+      registry.signalOrganization('org-a', 'invitations:changed');
+      registry.signalOrganization('org-a', 'organization:updated');
+      expect(emitter.mock.calls).toEqual([
+        ['org-a', 'invitations:changed', {}],
+        ['org-a', 'organization:updated', {}],
+      ]);
+    });
+
+    it('panne d’émission : jamais propagée (best effort)', () => {
+      const registry = new SocketRegistryService();
+      registry.attachOrganizationEmitter(() => {
+        throw new Error('socket indisponible');
+      });
+      expect(() =>
+        registry.signalOrganization('org-a', 'members:changed'),
+      ).not.toThrow();
+    });
+  });
 });

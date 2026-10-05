@@ -380,7 +380,12 @@ async function start(options) {
     launcherPid: process.pid,
     provider: stack.provider,
     mongodbUri: stack.uri,
-    urls: { web: C.WEB_ORIGIN, api: C.API_URL, control: C.CONTROL_URL },
+    urls: {
+      web: C.WEB_ORIGIN,
+      api: C.API_URL,
+      control: C.CONTROL_URL,
+      storage: C.STORAGE_URL,
+    },
     apiPid: stack.api && stack.api.pid,
     webPid: stack.web && stack.web.pid,
     webBuild: stack.webBuild,
@@ -438,6 +443,8 @@ async function start(options) {
         await stopChild(child);
       if (stack.control)
         await new Promise((resolve) => stack.control.close(() => resolve()));
+      if (stack.storage)
+        await new Promise((resolve) => stack.storage.close(() => resolve()));
       if (stack.replSet) {
         try {
           await stack.replSet.stop({ doCleanup: true, force: true });
@@ -516,6 +523,12 @@ async function start(options) {
     stack.fixtures = JSON.parse(line.slice('FIXTURES '.length));
 
     stack.control = await startControlServer(stack);
+    // 1-15C : stockage objet simulé (logos), en mémoire, boucle locale.
+    stack.storage = await require('./storage-sim').startStorageSimulator({
+      host: C.HOST,
+      port: C.PORTS.storage,
+      bucket: 'recipe-fictitious',
+    });
     say(`API compilée (fournisseur ${stack.provider}) …`);
     await startApi();
 

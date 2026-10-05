@@ -1,5 +1,21 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import type { Socket } from 'socket.io';
+
+/**
+ * 1-15C — signaux d'organisation : invalidations SANS donnée (`{}`), qui
+ * demandent seulement aux écrans autorisés de relire l'API.
+ * - `members:changed` : droits, rôle, statut, transfert, nouveau membre ;
+ * - `invitations:changed` : création, révocation, acceptation ;
+ * - `organization:updated` : nom, couleur ou logo.
+ */
+export type OrganizationSignal =
+  'members:changed' | 'invitations:changed' | 'organization:updated';
+
+type OrganizationEmitter = (
+  organizationId: string,
+  event: string,
+  payload: unknown,
+) => void;
 
 /**
  * 1-7C — registre en mémoire des sockets connectées, par organisation +
@@ -17,6 +33,33 @@ import type { Socket } from 'socket.io';
 @Injectable()
 export class SocketRegistryService {
   private readonly sockets = new Map<string, Set<Socket>>();
+  private readonly logger = new Logger(SocketRegistryService.name);
+  private organizationEmitter: OrganizationEmitter | null = null;
+
+  /**
+   * 1-15C — branché par `EventsGateway.afterInit` : son `emitToOrganization`
+   * (room `organization:<id>`, sockets à couverture d'abonnement valide
+   * seulement). Ce registre est déjà le pont entre `OrganizationsService` et
+   * la passerelle (même instance, sans dépendance circulaire de modules).
+   */
+  attachOrganizationEmitter(emitter: OrganizationEmitter): void {
+    this.organizationEmitter = emitter;
+  }
+
+  /**
+   * 1-15C — signal d'invalidation à l'organisation, APRÈS une écriture
+   * validée (après commit le cas échéant). Payload vide : jamais de membre,
+   * d'e-mail, de permission, de jeton ni d'URL. Best effort : une panne
+   * d'émission ne transforme jamais l'écriture en erreur HTTP ; sans
+   * passerelle (tests, démarrage), aucun effet.
+   */
+  signalOrganization(organizationId: string, event: OrganizationSignal): void {
+    try {
+      this.organizationEmitter?.(organizationId, event, {});
+    } catch {
+      this.logger.warn(`${event} non émis (best effort).`);
+    }
+  }
 
   private key(organizationId: string, userId: string): string {
     return `${organizationId}:${userId}`;

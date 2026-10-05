@@ -51,10 +51,18 @@ const GATEWAY_METADATA_KEY = 'websockets:is_gateway';
 
 describe('EventsGateway (unité)', () => {
   let gateway: EventsGateway;
-  let socketRegistry: { register: jest.Mock; unregister: jest.Mock };
+  let socketRegistry: {
+    register: jest.Mock;
+    unregister: jest.Mock;
+    attachOrganizationEmitter: jest.Mock;
+  };
 
   async function compileGateway() {
-    socketRegistry = { register: jest.fn(), unregister: jest.fn() };
+    socketRegistry = {
+      register: jest.fn(),
+      unregister: jest.fn(),
+      attachOrganizationEmitter: jest.fn(),
+    };
     const module = await Test.createTestingModule({
       providers: [
         EventsGateway,
@@ -149,6 +157,18 @@ describe('EventsGateway (unité)', () => {
       const use2 = jest.fn();
       gateway.afterInit({ use: use2 } as never);
       expect(use2).toHaveBeenCalledTimes(1);
+    });
+
+    it('1-15C : branche sur le registre un émetteur qui délègue à emitToOrganization (room + couverture)', () => {
+      gateway.afterInit({ use: jest.fn() } as never);
+      expect(socketRegistry.attachOrganizationEmitter).toHaveBeenCalledTimes(1);
+      const emitter = socketRegistry.attachOrganizationEmitter.mock
+        .calls[0][0] as (o: string, e: string, p: unknown) => void;
+      const spy = jest
+        .spyOn(gateway, 'emitToOrganization')
+        .mockImplementation(() => undefined);
+      emitter('org-a', 'members:changed', {});
+      expect(spy).toHaveBeenCalledWith('org-a', 'members:changed', {});
     });
 
     it('en dev (non-production), `afterInit` ne lève pas même si CORS_ORIGIN est absente', () => {

@@ -27,7 +27,10 @@ import {
 // status/logoKey/organizationId) ne sont JAMAIS envoyés — seuls
 // name/brandColor/logo transitent, whitelist stricte côté backend.
 export default function OrganizationBrandingPage() {
-  const { organization, authContext, refreshShell } = useOrganizationShell();
+  // 1-15C : après une modification, seule l'organisation est relue (le
+  // contexte, l'outbox et le socket ne sont pas concernés).
+  const { organization, authContext, refreshOrganization } =
+    useOrganizationShell();
   const canManage =
     authContext?.effectivePermissions.includes("branding.manage");
 
@@ -40,7 +43,8 @@ export default function OrganizationBrandingPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Réhydrate le formulaire quand l'organisation chargée change (initial
-  // chargement ou après un refreshShell) — jamais dans un effet séparé sur
+  // chargement, après sa propre modification ou celle d'un collègue,
+  // 1-15C) — jamais dans un effet séparé sur
   // `logo`/`brandColor` (ceux-ci sont purement locaux tant que non soumis).
   useEffect(() => {
     if (!organization) return;
@@ -79,7 +83,7 @@ export default function OrganizationBrandingPage() {
         logo: logo ?? undefined,
       });
       setLogo(null);
-      refreshShell();
+      refreshOrganization();
       toast.success("Branding mis à jour");
     } catch (err) {
       setError(getApiErrorMessage(err));
@@ -94,7 +98,7 @@ export default function OrganizationBrandingPage() {
     setRemovingLogo(true);
     try {
       await removeOrganizationLogo();
-      refreshShell();
+      refreshOrganization();
       toast.success("Logo supprimé");
     } catch (err) {
       setError(getApiErrorMessage(err));

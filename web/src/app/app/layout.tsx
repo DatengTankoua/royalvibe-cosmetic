@@ -75,6 +75,8 @@ import {
   fullNameOf,
 } from "@/lib/display-names";
 import { useOfflineSalesSync } from "@/hooks/use-offline-sales-sync";
+import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
+import { createResponseOrder } from "@/lib/refresh-coordinator";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import {
   canRecordSalesFromContext,
@@ -143,6 +145,23 @@ function visibleNavItems(authContext: ApiAuthContext | null): ShellNavItem[] {
 }
 
 const MOBILE_PRIMARY_COUNT = 4;
+
+// 1-15C — nom, couleur et logo modifiés par un collègue : `organization:updated`
+// (payload vide) → relecture regroupée de `GET /organizations/current`,
+// rattrapée à la reconnexion du socket. Monté DANS `SocketProvider`.
+const ORGANIZATION_SIGNALS = ["organization:updated"] as const;
+
+function OrganizationLiveSync({
+  refresh,
+  loadedAt,
+}: {
+  refresh: () => Promise<unknown>;
+  loadedAt: number | undefined;
+}) {
+  const request = useLiveRefresh(refresh, loadedAt);
+  useSocketSignals(ORGANIZATION_SIGNALS, request);
+  return null;
+}
 
 // 1-15A — identité d'autorisation d'un contexte serveur : utilisateur,
 // organisation, rôle, permissions effectives et accord de saisie. Quand elle
@@ -309,6 +328,13 @@ export default function AppShellLayout({
   useEffect(() => {
     authContextRef.current = authContext;
   }, [authContext]);
+  // 1-15C : ordre des réponses de `GET /organizations/current` (chargement
+  // du shell et relectures temps réel) et début de la dernière lecture
+  // appliquée (rattrapage après reconnexion).
+  const organizationOrder = useRef(createResponseOrder());
+  const [organizationLoadedAt, setOrganizationLoadedAt] = useState<
+    number | undefined
+  >(undefined);
 
   // 1-11C.2 : synchronisation des ventes hors ligne — partition issue du
   // contexte SERVEUR uniquement ; inactive sans contexte ou file vide.
@@ -525,13 +551,18 @@ export default function AppShellLayout({
       // `allSettled` : une organisation courante suspendue (403) ne doit
       // jamais empêcher l'exploitation d'une liste d'organisations valide,
       // et vice-versa.
+      const organizationRequestedAt = Date.now();
+      const organizationTicket = organizationOrder.current.begin();
       const [currentResult, listResult] = await Promise.allSettled([
         fetchCurrentOrganization(),
         fetchActiveOrganizations(),
       ]);
       if (cancelled) return;
       if (currentResult.status === "fulfilled") {
-        setOrganization(currentResult.value);
+        if (organizationOrder.current.accept(organizationTicket)) {
+          setOrganization(currentResult.value);
+          setOrganizationLoadedAt(organizationRequestedAt);
+        }
       } else {
         setOrganization(null);
         // 1-11C.3a : une panne réseau n'est pas une erreur à afficher (le
@@ -624,6 +655,43 @@ export default function AppShellLayout({
       setVerifying(false);
     }
   }, []);
+
+  // 1-15C : relecture SEULE de l'organisation courante (nom, couleur, logo)
+  // pour la session et l'organisation en cours : aucune relecture du
+  // contexte, aucune passe de l'outbox, aucun nouveau socket. Une réponse
+  // d'une autre session, d'une autre organisation ou plus ancienne
+  // qu'une réponse déjà appliquée est ignorée.
+  const refreshOrganization = useCallback(async () => {
+    const session = effectSessionRef.current;
+    const expectedOrganization = authContextRef.current?.organizationId;
+    if (!session || !expectedOrganization) return;
+    const requestedAt = Date.now();
+    const ticket = organizationOrder.current.begin();
+    let current: ApiOrganizationCurrent;
+    try {
+      current = await fetchCurrentOrganization();
+    } catch {
+      return; // l'organisation affichée est conservée
+    }
+    if (effectSessionRef.current !== session) return;
+    if (current._id !== expectedOrganization) return;
+    if (authContextRef.current?.organizationId !== expectedOrganization) return;
+    if (!organizationOrder.current.accept(ticket)) return;
+    setOrganization(current);
+    setOrganizationLoadedAt(requestedAt);
+    const ctx = authContextRef.current;
+    if (ctx) {
+      void writeTenantBrand({
+        userId: ctx.userId,
+        organizationId: ctx.organizationId,
+        organizationName: current.name,
+        brandColor: current.brandColor,
+      });
+    }
+  }, []);
+  const triggerOrganizationRefresh = useCallback(() => {
+    void refreshOrganization();
+  }, [refreshOrganization]);
 
   const noActiveOrganization =
     !loadingOrg && listLoaded && organizations.length === 0;
@@ -801,9 +869,16 @@ export default function AppShellLayout({
           organization,
           authContext: contextIsCurrent ? authContext : null,
           refreshShell,
+          refreshOrganization: triggerOrganizationRefresh,
           offlineIdentity: contextIsCurrent ? offlineIdentity : null,
         }}
       >
+        {contextIsCurrent && authContext && (
+          <OrganizationLiveSync
+            refresh={refreshOrganization}
+            loadedAt={organizationLoadedAt}
+          />
+        )}
         <OfflineSalesProvider>
           {/* 1-12A : jetons --tenant-* posés sur la racine du shell
           uniquement (jamais :root) — pages publiques/auth/offline intactes. */}

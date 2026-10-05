@@ -173,6 +173,12 @@ export class EventsGateway {
       subscriptionsService: this.subscriptionsService,
       logger: new Logger(EventsGateway.name),
     });
+    // 1-15C : signaux d'organisation émis par `OrganizationsService` via le
+    // registre partagé, avec la même room et le même filtre de couverture.
+    this.socketRegistry.attachOrganizationEmitter(
+      (organizationId, event, payload) =>
+        this.emitToOrganization(organizationId, event, payload),
+    );
   }
 
   handleConnection(client: Socket): void {

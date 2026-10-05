@@ -474,6 +474,12 @@ export class OrganizationsService {
       throw err;
     }
 
+    // 1-15C : après l'écriture, signal sans donnée (jamais l'e-mail, le
+    // rôle, les permissions ni le lien : ils restent dans la réponse HTTP).
+    this.socketRegistry.signalOrganization(
+      organizationId,
+      'invitations:changed',
+    );
     return {
       invitation: this.toInvitationView(invitation),
       invitationUrl: buildInvitationUrl(appOrigin, rawToken),
@@ -512,6 +518,10 @@ export class OrganizationsService {
     if (!invitation) {
       throw new NotFoundException();
     }
+    this.socketRegistry.signalOrganization(
+      organizationId,
+      'invitations:changed',
+    );
     return this.toInvitationView(invitation);
   }
 
@@ -653,6 +663,15 @@ export class OrganizationsService {
         'Invitation acceptance transaction completed without a result',
       );
     }
+    // 1-15C : APRÈS le commit, hors du callback rejouable de la transaction.
+    this.socketRegistry.signalOrganization(
+      result.organization._id,
+      'invitations:changed',
+    );
+    this.socketRegistry.signalOrganization(
+      result.organization._id,
+      'members:changed',
+    );
     return result;
   }
 
@@ -784,6 +803,9 @@ export class OrganizationsService {
     }
     // APRÈS le commit uniquement : jamais avant, jamais sur rollback.
     this.socketRegistry.disconnectMember(organizationId, targetUserId);
+    // 1-15C : puis signal aux autres membres (le membre visé, déconnecté,
+    // relit son contexte à la reconnexion).
+    this.socketRegistry.signalOrganization(organizationId, 'members:changed');
     return result;
   }
 
@@ -892,6 +914,7 @@ export class OrganizationsService {
     // contexte à la prochaine connexion.
     this.socketRegistry.disconnectMember(organizationId, previousOwnerUserId);
     this.socketRegistry.disconnectMember(organizationId, newOwnerUserId);
+    this.socketRegistry.signalOrganization(organizationId, 'members:changed');
     return result;
   }
 
@@ -959,6 +982,12 @@ export class OrganizationsService {
     // sans être forcée à renommer (le nouveau nom, lui, est toujours
     // validé par le DTO puis par le schéma).
     await organization.save({ validateModifiedOnly: true });
+    // 1-15C : nom, couleur ou logo relus par les collègues via
+    // `GET /organizations/current` (aucune donnée dans le signal).
+    this.socketRegistry.signalOrganization(
+      organizationId,
+      'organization:updated',
+    );
 
     return {
       organization: this.toCurrentView(organization),
@@ -984,6 +1013,10 @@ export class OrganizationsService {
     if (previousLogoKey !== null) {
       organization.logoKey = null;
       await organization.save({ validateModifiedOnly: true });
+      this.socketRegistry.signalOrganization(
+        organizationId,
+        'organization:updated',
+      );
     }
     return { organization: this.toCurrentView(organization), previousLogoKey };
   }

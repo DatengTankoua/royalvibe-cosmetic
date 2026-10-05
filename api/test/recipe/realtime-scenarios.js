@@ -157,6 +157,7 @@ async function openUser(browser, label) {
     context,
     page,
     frames: [],
+    sockets: 0,
     requests: [],
     errors: [],
   };
@@ -166,6 +167,7 @@ async function openUser(browser, label) {
 
 function attach(user, page) {
   page.on('websocket', (ws) => {
+    user.sockets += 1;
     ws.on('framereceived', (f) => {
       const text = typeof f.payload === 'string' ? f.payload : '';
       const match = /^42(\[.*)$/s.exec(text);
@@ -343,8 +345,117 @@ async function armReappearance(page, text) {
 const reappeared = (page) =>
   page.evaluate(() => window.__rtReappeared === true);
 
+/** Attend qu'aucune requête API de l'utilisateur ne parte pendant `ms`. */
+async function waitQuiet(user, ms, timeout = 15000) {
+  const start = Date.now();
+  for (;;) {
+    const last = user.requests.length
+      ? user.requests[user.requests.length - 1].at
+      : 0;
+    if (Date.now() - last >= ms) return;
+    if (Date.now() - start > timeout)
+      throw new Error('Délai dépassé : page jamais au repos');
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 const sectionFrames = (user, since = 0) =>
   user.frames.filter((f) => f.event.startsWith('section:') && f.at >= since);
+
+// ─── 1-15C : aides membres, invitations, image de marque ────────────────────
+
+const memberCard = (page, email) =>
+  page.locator('[data-slot=card]').filter({ hasText: email }).first();
+const invitationRow = memberCard;
+const emptyPayload = (frame) =>
+  frame.payload !== null &&
+  typeof frame.payload === 'object' &&
+  Object.keys(frame.payload).length === 0;
+
+let invitationSeq = 0;
+/** Invitation par la route existante ; e-mail simulé, lien local. */
+async function apiInvite(token, label, role, permissions) {
+  invitationSeq += 1;
+  const email = `${label}-${Date.now().toString(36)}${invitationSeq}@recette.local`;
+  const res = await L.http('POST', '/organizations/invitations', {
+    token,
+    body: permissions ? { email, role, permissions } : { email, role },
+  });
+  ok(res.status === 201, `invitation ${res.status} ${res.text}`);
+  const link = new URL(res.body.invitationUrl);
+  ok(link.origin === WEB, 'lien d’invitation local');
+  return {
+    id: String(res.body.invitation._id),
+    email,
+    rawToken: link.searchParams.get('token'),
+  };
+}
+
+async function apiRevoke(token, id) {
+  const res = await L.http('POST', `/organizations/invitations/${id}/revoke`, {
+    token,
+  });
+  ok(res.status === 200 || res.status === 201, `révocation ${res.status}`);
+}
+
+async function apiAccept(rawToken, name) {
+  const res = await L.http('POST', '/auth/invitations/accept', {
+    body: { token: rawToken, name, password: L.C.PASSWORD },
+  });
+  ok(res.status === 200, `acceptation ${res.status} ${res.text}`);
+}
+
+/** Logo PNG factice local (validations de production inchangées). */
+async function pngLogo(width, height, color) {
+  const sharp = L.C.apiRequire('sharp');
+  return sharp({
+    create: { width, height, channels: 3, background: color },
+  })
+    .png()
+    .toBuffer();
+}
+
+/** `PATCH /organizations/current/branding` multipart (route existante). */
+async function uploadBranding(token, { name, logo }) {
+  const form = new FormData();
+  if (name !== undefined) form.append('name', name);
+  if (logo)
+    form.append('logo', new Blob([logo], { type: 'image/png' }), 'logo.png');
+  const res = await fetch(`${API}/organizations/current/branding`, {
+    method: 'PATCH',
+    headers: { authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const text = await res.text();
+  ok(res.status === 200, `branding ${res.status} ${text}`);
+  return JSON.parse(text);
+}
+
+async function storageStats() {
+  const res = await fetch(`${L.C.STORAGE_URL}/__stats`);
+  return res.json();
+}
+
+const tenantName = (page) =>
+  page
+    .locator('[data-testid=tenant-name]')
+    .first()
+    .textContent({ timeout: 2000 })
+    .then((t) => (t || '').trim())
+    .catch(() => null);
+
+/** Logo du shell : URL, chargement effectif et dimensions réelles. */
+const logoState = (page) =>
+  page.evaluate(() => {
+    const img = document.querySelector('[data-tenant-logo=image] img');
+    if (!img) return null;
+    return {
+      src: img.currentSrc || img.src,
+      loaded: img.complete && img.naturalWidth > 0,
+      naturalWidth: img.naturalWidth,
+      naturalHeight: img.naturalHeight,
+    };
+  });
 
 const FORBIDDEN_KEYS = [
   'purchasePrice',
@@ -1521,6 +1632,466 @@ async function main() {
         'B : aucune section de A',
       );
       return 'B : 0 frame section/produit, 0 relecture, aucune donnée de A';
+    },
+  );
+
+  // ─── 1-15C : membres, invitations, image de marque ─────────────────────────
+
+  // RT15 — deux administrateurs : modifications d'un membre visibles chez le
+  // collègue (droits, suspension, transfert de propriété).
+  await scenario(
+    'RT15',
+    'Membres : modifications par un administrateur visibles chez un autre',
+    async (ctx) => {
+      const { ownerA, std } = await setupOrganizations();
+      const adm1 = await L.inviteMember(ownerA.token, 'admin', 'rtAdm15a');
+      const adm2 = await L.inviteMember(ownerA.token, 'admin', 'rtAdm15b');
+      const t1 = await apiLogin(adm1.email);
+      const viewer = await openUser(ctx.browser, 'admin2-members');
+      ctx.users.push(viewer);
+      await loginUi(viewer.page, adm2.email);
+      await viewer.page.goto(`${WEB}/app/organization/members`);
+      const card = memberCard(viewer.page, std.email);
+      await card.waitFor();
+      await markNoReload(viewer.page);
+      ok(
+        (await card
+          .getByText('Voir les coûts et résultats financiers')
+          .count()) === 0,
+        'pas de finances au départ',
+      );
+
+      await patchMember(t1, std.email, {
+        permissions: ['products.view_financials'],
+      });
+      await card
+        .getByText('Voir les coûts et résultats financiers')
+        .waitFor({ timeout: 15000 });
+      await patchMember(t1, std.email, { status: 'suspended' });
+      await card.getByText('Suspendue').waitFor({ timeout: 15000 });
+      // Transfert de propriété (propriétaire → administrateur 1).
+      const id = await memberIdOf(ownerA.token, adm1.email);
+      const tr = await L.http(
+        'POST',
+        `/organizations/members/${id}/transfer-ownership`,
+        { token: ownerA.token },
+      );
+      ok(
+        tr.status === 200 || tr.status === 201,
+        `transfert ${tr.status} ${tr.text}`,
+      );
+      await memberCard(viewer.page, adm1.email)
+        .getByText('Propriétaire')
+        .waitFor({ timeout: 15000 });
+      ok(await stillSameDocument(viewer.page), 'aucun rechargement complet');
+      const frames = viewer.frames.filter((f) => f.event === 'members:changed');
+      ok(frames.length >= 3, `members:changed reçus : ${frames.length}`);
+      for (const f of frames)
+        ok(
+          emptyPayload(f),
+          `members:changed non vide : ${JSON.stringify(f.payload)}`,
+        );
+      return `droits, suspension, transfert visibles sans rechargement ; ${frames.length} signaux vides`;
+    },
+  );
+
+  // RT16 — droits retirés puis suspension du membre visé (invitations).
+  await scenario(
+    'RT16',
+    'Membre visé : droit d’invitation retiré puis suspension en session ouverte',
+    async (ctx) => {
+      const { ownerA, std } = await setupOrganizations();
+      await patchMember(ownerA.token, std.email, {
+        permissions: ['members.invite'],
+      });
+      const pending = await apiInvite(ownerA.token, 'rt16-invite', 'seller');
+      const target = await openUser(ctx.browser, 'std-invitations');
+      ctx.users.push(target);
+      await loginUi(target.page, std.email);
+      await target.page.goto(`${WEB}/app/organization/invitations`);
+      await target.page.getByText(pending.email).first().waitFor();
+      await markNoReload(target.page);
+      const socketsBefore = target.sockets;
+
+      await patchMember(ownerA.token, std.email, { permissions: [] });
+      await target.page
+        .getByText('La permission « Inviter des membres » est requise')
+        .waitFor({ timeout: 15000 });
+      ok(
+        (await target.page.getByText(pending.email).count()) === 0,
+        'e-mails d’invitation retirés',
+      );
+      // Socket rouvert une fois (1-15A) : un signal ultérieur arrive encore.
+      await uploadBranding(ownerA.token, { name: 'RT16 Renomme' });
+      await until(
+        async () => (await tenantName(target.page)) === 'RT16 Renomme',
+        'en-tête relu après retrait des droits',
+      );
+      ok(
+        target.sockets - socketsBefore === 1,
+        `sockets ouverts après retrait : ${target.sockets - socketsBefore}`,
+      );
+      const since = Date.now();
+      await observeFor(500);
+      ok(
+        getsOf(target, /^\/organizations\/invitations$/, since).length === 0,
+        'plus aucune lecture des invitations',
+      );
+
+      await patchMember(ownerA.token, std.email, { status: 'suspended' });
+      await target.page
+        .locator('[data-testid=access-refused]')
+        .waitFor({ timeout: 15000 });
+      ok(await stillSameDocument(target.page), 'aucun rechargement complet');
+      return 'liste retirée sans rechargement, 1 socket rouvert, suspension → écran de refus';
+    },
+  );
+
+  // RT17 — invitations : création, révocation, acceptation ; vendeur sans droit.
+  await scenario(
+    'RT17',
+    'Invitations : création, révocation, acceptation ; vendeur sans droit',
+    async (ctx) => {
+      const { ownerA, std } = await setupOrganizations();
+      const adm1 = await L.inviteMember(ownerA.token, 'admin', 'rtAdm17a');
+      const adm2 = await L.inviteMember(ownerA.token, 'admin', 'rtAdm17b');
+      const t1 = await apiLogin(adm1.email);
+      const inv = await openUser(ctx.browser, 'admin2-invitations');
+      const mem = await openUser(ctx.browser, 'admin2-members');
+      const seller = await openUser(ctx.browser, 'std-admin-pages');
+      ctx.users.push(inv, mem, seller);
+      await loginUi(inv.page, adm2.email);
+      await loginUi(mem.page, adm2.email);
+      await loginUi(seller.page, std.email);
+      await inv.page.goto(`${WEB}/app/organization/invitations`);
+      await inv.page.getByText(adm1.email).first().waitFor();
+      await mem.page.goto(`${WEB}/app/organization/members`);
+      await memberCard(mem.page, adm1.email).waitFor();
+      await seller.page.goto(`${WEB}/app/organization/members`);
+      await seller.page
+        .getByText('La permission « Gérer les membres » est requise')
+        .waitFor();
+      const sellerSince = Date.now();
+      for (const u of [inv, mem]) await markNoReload(u.page);
+
+      const a = await apiInvite(t1, 'rt17-a', 'seller');
+      await inv.page.getByText(a.email).first().waitFor({ timeout: 15000 });
+      await apiRevoke(t1, a.id);
+      await invitationRow(inv.page, a.email)
+        .getByText('Révoquée')
+        .waitFor({ timeout: 15000 });
+      const b = await apiInvite(t1, 'rt17-b', 'seller');
+      await invitationRow(inv.page, b.email)
+        .getByText('En attente')
+        .waitFor({ timeout: 15000 });
+      await apiAccept(b.rawToken, 'Invite RT17');
+      await invitationRow(inv.page, b.email)
+        .getByText('Acceptée')
+        .waitFor({ timeout: 15000 });
+      await memberCard(mem.page, b.email).waitFor({ timeout: 15000 });
+
+      await seller.page.goto(`${WEB}/app/organization/invitations`);
+      await seller.page
+        .getByText('La permission « Inviter des membres » est requise')
+        .waitFor();
+      await observeFor(1000);
+      ok(
+        getsOf(seller, /^\/organizations\/(members|invitations)$/, sellerSince)
+          .length === 0,
+        'vendeur : aucune requête vers les listes protégées',
+      );
+      const sellerHtml = await seller.page.content();
+      for (const email of [a.email, b.email, adm1.email])
+        ok(!sellerHtml.includes(email), `vendeur : e-mail affiché ${email}`);
+      for (const u of [inv, mem, seller])
+        for (const f of u.frames.filter((x) =>
+          /:changed$|organization:updated/.test(x.event),
+        )) {
+          ok(emptyPayload(f), `${u.label} ${f.event} non vide`);
+          ok(
+            !JSON.stringify(f.payload).includes('@'),
+            `${u.label} : e-mail dans une frame`,
+          );
+        }
+      for (const u of [inv, mem])
+        ok(
+          await stillSameDocument(u.page),
+          `${u.label} : aucun rechargement complet`,
+        );
+      return 'création, révocation, acceptation et nouveau membre visibles ; vendeur : 0 requête protégée, aucun e-mail ; signaux vides';
+    },
+  );
+
+  // RT18 — nom et logo : shell d'un collègue actualisé, logo réellement chargé.
+  await scenario(
+    'RT18',
+    'Image de marque : nom et logo actualisés dans le shell d’un collègue',
+    async (ctx) => {
+      const { ownerA, std } = await setupOrganizations();
+      const colleague = await openUser(ctx.browser, 'std-shell');
+      ctx.users.push(colleague);
+      await loginUi(colleague.page, std.email);
+      await colleague.page.goto(`${WEB}/app/catalog`);
+      await colleague.page
+        .locator('[data-tenant-logo=initials]')
+        .first()
+        .waitFor();
+      await markNoReload(colleague.page);
+      const socketsBefore = colleague.sockets;
+      const since = Date.now();
+      const storageBefore = await storageStats();
+
+      const logo1 = await pngLogo(240, 120, '#c0392b');
+      await uploadBranding(ownerA.token, { logo: logo1 });
+      const first = await until(async () => {
+        const s = await logoState(colleague.page);
+        return s &&
+          s.loaded &&
+          s.naturalWidth === 240 &&
+          s.naturalHeight === 120
+          ? s
+          : null;
+      }, 'logo 1 chargé et affiché (240 × 120)');
+      await uploadBranding(ownerA.token, { name: 'RT18 Nouveau nom' });
+      await until(
+        async () => (await tenantName(colleague.page)) === 'RT18 Nouveau nom',
+        'nom actualisé',
+      );
+      const logo2 = await pngLogo(160, 160, '#2980b9');
+      await uploadBranding(ownerA.token, { logo: logo2 });
+      const second = await until(async () => {
+        const s = await logoState(colleague.page);
+        return s &&
+          s.loaded &&
+          s.naturalWidth === 160 &&
+          s.naturalHeight === 160
+          ? s
+          : null;
+      }, 'logo 2 chargé et affiché (160 × 160)');
+      ok(first.src !== second.src, 'URL du logo remplacée');
+      const storage = await storageStats();
+      ok(
+        storage.puts - storageBefore.puts === 2,
+        `envois au stockage simulé : ${storage.puts - storageBefore.puts}`,
+      );
+      ok(
+        storage.gets > storageBefore.gets,
+        'logo servi par le stockage simulé',
+      );
+      ok(
+        !storage.keys.includes(first.src.split('/recipe-fictitious/')[1]),
+        'ancien logo supprimé du stockage',
+      );
+
+      const del = await L.http('DELETE', '/organizations/current/logo', {
+        token: ownerA.token,
+      });
+      ok(del.status === 200, `suppression du logo ${del.status}`);
+      await colleague.page
+        .locator('[data-tenant-logo=initials]')
+        .first()
+        .waitFor({ timeout: 15000 });
+
+      // Ni nouvelle session, ni relecture du contexte, ni nouveau socket.
+      ok(
+        colleague.sockets === socketsBefore,
+        `sockets ouverts : ${colleague.sockets - socketsBefore}`,
+      );
+      ok(
+        getsOf(colleague, /^\/auth\/context$/, since).length === 0,
+        'aucune relecture de /auth/context',
+      );
+      ok(
+        getsOf(colleague, /^\/organizations\/current$/, since).length >= 3,
+        'organisation relue',
+      );
+      ok(await stillSameDocument(colleague.page), 'aucun rechargement complet');
+      return 'logo 240×120 puis 160×160 chargés, nom, retrait du logo ; 0 socket ni relecture de contexte en plus';
+    },
+  );
+
+  // RT19 — coupure réseau, modifications, reconnexion.
+  await scenario(
+    'RT19',
+    'Organisation : modifications pendant une coupure, rattrapage',
+    async (ctx) => {
+      const { ownerA, std } = await setupOrganizations();
+      const adm = await L.inviteMember(ownerA.token, 'admin', 'rtAdm19');
+      const shell = await openUser(ctx.browser, 'std-shell');
+      const inv = await openUser(ctx.browser, 'admin-invitations');
+      ctx.users.push(shell, inv);
+      await loginUi(shell.page, std.email);
+      await loginUi(inv.page, adm.email);
+      await shell.page.goto(`${WEB}/app/catalog`);
+      await shell.page.locator('[data-tenant-logo=initials]').first().waitFor();
+      await inv.page.goto(`${WEB}/app/organization/invitations`);
+      await inv.page.getByText(adm.email).first().waitFor();
+      for (const u of [shell, inv]) await markNoReload(u.page);
+
+      await shell.context.setOffline(true);
+      await inv.context.setOffline(true);
+      await uploadBranding(ownerA.token, {
+        name: 'RT19 Hors ligne',
+        logo: await pngLogo(200, 100, '#27ae60'),
+      });
+      const c = await apiInvite(ownerA.token, 'rt19-c', 'seller');
+      await shell.context.setOffline(false);
+      await inv.context.setOffline(false);
+      await until(
+        async () => (await tenantName(shell.page)) === 'RT19 Hors ligne',
+        'nom rattrapé',
+        20000,
+      );
+      await until(
+        async () => {
+          const s = await logoState(shell.page);
+          return (
+            s && s.loaded && s.naturalWidth === 200 && s.naturalHeight === 100
+          );
+        },
+        'logo rattrapé et chargé',
+        20000,
+      );
+      await inv.page.getByText(c.email).first().waitFor({ timeout: 20000 });
+      for (const u of [shell, inv])
+        ok(
+          await stillSameDocument(u.page),
+          `${u.label} : aucun rechargement complet`,
+        );
+      return 'nom, logo et invitation survenus hors ligne rattrapés à la reconnexion';
+    },
+  );
+
+  // RT20 — seconde organisation ; changement de session avec réponse retenue.
+  await scenario(
+    'RT20',
+    'Seconde organisation et changement de session : aucune contamination',
+    async (ctx) => {
+      const { ownerA, std, ownerB } = await setupOrganizations();
+      const b = await openUser(ctx.browser, 'ownerB');
+      ctx.users.push(b);
+      await loginUi(b.page, ownerB.email);
+      await b.page.goto(`${WEB}/app/organization/invitations`);
+      await b.page
+        .getByText('Aucune invitation', { exact: false })
+        .first()
+        .waitFor()
+        .catch(() => undefined);
+      const bName = await tenantName(b.page);
+      // Socket de B connecté et page au repos : le rattrapage normal (1-15A,
+      // lecture commencée avant la connexion) ne tombe pas dans la fenêtre.
+      await until(() => b.sockets >= 1, 'socket de B ouvert');
+      await waitQuiet(b, 1500);
+      const since = Date.now();
+      await uploadBranding(ownerA.token, { name: 'RT20 A renomme' });
+      await apiInvite(ownerA.token, 'rt20-a', 'seller');
+      await patchMember(ownerA.token, std.email, {
+        permissions: ['products.view_financials'],
+      });
+      await observeFor(2000);
+      const leaked = b.frames.filter(
+        (f) =>
+          f.at >= since &&
+          /^(members|invitations):changed$|^organization:updated$/.test(
+            f.event,
+          ),
+      );
+      ok(leaked.length === 0, `B : ${leaked.length} signal(aux) de A`);
+      const bReads = getsOf(
+        b,
+        /^\/organizations\/(current|invitations|members)$/,
+        since,
+      );
+      ok(
+        bReads.length === 0,
+        `B : relecture(s) ${bReads.map((r) => new URL(r.url).pathname).join(', ')}`,
+      );
+      ok((await tenantName(b.page)) === bName, 'B : nom inchangé');
+
+      // Session A → B avec une relecture de l'organisation A retenue.
+      const u = await openUser(ctx.browser, 'switcher');
+      ctx.users.push(u);
+      await loginUi(u.page, std.email);
+      await u.page.goto(`${WEB}/app/catalog`);
+      await until(
+        async () => (await tenantName(u.page)) === 'RT20 A renomme',
+        'nom A',
+      );
+      const barrier = await holdResponses(
+        u.page,
+        (url) => new URL(url).pathname === '/organizations/current',
+      );
+      await uploadBranding(ownerA.token, { name: 'RT20 A retenu' });
+      await until(() => barrier.held.length >= 1, 'relecture de A retenue');
+      await u.page
+        .getByRole('button', { name: 'Se déconnecter' })
+        .first()
+        .click();
+      await u.page.waitForURL(/\/auth\/login/);
+      await loginUi(u.page, ownerB.email);
+      await until(
+        async () => (await tenantName(u.page)) === bName,
+        'en-tête de B',
+      );
+      await armReappearance(u.page, 'RT20 A');
+      barrier.release();
+      await observeFor(1500);
+      ok(
+        !(await reappeared(u.page)),
+        'le nom de A n’apparaît jamais dans la session B',
+      );
+      ok((await tenantName(u.page)) === bName, 'en-tête toujours B');
+      await barrier.stop();
+      return 'B : 0 signal ni relecture ; réponse retenue de A ignorée après passage à B';
+    },
+  );
+
+  // RT21 — aucune donnée sensible dans les signaux reçus par un vendeur.
+  await scenario(
+    'RT21',
+    'Signaux d’organisation : payloads vides pour tous les membres',
+    async (ctx) => {
+      const { ownerA, std } = await setupOrganizations();
+      const seller = await openUser(ctx.browser, 'std-catalog');
+      ctx.users.push(seller);
+      await loginUi(seller.page, std.email);
+      await seller.page.goto(`${WEB}/app/catalog`);
+      await seller.page
+        .locator('[data-tenant-logo=initials]')
+        .first()
+        .waitFor();
+      const since = Date.now();
+      const x = await apiInvite(ownerA.token, 'rt21-x', 'admin', []);
+      await apiAccept(x.rawToken, 'Invite RT21');
+      await uploadBranding(ownerA.token, {
+        logo: await pngLogo(128, 64, '#8e44ad'),
+      });
+      await until(
+        () =>
+          seller.frames.filter(
+            (f) => f.at >= since && f.event === 'organization:updated',
+          ).length >= 1,
+        'signal reçu',
+      );
+      const signals = seller.frames.filter(
+        (f) =>
+          f.at >= since &&
+          /^(members|invitations):changed$|^organization:updated$/.test(
+            f.event,
+          ),
+      );
+      ok(signals.length >= 3, `signaux reçus : ${signals.length}`);
+      for (const f of signals)
+        ok(
+          emptyPayload(f),
+          `${f.event} non vide : ${JSON.stringify(f.payload)}`,
+        );
+      ok(
+        getsOf(seller, /^\/organizations\/(members|invitations)$/, since)
+          .length === 0,
+        'vendeur : aucune lecture protégée',
+      );
+      return `${signals.length} signaux, tous {} ; vendeur : 0 lecture protégée`;
     },
   );
 

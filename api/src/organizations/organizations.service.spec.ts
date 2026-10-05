@@ -20,6 +20,7 @@ import { OrganizationInvitation } from './schemas/invitation.schema';
 import { UsersService } from '../users/users.service';
 import { UserRole } from '../users/schemas/user.schema';
 import { SocketRegistryService } from './socket-registry.service';
+import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { S3Service } from '../s3/s3.service';
 import { ConfigService } from '@nestjs/config';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
@@ -52,6 +53,13 @@ const INVALID_ID = 'invalid';
 const ACCESS_DENIED_CODE = 'ORGANIZATION_ACCESS_DENIED';
 const ACCESS_DENIED_MESSAGE = "Accès à l'organisation refusé.";
 
+// 1-15C : registre simulé du DERNIER module construit (signaux).
+type RegistryMock = {
+  disconnectMember: jest.Mock;
+  signalOrganization: jest.Mock;
+};
+let lastRegistry: RegistryMock;
+
 describe('OrganizationsService.resolveActiveContext', () => {
   let service: OrganizationsService;
   let membershipModel: { findOne: jest.Mock };
@@ -83,7 +91,10 @@ describe('OrganizationsService.resolveActiveContext', () => {
         { provide: getConnectionToken(), useValue: {} },
         {
           provide: SocketRegistryService,
-          useValue: { disconnectMember: jest.fn() },
+          useValue: {
+            disconnectMember: jest.fn(),
+            signalOrganization: jest.fn(),
+          },
         },
         { provide: S3Service, useValue: s3ServiceStub },
         { provide: ConfigService, useValue: configServiceStub },
@@ -92,6 +103,9 @@ describe('OrganizationsService.resolveActiveContext', () => {
       ],
     }).compile();
     service = module.get(OrganizationsService);
+    lastRegistry = module.get<SocketRegistryService, RegistryMock>(
+      SocketRegistryService,
+    );
   }
 
   function activeMembership(overrides: Record<string, unknown> = {}) {
@@ -418,7 +432,10 @@ describe('OrganizationsService.listActiveOrganizations', () => {
         { provide: getConnectionToken(), useValue: {} },
         {
           provide: SocketRegistryService,
-          useValue: { disconnectMember: jest.fn() },
+          useValue: {
+            disconnectMember: jest.fn(),
+            signalOrganization: jest.fn(),
+          },
         },
         { provide: S3Service, useValue: s3ServiceStub },
         { provide: ConfigService, useValue: configServiceStub },
@@ -427,6 +444,9 @@ describe('OrganizationsService.listActiveOrganizations', () => {
       ],
     }).compile();
     service = module.get(OrganizationsService);
+    lastRegistry = module.get<SocketRegistryService, RegistryMock>(
+      SocketRegistryService,
+    );
   }
 
   function membershipWith(
@@ -749,7 +769,10 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
         { provide: getConnectionToken(), useValue: {} },
         {
           provide: SocketRegistryService,
-          useValue: { disconnectMember: jest.fn() },
+          useValue: {
+            disconnectMember: jest.fn(),
+            signalOrganization: jest.fn(),
+          },
         },
         { provide: S3Service, useValue: s3ServiceStub },
         { provide: ConfigService, useValue: invitationConfig },
@@ -758,10 +781,14 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
       ],
     }).compile();
     service = module.get(OrganizationsService);
+    lastRegistry = module.get<SocketRegistryService, RegistryMock>(
+      SocketRegistryService,
+    );
   }
 
   const NOW = new Date('2026-01-01T00:00:00.000Z');
-  const VALID_DTO = {
+  // Typée par le DTO réel : `role` appartient aux rôles invitables.
+  const VALID_DTO: CreateInvitationDto = {
     email: 'Invite@Example.com',
     role: OrganizationRole.ADMIN,
   };
@@ -1171,6 +1198,48 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
     });
   });
 
+  describe('1-15C : signal invitations:changed', () => {
+    it('création réussie : UN signal vide, après l’écriture', async () => {
+      await build();
+      await service.createInvitation(ORG_OBJECT_ID, OWNER_ID, VALID_DTO, NOW);
+      expect(lastRegistry.signalOrganization).toHaveBeenCalledTimes(1);
+      expect(lastRegistry.signalOrganization).toHaveBeenCalledWith(
+        ORG_OBJECT_ID,
+        'invitations:changed',
+      );
+      expect(
+        lastRegistry.signalOrganization.mock.invocationCallOrder[0],
+      ).toBeGreaterThan(invitationModel.create.mock.invocationCallOrder[0]);
+    });
+
+    it('création refusée (acteur sans membership active) : aucun signal', async () => {
+      await build();
+      membershipByUserId.clear();
+      await service
+        .createInvitation(ORG_OBJECT_ID, OWNER_ID, VALID_DTO, NOW)
+        .catch(() => undefined);
+      expect(invitationModel.create).not.toHaveBeenCalled();
+      expect(lastRegistry.signalOrganization).not.toHaveBeenCalled();
+    });
+
+    it('révocation : signal si révoquée, aucun sur 404', async () => {
+      await build(); // findOneAndUpdate résout null par défaut
+      await service
+        .revokeInvitation(ORG_OBJECT_ID, INVITATION_ID)
+        .catch(() => undefined);
+      expect(lastRegistry.signalOrganization).not.toHaveBeenCalled();
+      invitationModel.findOneAndUpdate.mockReturnValue({
+        exec: () => Promise.resolve(invitationDoc()),
+      });
+      await service.revokeInvitation(ORG_OBJECT_ID, INVITATION_ID);
+      expect(lastRegistry.signalOrganization).toHaveBeenCalledTimes(1);
+      expect(lastRegistry.signalOrganization).toHaveBeenCalledWith(
+        ORG_OBJECT_ID,
+        'invitations:changed',
+      );
+    });
+  });
+
   describe('listInvitations', () => {
     it('filtre par organizationId uniquement, tri createdAt desc, jamais tokenHash', async () => {
       await build();
@@ -1358,7 +1427,10 @@ describe('OrganizationsService.acceptInvitation (1-6B.2)', () => {
         },
         {
           provide: SocketRegistryService,
-          useValue: { disconnectMember: jest.fn() },
+          useValue: {
+            disconnectMember: jest.fn(),
+            signalOrganization: jest.fn(),
+          },
         },
         { provide: S3Service, useValue: s3ServiceStub },
         { provide: ConfigService, useValue: configServiceStub },
@@ -1367,6 +1439,9 @@ describe('OrganizationsService.acceptInvitation (1-6B.2)', () => {
       ],
     }).compile();
     service = module.get(OrganizationsService);
+    lastRegistry = module.get<SocketRegistryService, RegistryMock>(
+      SocketRegistryService,
+    );
   }
 
   const VALID_DTO = {
@@ -1577,6 +1652,29 @@ describe('OrganizationsService.acceptInvitation (1-6B.2)', () => {
 
     await expect(service.acceptInvitation(VALID_DTO, NOW)).rejects.toThrow();
     expect(connectionFixture.session.endSession).toHaveBeenCalledTimes(1);
+    // 1-15C : aucun signal après un rollback.
+    expect(lastRegistry.signalOrganization).not.toHaveBeenCalled();
+  });
+
+  it('1-15C : acceptation réussie → invitations:changed puis members:changed, APRÈS la fin de session ; rien sur invitation invalide', async () => {
+    await build();
+    await service.acceptInvitation(VALID_DTO, NOW);
+    expect(lastRegistry.signalOrganization.mock.calls).toEqual([
+      [ORG_ID, 'invitations:changed'],
+      [ORG_ID, 'members:changed'],
+    ]);
+    expect(
+      lastRegistry.signalOrganization.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(
+      connectionFixture.session.endSession.mock.invocationCallOrder[0],
+    );
+
+    await build();
+    invitationModel.findOneAndUpdate.mockReturnValue({
+      exec: () => Promise.resolve(null),
+    });
+    await service.acceptInvitation(VALID_DTO, NOW).catch(() => undefined);
+    expect(lastRegistry.signalOrganization).not.toHaveBeenCalled();
   });
 
   it('endSession() appelé même en échec (finally)', async () => {
@@ -1664,7 +1762,10 @@ describe('OrganizationsService.listMembers (1-7C)', () => {
         { provide: getConnectionToken(), useValue: {} },
         {
           provide: SocketRegistryService,
-          useValue: { disconnectMember: jest.fn() },
+          useValue: {
+            disconnectMember: jest.fn(),
+            signalOrganization: jest.fn(),
+          },
         },
         { provide: S3Service, useValue: s3ServiceStub },
         { provide: ConfigService, useValue: configServiceStub },
@@ -1673,6 +1774,9 @@ describe('OrganizationsService.listMembers (1-7C)', () => {
       ],
     }).compile();
     service = module.get(OrganizationsService);
+    lastRegistry = module.get<SocketRegistryService, RegistryMock>(
+      SocketRegistryService,
+    );
   }
 
   it('filtre EXACTEMENT par organizationId (org B jamais incluse) et ne renvoie jamais password/User.role', async () => {
@@ -1701,7 +1805,10 @@ describe('OrganizationsService.listMembers (1-7C)', () => {
 describe('OrganizationsService.updateMembership (1-7C)', () => {
   let service: OrganizationsService;
   let membershipModel: { findOne: jest.Mock };
-  let socketRegistry: { disconnectMember: jest.Mock };
+  let socketRegistry: {
+    disconnectMember: jest.Mock;
+    signalOrganization: jest.Mock;
+  };
   let fixture: ReturnType<typeof makeSessionFixture17C>;
 
   async function build(actor: unknown, target: unknown) {
@@ -1711,7 +1818,10 @@ describe('OrganizationsService.updateMembership (1-7C)', () => {
         makeChain(filter._id ? target : actor),
       ),
     };
-    socketRegistry = { disconnectMember: jest.fn() };
+    socketRegistry = {
+      disconnectMember: jest.fn(),
+      signalOrganization: jest.fn(),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OrganizationsService,
@@ -1731,6 +1841,9 @@ describe('OrganizationsService.updateMembership (1-7C)', () => {
       ],
     }).compile();
     service = module.get(OrganizationsService);
+    lastRegistry = module.get<SocketRegistryService, RegistryMock>(
+      SocketRegistryService,
+    );
   }
 
   it('body vide → 400 EMPTY_MEMBERSHIP_UPDATE, aucune session ouverte', async () => {
@@ -1753,6 +1866,7 @@ describe('OrganizationsService.updateMembership (1-7C)', () => {
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(NotFoundException);
     expect(socketRegistry.disconnectMember).not.toHaveBeenCalled();
+    expect(socketRegistry.signalOrganization).not.toHaveBeenCalled();
   });
 
   it('self-management refusé (403 SELF_MANAGEMENT_FORBIDDEN)', async () => {
@@ -1768,6 +1882,7 @@ describe('OrganizationsService.updateMembership (1-7C)', () => {
       code: 'SELF_MANAGEMENT_FORBIDDEN',
     });
     expect(socketRegistry.disconnectMember).not.toHaveBeenCalled();
+    expect(socketRegistry.signalOrganization).not.toHaveBeenCalled();
   });
 
   it('modification de l’owner refusée (403 OWNER_NOT_MANAGEABLE), même par un autre owner', async () => {
@@ -1813,6 +1928,21 @@ describe('OrganizationsService.updateMembership (1-7C)', () => {
     expect(socketRegistry.disconnectMember).toHaveBeenCalledWith(
       ORG_ID_17C,
       TARGET_USER_ID,
+    );
+    // 1-15C : puis UN signal vide aux autres membres, après la fin de la
+    // session (commit) et après la déconnexion du membre visé.
+    expect(socketRegistry.signalOrganization).toHaveBeenCalledTimes(1);
+    expect(socketRegistry.signalOrganization).toHaveBeenCalledWith(
+      ORG_ID_17C,
+      'members:changed',
+    );
+    const signalOrder =
+      socketRegistry.signalOrganization.mock.invocationCallOrder[0];
+    expect(signalOrder).toBeGreaterThan(
+      socketRegistry.disconnectMember.mock.invocationCallOrder[0],
+    );
+    expect(signalOrder).toBeGreaterThan(
+      fixture.endSession.mock.invocationCallOrder[0],
     );
   });
 
@@ -1919,6 +2049,7 @@ describe('OrganizationsService.updateMembership (1-7C)', () => {
       ),
     ).rejects.toThrow('save failed');
     expect(socketRegistry.disconnectMember).not.toHaveBeenCalled();
+    expect(socketRegistry.signalOrganization).not.toHaveBeenCalled();
     expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
   });
 });
@@ -1926,7 +2057,10 @@ describe('OrganizationsService.updateMembership (1-7C)', () => {
 describe('OrganizationsService.transferOwnership (1-7C)', () => {
   let service: OrganizationsService;
   let membershipModel: { findOne: jest.Mock; countDocuments: jest.Mock };
-  let socketRegistry: { disconnectMember: jest.Mock };
+  let socketRegistry: {
+    disconnectMember: jest.Mock;
+    signalOrganization: jest.Mock;
+  };
   let fixture: ReturnType<typeof makeSessionFixture17C>;
 
   async function build(actor: unknown, target: unknown, activeOwnersAfter = 1) {
@@ -1937,7 +2071,10 @@ describe('OrganizationsService.transferOwnership (1-7C)', () => {
       ),
       countDocuments: jest.fn().mockResolvedValue(activeOwnersAfter),
     };
-    socketRegistry = { disconnectMember: jest.fn() };
+    socketRegistry = {
+      disconnectMember: jest.fn(),
+      signalOrganization: jest.fn(),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OrganizationsService,
@@ -1957,6 +2094,9 @@ describe('OrganizationsService.transferOwnership (1-7C)', () => {
       ],
     }).compile();
     service = module.get(OrganizationsService);
+    lastRegistry = module.get<SocketRegistryService, RegistryMock>(
+      SocketRegistryService,
+    );
   }
 
   const owner = () =>
@@ -1991,6 +2131,17 @@ describe('OrganizationsService.transferOwnership (1-7C)', () => {
     expect(socketRegistry.disconnectMember).toHaveBeenCalledWith(
       ORG_ID_17C,
       TARGET_USER_ID,
+    );
+    // 1-15C : signal vide après les deux déconnexions.
+    expect(socketRegistry.signalOrganization).toHaveBeenCalledTimes(1);
+    expect(socketRegistry.signalOrganization).toHaveBeenCalledWith(
+      ORG_ID_17C,
+      'members:changed',
+    );
+    expect(
+      socketRegistry.signalOrganization.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(
+      socketRegistry.disconnectMember.mock.invocationCallOrder[1],
     );
   });
 
@@ -2049,6 +2200,7 @@ describe('OrganizationsService.transferOwnership (1-7C)', () => {
       ),
     ).rejects.toThrow(/exactly one active owner/);
     expect(socketRegistry.disconnectMember).not.toHaveBeenCalled();
+    expect(socketRegistry.signalOrganization).not.toHaveBeenCalled();
     expect(fixture.session.endSession).toHaveBeenCalledTimes(1);
   });
 
@@ -2119,7 +2271,10 @@ describe('OrganizationsService — branding (1-8A)', () => {
         { provide: getConnectionToken(), useValue: {} },
         {
           provide: SocketRegistryService,
-          useValue: { disconnectMember: jest.fn() },
+          useValue: {
+            disconnectMember: jest.fn(),
+            signalOrganization: jest.fn(),
+          },
         },
         { provide: S3Service, useValue: s3Service },
         { provide: ConfigService, useValue: configServiceStub },
@@ -2128,6 +2283,9 @@ describe('OrganizationsService — branding (1-8A)', () => {
       ],
     }).compile();
     service = module.get(OrganizationsService);
+    lastRegistry = module.get<SocketRegistryService, RegistryMock>(
+      SocketRegistryService,
+    );
   }
 
   describe('getCurrent', () => {
@@ -2238,6 +2396,31 @@ describe('OrganizationsService — branding (1-8A)', () => {
     });
   });
 
+  describe('1-15C : signal organization:updated (updateBranding)', () => {
+    it('nom modifié → UN signal après la sauvegarde ; refus de validation → aucun', async () => {
+      const doc = orgDoc({ name: 'Ancien nom' });
+      await build(doc);
+      await service.updateBranding(ORG_ID_18A, { name: 'Nouveau nom' });
+      expect(lastRegistry.signalOrganization).toHaveBeenCalledTimes(1);
+      expect(lastRegistry.signalOrganization).toHaveBeenCalledWith(
+        ORG_ID_18A,
+        'organization:updated',
+      );
+      expect(
+        lastRegistry.signalOrganization.mock.invocationCallOrder[0],
+      ).toBeGreaterThan(doc.save.mock.invocationCallOrder[0]);
+
+      const other = orgDoc();
+      await build(other);
+      await service
+        .updateBranding(ORG_ID_18A, { name: '   ' })
+        .catch(() => undefined);
+      await service.updateBranding(ORG_ID_18A, {}).catch(() => undefined);
+      expect(other.save).not.toHaveBeenCalled();
+      expect(lastRegistry.signalOrganization).not.toHaveBeenCalled();
+    });
+  });
+
   describe('removeLogo', () => {
     it('logoKey → null, ancien logoKey retourné', async () => {
       const doc = orgDoc({
@@ -2259,6 +2442,24 @@ describe('OrganizationsService — branding (1-8A)', () => {
       const result = await service.removeLogo(ORG_ID_18A);
       expect(doc.save).not.toHaveBeenCalled();
       expect(result.previousLogoKey).toBeNull();
+      // 1-15C : rien n'a changé → aucun signal.
+      expect(lastRegistry.signalOrganization).not.toHaveBeenCalled();
+    });
+
+    it('1-15C : logo retiré → UN signal organization:updated APRÈS la sauvegarde', async () => {
+      const doc = orgDoc({
+        logoKey: `organizations/${ORG_ID_18A}/branding/old.png`,
+      });
+      await build(doc);
+      await service.removeLogo(ORG_ID_18A);
+      expect(lastRegistry.signalOrganization).toHaveBeenCalledTimes(1);
+      expect(lastRegistry.signalOrganization).toHaveBeenCalledWith(
+        ORG_ID_18A,
+        'organization:updated',
+      );
+      expect(
+        lastRegistry.signalOrganization.mock.invocationCallOrder[0],
+      ).toBeGreaterThan(doc.save.mock.invocationCallOrder[0]);
     });
 
     it('organisation absente → refus uniforme', async () => {
