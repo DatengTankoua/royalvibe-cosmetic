@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import type { UpdateQuery } from 'mongoose';
 import type { Connection } from 'mongoose';
 import { Product, ProductDocument } from './schemas/product.schema';
 import { Sale, SaleDocument } from '../sales/schemas/sale.schema';
@@ -376,10 +377,13 @@ export class ProductsService {
       }
     }
 
+    // 1-15E — l'ajout n'est PAS appliqué au document lu (valeurs absolues
+    // périmées si une vente est validée entre-temps) : il est transmis en
+    // `$inc` à l'écriture atomique ci-dessous, comme `decrementStock`.
+    let addedStock = 0;
     if (dto.additionalStock && dto.additionalStock > 0) {
+      addedStock = dto.additionalStock;
       const stockChange = { added: dto.additionalStock };
-      product.initialQuantity += dto.additionalStock;
-      product.remainingQuantity += dto.additionalStock;
       await this.auditService.log(
         organizationId,
         id,
@@ -417,9 +421,35 @@ export class ProductsService {
       }
     }
 
-    // §5 — `organizationId` n'est JAMAIS attribuée ici : le $set implicite de
-    // `save()` ne porte que les champs mutés ci-dessus.
-    const saved = await product.save();
+    // 1-15E — UNE écriture atomique d'un seul document, filtrée par tenant :
+    // `$set` des seuls champs mutés ci-dessus (ceux qu'aurait écrits
+    // `save()` ; `organizationId` n'en fait JAMAIS partie) et `$inc` du
+    // stock. Une vente validée pendant la modification n'est donc jamais
+    // écrasée ; aucune relecture ni reprise applicative (un ajout ne peut
+    // être appliqué deux fois). Produit supprimé entre-temps → 404, rien
+    // n'est recréé.
+    const update: UpdateQuery<ProductDocument> = {
+      ...product.getChanges(),
+      ...(addedStock > 0
+        ? {
+            $inc: {
+              initialQuantity: addedStock,
+              remainingQuantity: addedStock,
+            },
+          }
+        : {}),
+    };
+    const saved =
+      Object.keys(update).length === 0
+        ? product
+        : await this.productModel
+            .findOneAndUpdate(
+              { _id: product._id, organizationId: product.organizationId },
+              update,
+              { returnDocument: 'after', runValidators: true },
+            )
+            .exec();
+    if (!saved) throw new NotFoundException(`Product ${id} not found`);
     // Ancienne image supprimée SEULEMENT après succès de la mutation.
     if (newImageUrl && previousImageUrl !== newImageUrl) {
       await this.s3Service.deleteFile(

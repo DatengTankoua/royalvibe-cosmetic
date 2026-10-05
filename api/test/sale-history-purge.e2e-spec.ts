@@ -32,6 +32,7 @@ import {
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
 import { activateTestSubscriptions } from './e2e/subscription-fixtures';
+import { barrier, until } from './e2e/barriers';
 import { EMAIL_SENDER } from '../src/email-verification/email-sender';
 import {
   E2E_EMAIL_VERIFIED_AT,
@@ -61,22 +62,6 @@ const ORG_A = 'a15d0000000000000000000a';
 const ORG_B = 'b15d0000000000000000000b';
 // Organisation dédiée à la preuve du bénéfice global (aucune autre vente).
 const ORG_C = 'c15d0000000000000000000c';
-
-/** Barrière : `wait()` bloque jusqu'à `release()`. */
-function barrier() {
-  let release!: () => void;
-  const gate = new Promise<void>((r) => (release = r));
-  return { wait: () => gate, release };
-}
-
-/** Attente d'une condition observable (jamais un délai fixe). */
-async function until(check: () => boolean, label: string): Promise<void> {
-  const start = Date.now();
-  while (!check()) {
-    if (Date.now() - start > 20_000) throw new Error(`Délai : ${label}`);
-    await new Promise((r) => setImmediate(r));
-  }
-}
 
 describe('E2E 1-15D — historique des ventes après purge', () => {
   let moduleFixture: TestingModule;
@@ -737,7 +722,7 @@ describe('E2E 1-15D — historique des ventes après purge', () => {
     expect(await rowOf(untouched)).toMatchObject({ netProfit: 300 });
   });
 
-  it('bénéfice : stock ajouté pendant une vente (écriture perdue existante) → bénéfice global inchangé par la purge', async () => {
+  it('bénéfice : stock ajouté pendant une vente (1-15E : plus d’écriture perdue) → stock cohérent, bénéfice conservé, aucun écart figé', async () => {
     const id = await seed(`Stock-${Date.now()}`, ORG_C, sectionC);
     expect((await sell(id, 2, ownerC)).status).toBe(201);
     const hold = barrier();
@@ -748,7 +733,7 @@ describe('E2E 1-15D — historique des ventes après purge', () => {
       .mockImplementation(async (...args: Parameters<AuditService['log']>) => {
         if (args[2] === AuditAction.STOCK_CHANGED) {
           stockLogged += 1;
-          await hold.wait(); // produit lu et modifié en mémoire, pas encore enregistré
+          await hold.wait(); // produit lu, pas encore enregistré
         }
         return original(...args);
       });
@@ -762,14 +747,37 @@ describe('E2E 1-15D — historique des ventes après purge', () => {
     hold.release();
     expect((await patch).status).toBe(200);
 
-    // Écriture perdue (comportement existant) : 20 + 5 − 2 − 3 = 20 attendu,
-    // 23 enregistré ; stock et ventes ne concordent plus.
+    // 1-15E : 20 + 5 − 2 − 3 = 20 ; stock et ventes concordent.
     const doc = await productModel.findById(id).lean();
-    expect(doc).toMatchObject({ initialQuantity: 25, remainingQuantity: 23 });
+    expect(doc).toMatchObject({ initialQuantity: 25, remainingQuantity: 20 });
 
     const before = await overview(ownerC);
-    // Règle existante : 100 × (25 − 23) = 200 de coût, pas 100 × 5.
-    expect(before).toMatchObject({ totalRevenue: 2000, netProfit: 1800 });
+    // Règle existante : coût 100 × (25 − 20) = 500.
+    expect(before).toMatchObject({ totalRevenue: 2000, netProfit: 1500 });
+    expect((await purge(id, ownerC)).status).toBe(200);
+    const after = await overview(ownerC);
+    expect(after.totalRevenue).toBe(before.totalRevenue);
+    expect(after.netProfit).toBe(before.netProfit);
+    expect(after.avgMargin).toBe(before.avgMargin);
+    expect(
+      await connection
+        .collection('purged_stock_adjustments')
+        .countDocuments({ productId: new Types.ObjectId(id) }),
+    ).toBe(0);
+  });
+
+  it('bénéfice : écart historique préparé (fixture éphémère, données écrites avant 1-15E) → compensé à la purge', async () => {
+    const id = await seed(`Ecart-${Date.now()}`, ORG_C, sectionC);
+    expect((await sell(id, 2, ownerC)).status).toBe(201);
+    expect((await sell(id, 3, ownerC)).status).toBe(201);
+    // Fixture EXPLICITE : stock tel que l'écrivait l'ancienne écriture perdue
+    // (25 / 23 au lieu de 25 / 20) ; aucune correction automatique.
+    await productModel.collection.updateOne(
+      { _id: new Types.ObjectId(id) },
+      { $set: { initialQuantity: 25, remainingQuantity: 23 } },
+    );
+
+    const before = await overview(ownerC);
     expect((await purge(id, ownerC)).status).toBe(200);
     const after = await overview(ownerC);
     expect(after.totalRevenue).toBe(before.totalRevenue);

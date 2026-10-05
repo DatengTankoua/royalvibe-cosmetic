@@ -41,6 +41,32 @@ function makeConnection() {
   };
 }
 
+/**
+ * 1-15E — équivalent de `Document.getChanges()` pour les documents simulés :
+ * `$set` des champs modifiés depuis la création du mock (stock compris, pour
+ * qu'une écriture absolue du stock soit visible).
+ */
+const TRACKED_PRODUCT_FIELDS = [
+  'name',
+  'imageUrl',
+  'purchasePrice',
+  'salePrice',
+  'sectionId',
+  'initialQuantity',
+  'remainingQuantity',
+  'organizationId',
+];
+function trackChanges(doc: Record<string, unknown>) {
+  const initial = { ...doc };
+  doc.getChanges = jest.fn(() => {
+    const $set: Record<string, unknown> = {};
+    for (const key of TRACKED_PRODUCT_FIELDS) {
+      if (doc[key] !== initial[key]) $set[key] = doc[key];
+    }
+    return Object.keys($set).length ? { $set } : {};
+  });
+}
+
 function makeUpdateChain(result: unknown) {
   return { exec: jest.fn().mockResolvedValue(result) };
 }
@@ -307,6 +333,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     };
     // Mongoose `save()` renvoie le document hydraté : le mock le mime.
     (doc.save as jest.Mock).mockResolvedValue(doc);
+    trackChanges(doc);
     return doc;
   }
 
@@ -732,6 +759,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     expect(created.purchasePrice).toBe(5); // réponse du demandeur autorisé
 
     productOneChain.exec.mockResolvedValue(productDoc());
+    updateChain.exec.mockResolvedValue(productDoc({ name: 'N' }));
     await service.update(
       ORG_A,
       PRODUCT_ID,
@@ -791,10 +819,11 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
 
   // ---- update ----
 
-  it('update : relecture composite tenant, nom modifié, organisation jamais altérée, save unique', async () => {
+  it('update : relecture composite tenant, nom modifié, organisation jamais altérée, écriture atomique unique', async () => {
     await build();
     const doc = productDoc();
     productOneChain.exec.mockResolvedValue(doc);
+    updateChain.exec.mockResolvedValue(productDoc({ name: 'Nouveau' }));
 
     const res = await service.update(
       ORG_A,
@@ -807,8 +836,15 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       _id: PRODUCT_ID,
       organizationId: new Types.ObjectId(ORG_A),
     });
-    expect(doc.save).toHaveBeenCalledTimes(1);
-    expect(doc.name).toBe('Nouveau');
+    // 1-15E : une seule écriture atomique, filtrée par tenant, `$set` des
+    // seuls champs modifiés (jamais `organizationId` ni le stock).
+    expect(doc.save).not.toHaveBeenCalled();
+    expect(productModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    expect(productModel.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: doc._id, organizationId: new Types.ObjectId(ORG_A) },
+      { $set: { name: 'Nouveau' } },
+      { returnDocument: 'after', runValidators: true },
+    );
     expect(doc.organizationId).toEqual(new Types.ObjectId(ORG_A)); // inchangée
     expect(auditService.log).toHaveBeenCalled();
     expect(res.product.name).toBe('Nouveau');
@@ -825,6 +861,9 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     const doc = productDoc();
     const previousImageUrl = doc.imageUrl as string;
     productOneChain.exec.mockResolvedValue(doc);
+    updateChain.exec.mockResolvedValue(
+      productDoc({ name: 'Nouveau', imageUrl: 'http://s3-e2e/new.png' }),
+    );
 
     const res = await service.update(
       ORG_A,
@@ -834,8 +873,15 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       'http://s3-e2e/new.png',
     );
 
-    expect(doc.imageUrl).toBe('http://s3-e2e/new.png');
-    expect(doc.save).toHaveBeenCalledTimes(1);
+    expect(productModel.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.any(Object),
+      { $set: { name: 'Nouveau', imageUrl: 'http://s3-e2e/new.png' } },
+      expect.any(Object),
+    );
+    // Ancienne image supprimée APRÈS l'écriture réussie.
+    expect(s3Service.deleteFile.mock.invocationCallOrder[0]).toBeGreaterThan(
+      productModel.findOneAndUpdate.mock.invocationCallOrder[0],
+    );
     expect(s3Service.deleteFile).toHaveBeenCalledTimes(1);
     expect(s3Service.deleteFile).toHaveBeenCalledWith(
       previousImageUrl,
@@ -848,6 +894,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     await build();
     const doc = productDoc({ imageUrl: 'http://s3-e2e/same.png' });
     productOneChain.exec.mockResolvedValue(doc);
+    updateChain.exec.mockResolvedValue(doc);
 
     await service.update(
       ORG_A,
@@ -858,6 +905,78 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     );
 
     expect(s3Service.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('1-15E update : ajout de stock en `$inc` atomique, jamais en valeur absolue', async () => {
+    await build();
+    const doc = productDoc({ initialQuantity: 20, remainingQuantity: 15 });
+    productOneChain.exec.mockResolvedValue(doc);
+    updateChain.exec.mockResolvedValue(
+      productDoc({ initialQuantity: 25, remainingQuantity: 18 }),
+    );
+
+    const res = await service.update(
+      ORG_A,
+      PRODUCT_ID,
+      { additionalStock: 5, salePrice: 12 },
+      'actor',
+    );
+
+    expect(productModel.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: doc._id, organizationId: new Types.ObjectId(ORG_A) },
+      {
+        $set: { salePrice: 12 },
+        $inc: { initialQuantity: 5, remainingQuantity: 5 },
+      },
+      { returnDocument: 'after', runValidators: true },
+    );
+    // Le document lu n'est pas modifié pour le stock.
+    expect(doc.initialQuantity).toBe(20);
+    expect(doc.remainingQuantity).toBe(15);
+    expect(auditService.log).toHaveBeenCalledWith(
+      ORG_A,
+      PRODUCT_ID,
+      'stock_changed',
+      'actor',
+      { added: 5 },
+    );
+    // Réponse et émission : état ENREGISTRÉ (vente concurrente comprise).
+    expect(res.product.remainingQuantity).toBe(18);
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
+      ORG_A,
+      'product:updated',
+      expect.objectContaining({
+        product: expect.objectContaining({ remainingQuantity: 18 }),
+      }),
+    );
+  });
+
+  it('1-15E update : produit disparu à l’écriture → 404, aucune émission ni suppression d’image', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+    updateChain.exec.mockResolvedValue(null);
+
+    const err = await service
+      .update(
+        ORG_A,
+        PRODUCT_ID,
+        { additionalStock: 5 },
+        'actor',
+        'http://s3-e2e/new.png',
+      )
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect(eventsGateway.emitToOrganization).not.toHaveBeenCalled();
+    expect(s3Service.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('1-15E update : aucune modification → aucune écriture', async () => {
+    await build();
+    const doc = productDoc();
+    productOneChain.exec.mockResolvedValue(doc);
+    await service.update(ORG_A, PRODUCT_ID, { name: 'Prod' }, 'actor');
+    expect(productModel.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(doc.save).not.toHaveBeenCalled();
   });
 
   it('update : mouvement vers une section étrangère → 404 `Section`, rien sauvegardé', async () => {
@@ -879,6 +998,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       deletedAt: null,
     });
     expect(doc.save).not.toHaveBeenCalled();
+    expect(productModel.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('update : produit invisible → 404, aucune écriture', async () => {
@@ -1192,6 +1312,7 @@ describe('ProductsService — appelants AuditService.log portent la tenant (1-4C
       ...overrides,
     };
     (doc.save as jest.Mock).mockResolvedValue(doc);
+    trackChanges(doc);
     return doc;
   }
 
@@ -1277,6 +1398,7 @@ describe('ProductsService — appelants AuditService.log portent la tenant (1-4C
     await build();
     const doc = productDoc();
     productOneChain.exec.mockResolvedValue(doc);
+    updateChain.exec.mockResolvedValue(doc);
     sectionOneChain.exec.mockResolvedValue(sectionDoc());
     // 3 changes distinctes : name, price, section.
     await service.update(
