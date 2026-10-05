@@ -7,6 +7,7 @@ import { UsersService } from '../users/users.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { SocketRegistryService } from '../organizations/socket-registry.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { SubscriptionSignalsService } from '../subscriptions/subscription-signals.service';
 import {
   buildOriginAllowlist,
   parseCORSOrigin,
@@ -148,6 +149,7 @@ export class EventsGateway {
     private readonly organizationsService: OrganizationsService,
     private readonly socketRegistry: SocketRegistryService,
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly subscriptionSignals: SubscriptionSignalsService,
   ) {}
 
   /**
@@ -179,6 +181,12 @@ export class EventsGateway {
       (organizationId, event, payload) =>
         this.emitToOrganization(organizationId, event, payload),
     );
+    // 1-15F : signaux d'abonnement et de paiement au propriétaire réel
+    // seul (désigné par le service), mêmes room et filtre de couverture.
+    this.subscriptionSignals.attachEmitter({
+      toMember: (organizationId, userId, event, payload) =>
+        this.emitToMember(organizationId, userId, event, payload),
+    });
   }
 
   handleConnection(client: Socket): void {
@@ -218,6 +226,29 @@ export class EventsGateway {
     event: string,
     payload: unknown,
   ): void {
+    this.emitInRoom(organizationId, null, event, payload);
+  }
+
+  /**
+   * 1-15F — même diffusion, restreinte aux sockets de `userId` DANS la room
+   * de l'organisation (utilisateur désigné par le serveur au moment de
+   * l'émission, jamais par un rôle figé au handshake).
+   */
+  emitToMember(
+    organizationId: string,
+    userId: string,
+    event: string,
+    payload: unknown,
+  ): void {
+    this.emitInRoom(organizationId, userId, event, payload);
+  }
+
+  private emitInRoom(
+    organizationId: string,
+    userId: string | null,
+    event: string,
+    payload: unknown,
+  ): void {
     const room = this.server.sockets.adapter.rooms.get(
       organizationRoom(organizationId),
     );
@@ -226,6 +257,16 @@ export class EventsGateway {
     for (const socketId of room) {
       const socket = this.server.sockets.sockets.get(socketId);
       if (!socket) continue;
+      if (userId !== null) {
+        const context = socket.data.organizationContext as
+          { organizationId?: string; userId?: string } | undefined;
+        if (
+          context?.userId !== userId ||
+          context.organizationId !== organizationId
+        ) {
+          continue;
+        }
+      }
       const coverageEndsAt = socketCoverageEndsAt(socket);
       if (coverageEndsAt === null || coverageEndsAt <= now) continue;
       socket.emit(event, payload);

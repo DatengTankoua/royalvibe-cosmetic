@@ -8,9 +8,14 @@ import {
   Organization,
   OrganizationSchema,
 } from '../organizations/schemas/organization.schema';
+import {
+  OrganizationMembership,
+  OrganizationMembershipSchema,
+} from '../organizations/schemas/membership.schema';
 import { SubscriptionsService } from './subscriptions.service';
 import { SubscriptionsController } from './subscriptions.controller';
 import { SubscriptionPeriodIndexCheck } from './subscription-period-indexes';
+import { SubscriptionSignalsService } from './subscription-signals.service';
 import {
   SUBSCRIPTION_CLOCK,
   SUBSCRIPTION_MONOTONIC_CLOCK,
@@ -58,12 +63,22 @@ import {
  * `DISABLED_CAMPAY_WEBHOOK` (503 sans lecture, sans base ni prestataire).
  * Aucune variable d'environnement ne l'active ; seuls les tests du lot le
  * remplacent (`overrideProvider`).
+ *
+ * 1-15F — `SubscriptionSignalsService` (exporté) : signaux temps réel après
+ * écriture validée, branchés par `EventsGateway` (qui importe déjà ce
+ * module). Le modèle `OrganizationMembership` est enregistré en LECTURE
+ * seule pour désigner le propriétaire réel, sans importer
+ * `OrganizationsModule`.
  */
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: SubscriptionPeriod.name, schema: SubscriptionPeriodSchema },
       { name: Organization.name, schema: OrganizationSchema },
+      {
+        name: OrganizationMembership.name,
+        schema: OrganizationMembershipSchema,
+      },
       { name: SubscriptionPayment.name, schema: SubscriptionPaymentSchema },
       {
         name: SubscriptionPaymentReconciliation.name,
@@ -79,6 +94,7 @@ import {
   providers: [
     SubscriptionsService,
     SubscriptionPeriodIndexCheck,
+    SubscriptionSignalsService,
     { provide: SUBSCRIPTION_CLOCK, useValue: systemSubscriptionClock },
     {
       provide: SUBSCRIPTION_MONOTONIC_CLOCK,
@@ -95,6 +111,6 @@ import {
     // (aucun contrôleur ; fournisseur injecté `PAYMENT_PROVIDER`).
     PaymentReconciliationService,
   ],
-  exports: [SubscriptionsService],
+  exports: [SubscriptionsService, SubscriptionSignalsService],
 })
 export class SubscriptionsModule {}

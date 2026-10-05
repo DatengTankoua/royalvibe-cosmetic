@@ -32,6 +32,8 @@ import {
   type PaymentIdentity,
   type PaymentIntent,
 } from "@/lib/payment-intent";
+import { createResponseOrder } from "@/lib/refresh-coordinator";
+import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
 import { OfferConditions, OfferSelector } from "./subscription-offers";
 
 // 1-14D.2C — Paiement Mobile Money de l'abonnement par le PROPRIÉTAIRE réel.
@@ -48,6 +50,50 @@ import { OfferConditions, OfferSelector } from "./subscription-offers";
 // - aucun délai local ne transforme un paiement en échec ;
 // - `succeeded` → reprise via `onAccessRestore` (échange `complete`
 //   existant), jamais un raccourci d'authentification.
+//
+// 1-15F — temps réel (session applicative seulement : le socket du shell ;
+// jamais en session limitée ni sur l'écran de blocage, sans socket) :
+// - `payments:changed` (payload vide, propriétaire réel seul) → relecture
+//   SILENCIEUSE regroupée de l'historique et du paiement affiché, par les
+//   seules lectures LOCALES (`GET …/payments`, `GET …/payments/:id`) ;
+//   jamais `…/refresh`, donc jamais le prestataire ; rattrapage à la
+//   reconnexion ;
+// - une relecture ne crée, ne confirme ni ne relance aucun paiement, ne
+//   touche ni au marqueur de reprise, ni à l'UUID, ni au verrou
+//   d'initiation, et n'appelle jamais `onAccessRestore` ;
+// - réponse ignorée si une réponse plus récente a été appliquée, si une
+//   action de l'utilisateur a appliqué une réponse pendant la relecture
+//   (relecture redemandée), ou pour un paiement qui n'est plus celui affiché ;
+// - `succeeded` est définitif : une réponse ancienne ne réaffiche jamais
+//   `pending` après `succeeded` (le serveur ne régresse jamais un succès).
+
+const PAYMENT_SIGNALS = ["payments:changed"] as const;
+const NO_SIGNALS: readonly string[] = [];
+
+/** Vue la plus avancée : un succès connu n'est jamais remplacé. */
+function newerView(
+  known: ApiSubscriptionPayment,
+  fresh: ApiSubscriptionPayment,
+): ApiSubscriptionPayment {
+  return known.status === "succeeded" && fresh.status !== "succeeded"
+    ? known
+    : fresh;
+}
+
+/** Fusion de la première page relue dans l'historique affiché (`_id` décroissant). */
+function mergeHistory(
+  items: ApiSubscriptionPayment[],
+  fresh: ApiSubscriptionPayment[],
+): ApiSubscriptionPayment[] {
+  const byId = new Map(items.map((p) => [p.paymentId, p]));
+  for (const payment of fresh) {
+    const known = byId.get(payment.paymentId);
+    byId.set(payment.paymentId, known ? newerView(known, payment) : payment);
+  }
+  return [...byId.values()].sort((a, b) =>
+    a.paymentId < b.paymentId ? 1 : a.paymentId > b.paymentId ? -1 : 0,
+  );
+}
 
 const STATUS_COPY: Record<
   SubscriptionPaymentStatus,
@@ -160,6 +206,17 @@ export function SubscriptionPaymentPanel({
   // Verrou SYNCHRONE contre le double clic (l'état React est asynchrone).
   const inFlight = useRef(false);
   const mounted = useRef(true);
+  // 1-15F : début de la dernière relecture appliquée (rattrapage), ordre
+  // des relectures, génération des réponses appliquées par une action ou le
+  // chargement initial, paiement affiché et pages d'historique chargées.
+  const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
+  const reloadOrder = useRef(createResponseOrder());
+  const actionEpoch = useRef(0);
+  const currentRef = useRef<ApiSubscriptionPayment | null>(null);
+  const extraPages = useRef(0);
+  useEffect(() => {
+    currentRef.current = current;
+  }, [current]);
 
   useEffect(() => {
     mounted.current = true;
@@ -210,6 +267,7 @@ export function SubscriptionPaymentPanel({
   /** Le paiement affiché devient la référence de reprise de l'identité. */
   const track = useCallback(
     (payment: ApiSubscriptionPayment, clientOperationId: string | null) => {
+      actionEpoch.current += 1;
       setCurrent(payment);
       upsertHistory(payment);
       if (payment.status === "succeeded") {
@@ -237,6 +295,7 @@ export function SubscriptionPaymentPanel({
     const stored = readPaymentIntent(identity);
     setIntent(stored);
     setLoading(true);
+    const requestedAt = Date.now();
     void (async () => {
       let page: { items: ApiSubscriptionPayment[]; nextCursor: string | null } =
         { items: [], nextCursor: null };
@@ -276,6 +335,8 @@ export function SubscriptionPaymentPanel({
         if (open) found = open;
       }
       if (cancelled) return;
+      actionEpoch.current += 1;
+      setLoadedAt(requestedAt);
       if (found) {
         setCurrent(found);
         if (found.status === "succeeded") {
@@ -309,6 +370,71 @@ export function SubscriptionPaymentPanel({
     // remonté (clé) à chaque changement d'identité.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity.userId, identity.organizationId, token]);
+
+  // 1-15F — relecture silencieuse sur `payments:changed` (lectures locales
+  // seulement). Aucune écriture du marqueur, aucun verrou, aucun message.
+  const live = !restricted;
+  const reloadRef = useRef<() => void>(() => undefined);
+  const reloadFromServer = useCallback(async () => {
+    const requestedAt = Date.now();
+    const ticket = reloadOrder.current.begin();
+    const epoch = actionEpoch.current;
+    const selected = currentRef.current?.paymentId ?? null;
+    let page: { items: ApiSubscriptionPayment[]; nextCursor: string | null };
+    let fresh: ApiSubscriptionPayment | null = null;
+    try {
+      [page, fresh] = await Promise.all([
+        listSubscriptionPayments({ limit: PAYMENT_HISTORY_PAGE_SIZE }, token),
+        selected
+          ? fetchSubscriptionPayment(selected, token)
+          : Promise.resolve(null),
+      ]);
+    } catch {
+      return; // affichage conservé ; rattrapage au prochain signal
+    }
+    if (!mounted.current) return;
+    // Une action (ou le chargement initial) a appliqué une réponse pendant
+    // la relecture : celle-ci est peut-être plus ancienne → relue ensuite.
+    if (actionEpoch.current !== epoch) {
+      reloadRef.current();
+      return;
+    }
+    if (!reloadOrder.current.accept(ticket)) return;
+    setLoadedAt(requestedAt);
+    setHistory((items) => mergeHistory(items, page.items));
+    if (extraPages.current === 0) setNextCursor(page.nextCursor);
+    setHistoryError(null);
+    const open =
+      page.items.find((p) => BLOCKING_PAYMENT_STATUSES.has(p.status)) ?? null;
+    setCurrent((previous) => {
+      let next = previous;
+      // Paiement relu par son identifiant : appliqué seulement s'il est
+      // toujours celui affiché.
+      if (fresh && previous && previous.paymentId === fresh.paymentId) {
+        next = newerView(previous, fresh);
+      } else if (previous && previous.paymentId !== selected) {
+        return previous;
+      }
+      // Paiement ouvert créé ailleurs (autre onglet, autre appareil) :
+      // affiché, ce qui bloque toute nouvelle collecte ici.
+      if (
+        open &&
+        open.paymentId !== next?.paymentId &&
+        (next === null || !BLOCKING_PAYMENT_STATUSES.has(next.status))
+      ) {
+        return open;
+      }
+      return next;
+    });
+  }, [token]);
+  const requestReload = useLiveRefresh(
+    reloadFromServer,
+    live ? loadedAt : undefined,
+  );
+  useEffect(() => {
+    reloadRef.current = requestReload;
+  }, [requestReload]);
+  useSocketSignals(live ? PAYMENT_SIGNALS : NO_SIGNALS, requestReload);
 
   const lostIntent = intent !== null && intent.paymentId === null;
   const lockedTerm = lostIntent ? intent.term : null;
@@ -447,6 +573,7 @@ export function SubscriptionPaymentPanel({
       if (!mounted.current) return;
       const kind = classifyPaymentError(error);
       if (kind.kind === "not-found") {
+        actionEpoch.current += 1;
         clearPaymentIntent(identity);
         setIntent(null);
         setCurrent(null);
@@ -467,6 +594,7 @@ export function SubscriptionPaymentPanel({
     try {
       const fresh = await fetchSubscriptionPayment(current.paymentId, token);
       if (!mounted.current) return;
+      actionEpoch.current += 1;
       upsertHistory(fresh);
       if (fresh.status !== "failed") {
         track(fresh, intent?.clientOperationId ?? null);
@@ -507,6 +635,7 @@ export function SubscriptionPaymentPanel({
         ),
       ]);
       setNextCursor(page.nextCursor);
+      extraPages.current += 1;
       setHistoryError(null);
     } catch (error) {
       if (!mounted.current) return;

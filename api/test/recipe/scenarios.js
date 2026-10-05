@@ -46,18 +46,40 @@ async function scenario(id, title, provider, fn) {
   const page = await context.newPage();
   const requests = [];
   const consoleLines = [];
+  // 1-15F : statut HTTP ou échec réseau rattaché à chaque requête, pour le
+  // diagnostic d'échec.
+  const entries = new WeakMap();
   const track = (p) => {
-    p.on('request', (r) =>
-      requests.push({
+    p.on('request', (r) => {
+      const entry = {
         method: r.method(),
         url: r.url(),
         body: r.postData() || null,
         page: p,
-      }),
-    );
+        at: Date.now(),
+      };
+      entries.set(r, entry);
+      requests.push(entry);
+    });
+    p.on('response', (res) => {
+      const entry = entries.get(res.request());
+      if (entry) entry.status = res.status();
+    });
+    p.on('requestfailed', (r) => {
+      const entry = entries.get(r);
+      if (entry) entry.failure = (r.failure() || {}).errorText || 'failed';
+    });
     p.on('console', (m) => consoleLines.push(m.text()));
   };
   track(page);
+  // 1-15F : pages capturées en cas d'échec (page principale + pages des
+  // sous-cas déclarées par `watch`), chacune dans SON contexte.
+  const watched = [{ label: 'page', page }];
+  const watch = (label, p) => {
+    track(p);
+    watched.push({ label, page: p });
+    return p;
+  };
   const t0 = Date.now();
   try {
     await L.restartApi(provider);
@@ -68,6 +90,7 @@ async function scenario(id, title, provider, fn) {
       requests,
       consoleLines,
       track,
+      watch,
     });
     results.push({
       id,
@@ -79,6 +102,42 @@ async function scenario(id, title, provider, fn) {
     });
     console.log(`PASS ${id} ${title}${notes ? ' — ' + notes : ''}`);
   } catch (e) {
+    const diagnostics = [];
+    for (const { label, page: p } of watched) {
+      if (p.isClosed()) {
+        diagnostics.push({ label, closed: true });
+        continue;
+      }
+      const file =
+        label === 'page' ? `fail-${id}.png` : `fail-${id}-${label}.png`;
+      try {
+        await p.screenshot({
+          path: path.join(L.outputDir(), file),
+          fullPage: true,
+          timeout: 5000,
+        });
+      } catch {
+        // capture facultative
+      }
+      const text = await p
+        .evaluate(() => document.body.innerText.slice(0, 600))
+        .catch(() => null);
+      diagnostics.push({
+        label,
+        url: p.url(),
+        screenshot: file,
+        text,
+        lastRequests: requests
+          .filter((r) => r.page === p)
+          .slice(-15)
+          .map((r) => ({
+            method: r.method,
+            url: r.url,
+            status: r.status === undefined ? null : r.status,
+            failure: r.failure || null,
+          })),
+      });
+    }
     results.push({
       id,
       title,
@@ -86,16 +145,9 @@ async function scenario(id, title, provider, fn) {
       status: 'FAIL',
       ms: Date.now() - t0,
       error: String(e && e.stack),
+      diagnostics,
     });
     console.log(`FAIL ${id} ${title} — ${e && e.message}`);
-    try {
-      await page.screenshot({
-        path: path.join(L.outputDir(), `fail-${id}.png`),
-        fullPage: true,
-      });
-    } catch {
-      // capture facultative
-    }
   } finally {
     await browser.close();
   }
@@ -199,6 +251,83 @@ async function audits(paymentId) {
     .countDocuments({ paymentId: L.oid(paymentId) });
 }
 const collects = async () => (await L.sim.stats()).initiations.length;
+
+// ─── 1-15F : budget des lectures temps réel (scénario 6) ─────────────────────
+// Une lecture locale n'est admise qu'en réponse à un déclencheur observé :
+// - `payments:changed` → au plus une relecture du panneau (liste + paiement) ;
+// - `subscription:changed` → au plus une relecture de l'abonnement ;
+// - reconnexion du socket (nouveau WebSocket) → au plus une relecture de
+//   chaque (rattrapage).
+// Sans déclencheur : AUCUNE lecture. Un polling GET ajouté par erreur
+// dépasse donc le budget, comme un polling POST.
+const SUBSCRIPTION_READ =
+  /^\/organizations\/current\/subscription(\/payments(\/[0-9a-f]{24})?)?$/;
+function readKind(r) {
+  if (r.method !== 'GET') return null;
+  const pathname = new URL(r.url).pathname;
+  if (!SUBSCRIPTION_READ.test(pathname)) return null;
+  if (pathname.endsWith('/subscription')) return 'subscription';
+  if (pathname.endsWith('/payments')) return 'list';
+  return 'item';
+}
+/** Sockets d'une page : ouvertures, signaux reçus, pings Engine.IO. */
+function watchSocket(p) {
+  const sock = { opened: [], frames: [], pings: [] };
+  p.on('websocket', (ws) => {
+    sock.opened.push(Date.now());
+    ws.on('framereceived', (f) => {
+      const text = typeof f.payload === 'string' ? f.payload : '';
+      if (text === '2') sock.pings.push(Date.now());
+      const match = /^42(\[.*)$/s.exec(text);
+      if (!match) return;
+      try {
+        const [event] = JSON.parse(match[1]);
+        sock.frames.push({ event, at: Date.now() });
+      } catch {
+        // frame non JSON
+      }
+    });
+  });
+  return sock;
+}
+/** Lectures, écritures et déclencheurs de la page `p` depuis `from`. */
+function readBudget(requests, p, sock, from) {
+  const reads = { list: 0, item: 0, subscription: 0 };
+  let posts = 0;
+  for (const r of requests) {
+    if (r.page !== p || r.at < from) continue;
+    if (isPayment(r) && r.method !== 'GET') posts += 1;
+    const kind = readKind(r);
+    if (kind) reads[kind] += 1;
+  }
+  const reconnects = sock.opened.filter((t) => t >= from).length;
+  const payments = sock.frames.filter(
+    (f) => f.at >= from && f.event === 'payments:changed',
+  ).length;
+  const subscription = sock.frames.filter(
+    (f) => f.at >= from && f.event === 'subscription:changed',
+  ).length;
+  const allowed = {
+    list: payments + reconnects,
+    item: payments + reconnects,
+    subscription: subscription + reconnects,
+  };
+  const within =
+    reads.list <= allowed.list &&
+    reads.item <= allowed.item &&
+    reads.subscription <= allowed.subscription;
+  return { reads, posts, reconnects, payments, subscription, allowed, within };
+}
+const totalReads = (b) => b.reads.list + b.reads.item + b.reads.subscription;
+/** Page au repos : aucune requête de `p` pendant `ms` (temps réel). */
+async function quiet(requests, p, ms) {
+  for (let i = 0; i < 120; i++) {
+    const last = requests.filter((r) => r.page === p).pop();
+    if (!last || Date.now() - last.at >= ms) return;
+    await settleWait(250);
+  }
+  throw new Error('page jamais au repos');
+}
 
 (async () => {
   // ════════════════ Scénarios 1-14D.2C (fournisseur simulé) ════════════════
@@ -623,25 +752,122 @@ const collects = async () => (await L.sim.stats()).initiations.length;
     '6',
     'Attente prolongée, uncertain, review, 503 : aucun nouvel essai automatique',
     'simulated',
-    async ({ browser, page, requests }) => {
+    async ({ browser, page, requests, watch }) => {
       await page.clock.install();
+      const sock = watchSocket(page);
       const o = await L.registerOwner('wait');
       await loginApp(page, o.email);
+      const phase0 = Date.now();
       await openSubscription(page);
+
+      // 1-15F — Phase 0 (chargement) : lecture initiale de l'abonnement et
+      // de l'historique, plus au plus un RATTRAPAGE par socket ouvert (le
+      // socket du document peut se connecter après la lecture initiale,
+      // limite 1-15A). Mesurée et bornée, puis page au repos.
+      for (let i = 0; i < 80 && sock.opened.length === 0; i++) {
+        await settleWait(250);
+      }
+      await quiet(requests, page, 1500);
+      const z = readBudget(requests, page, sock, phase0);
+      ok(
+        z.reconnects >= 1 &&
+          z.payments === 0 &&
+          z.subscription === 0 &&
+          z.reads.item === 0 &&
+          z.reads.list >= 1 &&
+          z.reads.list <= 1 + z.reconnects &&
+          z.reads.subscription >= 1 &&
+          z.reads.subscription <= 1 + z.reconnects &&
+          z.posts === 0,
+        `phase 0 : lecture initiale + rattrapage borné (${JSON.stringify(z)})`,
+      );
+
+      // 1-15F — Phase A (déclencheur : signal de la création). La création
+      // émet `payments:changed` : au plus une relecture locale, aucune autre
+      // écriture que la création elle-même.
+      const phaseA = Date.now();
       await payUi(page);
       await waitStatus(page, 'pending');
-      const before = payReqs(requests).length;
+      for (
+        let i = 0;
+        i < 40 &&
+        !(() => {
+          const b = readBudget(requests, page, sock, phaseA);
+          return b.payments >= 1 && b.reads.list >= 1;
+        })();
+        i++
+      ) {
+        await page.clock.fastForward(500);
+        await settleWait(250);
+      }
+      await settleWait(1000);
+      const a = readBudget(requests, page, sock, phaseA);
+      ok(
+        a.payments === 1 &&
+          a.subscription === 0 &&
+          a.reads.list >= 1 &&
+          a.within &&
+          a.posts === 1,
+        `phase A : une relecture bornée après le signal, seule écriture = la création (${JSON.stringify(a)})`,
+      );
+
+      // Phase B (AUCUN déclencheur) : juste après un ping Engine.IO, 30 s
+      // simulées (< pingInterval + pingTimeout = 45 s : aucune reconnexion).
+      // Toute lecture ici serait périodique : aucune n'est admise.
+      const pingsBefore = sock.pings.length;
+      for (let i = 0; i < 160 && sock.pings.length === pingsBefore; i++) {
+        await settleWait(250);
+      }
+      ok(sock.pings.length > pingsBefore, 'phase B : ping Engine.IO observé');
+      const phaseB = Date.now();
+      await page.clock.fastForward('00:30');
+      await settleWait(1500);
+      const b = readBudget(requests, page, sock, phaseB);
+      ok(
+        b.reconnects === 0 && b.payments === 0 && b.subscription === 0,
+        `phase B : précondition, aucun déclencheur (${JSON.stringify(b)})`,
+      );
+      ok(
+        totalReads(b) === 0 && b.posts === 0,
+        `phase B : aucune lecture ni écriture sans déclencheur (${JSON.stringify(b)})`,
+      );
+
+      // Phase C (attente prolongée) : 30 min simulées + focus. Les minuteurs
+      // Socket.IO du client expirent : la reconnexion (déclencheur observé)
+      // autorise au plus un rattrapage ; aucune écriture, aucun appel au
+      // prestataire.
+      const providerBefore = await L.sim.stats();
+      const phaseC = Date.now();
       await page.clock.fastForward('30:00');
       await page.evaluate(() => {
         window.dispatchEvent(new Event('focus'));
         document.dispatchEvent(new Event('visibilitychange'));
         window.dispatchEvent(new Event('online'));
       });
-      await settleWait(1500);
+      await settleWait(2500);
+      const c = readBudget(requests, page, sock, phaseC);
+      const providerAfter = await L.sim.stats();
       ok(
-        payReqs(requests).length === before,
-        'aucun appel de paiement après 30 min simulées + focus',
+        c.payments === 0 && c.subscription === 0,
+        `phase C : aucun signal sans changement serveur (${JSON.stringify(c)})`,
       );
+      ok(
+        c.posts === 0 && c.within,
+        `phase C : aucune écriture, lectures dans le budget des reconnexions (${JSON.stringify(c)})`,
+      );
+      ok(
+        providerAfter.initiations.length ===
+          providerBefore.initiations.length &&
+          providerAfter.statusCalls === providerBefore.statusCalls,
+        `phase C : aucune collecte ni consultation (${JSON.stringify({
+          initiations: [
+            providerBefore.initiations.length,
+            providerAfter.initiations.length,
+          ],
+          status: [providerBefore.statusCalls, providerAfter.statusCalls],
+        })})`,
+      );
+      const phaseNotes = `0 ${JSON.stringify(z.reads)} pour ${z.reconnects} socket(s) ; A ${JSON.stringify(a.reads)} ; B 0 lecture ; C ${c.reconnects} reconnexion(s) ${JSON.stringify(c.reads)}`;
       ok(
         (await statusOf(page)) === 'pending',
         'toujours en attente (jamais échec local)',
@@ -679,11 +905,13 @@ const collects = async () => (await L.sim.stats()).initiations.length;
       const u = await L.registerOwner('uncertain');
       await L.sim.queueInit('lost');
       const cu = await browser.newContext();
-      const pu = await cu.newPage();
+      const pu = watch('uncertain', await cu.newPage());
+      const sockU = watchSocket(pu);
       const ru = [];
       pu.on('request', (r) => ru.push({ method: r.method(), url: r.url() }));
       await loginApp(pu, u.email);
       await openSubscription(pu);
+      const phaseU = Date.now();
       await payUi(pu);
       await waitStatus(pu, 'uncertain');
       await waitText(pu, 'Résultat à vérifier');
@@ -697,6 +925,21 @@ const collects = async () => (await L.sim.stats()).initiations.length;
           .count()) === 0,
         'uncertain : pas de Renouveler',
       );
+      // 1-15F : relecture locale due au signal de la création, attendue
+      // puis bornée (budget), avant la fenêtre d'observation inchangée.
+      for (
+        let i = 0;
+        i < 40 && readBudget(requests, pu, sockU, phaseU).reads.list === 0;
+        i++
+      ) {
+        await settleWait(250);
+      }
+      await settleWait(1000);
+      const bu = readBudget(requests, pu, sockU, phaseU);
+      ok(
+        bu.payments === 1 && bu.reads.list >= 1 && bu.within && bu.posts === 1,
+        `uncertain : une relecture bornée après le signal (${JSON.stringify(bu)})`,
+      );
       const ruBefore = ru.filter(isPayment).length;
       await settleWait(1500);
       ok(
@@ -707,7 +950,7 @@ const collects = async () => (await L.sim.stats()).initiations.length;
 
       const rv = await L.registerOwner('review');
       const cr = await browser.newContext();
-      const pr = await cr.newPage();
+      const pr = watch('review', await cr.newPage());
       await loginApp(pr, rv.email);
       await openSubscription(pr);
       await payUi(pr);
@@ -730,7 +973,7 @@ const collects = async () => (await L.sim.stats()).initiations.length;
       const un = await L.registerOwner('unavail');
       await L.sim.queueInit('unavailable');
       const cn = await browser.newContext();
-      const pn = await cn.newPage();
+      const pn = watch('unavailable', await cn.newPage());
       await loginApp(pn, un.email);
       await openSubscription(pn);
       await payUi(pn);
@@ -749,7 +992,7 @@ const collects = async () => (await L.sim.stats()).initiations.length;
         'aucun libellé de succès',
       );
       await cn.close();
-      return 'pending après 30 min, uncertain, review, 503 confirmation/indisponible : aucune action automatique';
+      return `pending après 30 min, uncertain, review, 503 confirmation/indisponible : aucune action automatique ; ${phaseNotes}`;
     },
   );
 

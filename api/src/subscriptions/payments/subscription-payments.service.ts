@@ -12,6 +12,7 @@ import {
   getSubscriptionPrice,
 } from '../subscription-pricing';
 import { SUBSCRIPTION_CLOCK } from '../subscription-clock';
+import { SubscriptionSignalsService } from '../subscription-signals.service';
 import type { SubscriptionClock } from '../subscription-clock';
 import {
   OPEN_PAYMENT_STATUSES,
@@ -115,6 +116,15 @@ const iso = (date: Date | null | undefined): string | null =>
  * - Aucun échec automatique sur délai : seul un refus CONFIRMÉ par le
  *   prestataire ferme un paiement.
  * - Ne modifie jamais un rôle, une permission ni `Organization.status`.
+ *
+ * 1-15F — signaux temps réel (`SubscriptionSignalsService`, payload `{}`),
+ * émis APRÈS l'écriture validée et seulement si elle a changé l'état
+ * visible : `payments:changed` (création, `pending`, `failed`, `review`,
+ * `succeeded`) et `subscription:changed` (période attribuée, après le
+ * commit de `runInGrantTransaction`, jamais dans son callback rejouable).
+ * Rien sur un rejeu, un refus, un rollback, une écriture conditionnelle
+ * sans effet ni la seule date de consultation. Un signal ne déclenche
+ * jamais de consultation du prestataire.
  */
 @Injectable()
 export class SubscriptionPaymentsService {
@@ -126,6 +136,7 @@ export class SubscriptionPaymentsService {
     private readonly subscriptions: SubscriptionsService,
     @Inject(PAYMENT_PROVIDER) private readonly provider: PaymentProvider,
     @Inject(SUBSCRIPTION_CLOCK) private readonly clock: SubscriptionClock,
+    private readonly signals: SubscriptionSignalsService,
     config: ConfigService,
   ) {
     this.fingerprintKey = derivePaymentFingerprintKey(
@@ -223,6 +234,22 @@ export class SubscriptionPaymentsService {
       throw error;
     }
 
+    // 1-15F : paiement créé (écriture validée) → un signal en fin de
+    // traitement, quelle que soit l'issue de l'initiation.
+    try {
+      return await this.initiateReserved(_id, price, payerPhone);
+    } finally {
+      this.signalPayments(organizationId);
+    }
+  }
+
+  /** Étape 5 de `createPayment`, sur le paiement RÉSERVÉ `_id`. */
+  private async initiateReserved(
+    _id: Types.ObjectId,
+    price: ReturnType<typeof getSubscriptionPrice>,
+    payerPhone: string,
+  ): Promise<{ payment: SubscriptionPaymentView; replayed: boolean }> {
+    const merchantReference = merchantReferenceFor(_id);
     // 5. UN SEUL appel réseau, hors de toute transaction.
     let result: PaymentInitiationResult;
     try {
@@ -355,6 +382,7 @@ export class SubscriptionPaymentsService {
     } catch {
       throw paymentStatusUnavailable();
     }
+    // Date de consultation seule : absente de la vue, aucun signal.
     await this.paymentModel
       .updateOne(
         { _id: payment._id },
@@ -363,26 +391,50 @@ export class SubscriptionPaymentsService {
       .exec();
     if (!status) return this.viewById(payment._id);
 
-    if (!this.concordant(payment, status)) {
-      await this.markReview(payment._id);
-      return this.viewById(payment._id);
-    }
+    // 1-15F : `changed` n'est vrai qu'après une écriture validée qui a
+    // modifié l'état visible ; le signal part ensuite, même si la relecture
+    // finale échoue.
+    let changed = false;
+    try {
+      if (!this.concordant(payment, status)) {
+        changed = await this.markReview(payment._id);
+        return await this.viewById(payment._id);
+      }
 
-    switch (status.state) {
-      case 'pending':
-        await this.recordPending(payment._id, status.providerReference, [
-          SubscriptionPaymentStatus.INITIATING,
-          SubscriptionPaymentStatus.UNCERTAIN,
-        ]);
-        break;
-      case 'failed':
-        await this.recordFailure(payment._id, status.providerReference);
-        break;
-      case 'succeeded':
-        await this.finalize(payment._id, status);
-        break;
+      switch (status.state) {
+        case 'pending':
+          changed = await this.recordPending(
+            payment._id,
+            status.providerReference,
+            [
+              SubscriptionPaymentStatus.INITIATING,
+              SubscriptionPaymentStatus.UNCERTAIN,
+            ],
+          );
+          break;
+        case 'failed':
+          changed = await this.recordFailure(
+            payment._id,
+            status.providerReference,
+          );
+          break;
+        case 'succeeded': {
+          const outcome = await this.finalize(payment._id, status);
+          changed = outcome !== 'unchanged';
+          // Transaction VALIDÉE (`runInGrantTransaction` a rendu la main
+          // après le commit) : nouvelle période visible.
+          if (outcome === 'granted') {
+            void this.signals.subscriptionChanged(
+              payment.organizationId.toHexString(),
+            );
+          }
+          break;
+        }
+      }
+      return await this.viewById(payment._id);
+    } finally {
+      if (changed) this.signalPayments(payment.organizationId);
     }
-    return this.viewById(payment._id);
   }
 
   /**
@@ -465,7 +517,7 @@ export class SubscriptionPaymentsService {
   private async finalize(
     paymentId: Types.ObjectId,
     verified: ProviderPaymentStatus,
-  ): Promise<void> {
+  ): Promise<'granted' | 'review' | 'unchanged'> {
     let outcome: 'granted' | 'replayed' | 'not-finalizable' | 'mismatch';
     try {
       outcome = await this.subscriptions.runInGrantTransaction(
@@ -505,12 +557,15 @@ export class SubscriptionPaymentsService {
         subscriptionPaymentDuplicateKeyIndex(error) ===
         'provider_1_providerReference_1'
       ) {
-        await this.markReview(paymentId);
-        return;
+        return (await this.markReview(paymentId)) ? 'review' : 'unchanged';
       }
       throw error;
     }
-    if (outcome === 'mismatch') await this.markReview(paymentId);
+    if (outcome === 'granted') return 'granted';
+    if (outcome === 'mismatch') {
+      return (await this.markReview(paymentId)) ? 'review' : 'unchanged';
+    }
+    return 'unchanged';
   }
 
   /**
@@ -558,12 +613,15 @@ export class SubscriptionPaymentsService {
     return periodId;
   }
 
-  /** Collecte acceptée / en attente : référence prestataire adoptée. */
+  /**
+   * Collecte acceptée / en attente : référence prestataire adoptée. Vrai si
+   * l'état visible a changé (`pending` ou `review`).
+   */
   private async recordPending(
     paymentId: Types.ObjectId,
     providerReference: string,
     from: readonly SubscriptionPaymentStatus[],
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const updated = await this.paymentModel
         .updateOne(
@@ -582,7 +640,7 @@ export class SubscriptionPaymentsService {
           },
         )
         .exec();
-      if (updated.matchedCount === 1) return;
+      if (updated.matchedCount === 1) return true;
     } catch (error) {
       if (
         subscriptionPaymentDuplicateKeyIndex(error) !==
@@ -590,8 +648,7 @@ export class SubscriptionPaymentsService {
       ) {
         throw error;
       }
-      await this.markReview(paymentId);
-      return;
+      return this.markReview(paymentId);
     }
     // Non appliqué : état déjà avancé par une autre confirmation, ou
     // référence prestataire différente déjà enregistrée (anomalie).
@@ -601,18 +658,20 @@ export class SubscriptionPaymentsService {
       current.providerReference !== null &&
       current.providerReference !== providerReference
     ) {
-      await this.markReview(paymentId);
+      return this.markReview(paymentId);
     }
+    return false;
   }
 
   /**
    * Refus CONFIRMÉ : ferme un paiement ouvert. Jamais de régression d'un
-   * `succeeded` (réponse tardive ou désordonnée) : incident consigné.
+   * `succeeded` (réponse tardive ou désordonnée) : incident consigné (absent
+   * de la vue). Vrai seulement si le paiement est passé à `failed`.
    */
   private async recordFailure(
     paymentId: Types.ObjectId,
     providerReference: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const updated = await this.paymentModel
       .updateOne(
         {
@@ -630,7 +689,7 @@ export class SubscriptionPaymentsService {
         },
       )
       .exec();
-    if (updated.matchedCount === 1) return;
+    if (updated.matchedCount === 1) return true;
     await this.paymentModel
       .updateOne(
         {
@@ -646,11 +705,15 @@ export class SubscriptionPaymentsService {
         },
       )
       .exec();
+    return false;
   }
 
-  /** Discordance : `review`, `open` conservé ; jamais depuis `succeeded`. */
-  private async markReview(paymentId: Types.ObjectId): Promise<void> {
-    await this.transition(paymentId, FINALIZABLE_STATUSES, {
+  /**
+   * Discordance : `review`, `open` conservé ; jamais depuis `succeeded`.
+   * Vrai si le paiement est passé à `review`.
+   */
+  private async markReview(paymentId: Types.ObjectId): Promise<boolean> {
+    return this.transition(paymentId, FINALIZABLE_STATUSES, {
       status: SubscriptionPaymentStatus.REVIEW,
       incidentCode: SubscriptionPaymentIncident.PROVIDER_MISMATCH,
     });
@@ -665,6 +728,11 @@ export class SubscriptionPaymentsService {
       .updateOne({ _id: paymentId, status: { $in: from } }, { $set: set })
       .exec();
     return updated.matchedCount === 1;
+  }
+
+  /** 1-15F : best effort, jamais d'exception (voir le service de signaux). */
+  private signalPayments(organizationId: Types.ObjectId): void {
+    void this.signals.paymentsChanged(organizationId.toHexString());
   }
 
   private replay(

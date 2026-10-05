@@ -628,6 +628,131 @@ function runHistoryCli(args) {
   return { code: res.status, json, stdout: res.stdout, stderr: res.stderr };
 }
 
+// ─── 1-15F : aides abonnement et paiements ──────────────────────────────────
+
+const PAYMENT_MARKER_KEY = 'stockmaster_payment_intents';
+const SUBSCRIPTION_PATH = /^\/organizations\/current\/subscription(\/|$)/;
+const PAYMENT_PATH = /^\/organizations\/current\/subscription\/payments(\/|$)/;
+const SUBSCRIPTION_EVENTS = new Set([
+  'payments:changed',
+  'subscription:changed',
+]);
+
+/** Second onglet du même navigateur (même stockage, même session). */
+async function openTab(base, label) {
+  const page = await base.context.newPage();
+  const user = {
+    label,
+    context: base.context,
+    page,
+    frames: [],
+    sockets: 0,
+    requests: [],
+    errors: [],
+  };
+  attach(user, page);
+  return user;
+}
+
+const paymentPanel = (page) =>
+  page.locator('[data-testid=subscription-payment-panel]');
+
+/** Page Abonnement du propriétaire : aperçu et panneau chargés. */
+async function openSubscriptionPage(page) {
+  await page.goto(`${WEB}/app/organization/subscription`);
+  await paymentPanel(page).waitFor({ timeout: 20000 });
+  await page.locator('[data-testid=subscription-status]').waitFor();
+}
+
+const paymentStatus = (page) =>
+  page
+    .locator('[data-testid=current-payment]')
+    .getAttribute('data-status', { timeout: 1000 })
+    .catch(() => null);
+const waitPaymentStatus = (page, status, message) =>
+  until(
+    async () => (await paymentStatus(page)) === status,
+    async () =>
+      `${message} (attendu ${status}, vu ${await paymentStatus(page)})`,
+  );
+const periodsShown = (page) =>
+  page.locator('[data-testid=subscription-history] li').count();
+const paymentMarker = (page) =>
+  page.evaluate((k) => localStorage.getItem(k), PAYMENT_MARKER_KEY);
+const subscriptionFrames = (user, since = 0) =>
+  user.frames.filter((f) => SUBSCRIPTION_EVENTS.has(f.event) && f.at >= since);
+const requestsTo = (user, method, pattern, since = 0) =>
+  user.requests.filter(
+    (r) =>
+      r.method === method &&
+      pattern.test(new URL(r.url).pathname) &&
+      r.at >= since,
+  );
+/** Appels au prestataire simulé (collectes + consultations de statut). */
+async function providerCalls() {
+  const stats = await L.sim.stats();
+  return { initiations: stats.initiations.length, status: stats.statusCalls };
+}
+
+/** Paiement par l'interface : « Renouveler », 1 mois, numéro fictif. */
+async function payFromUi(page) {
+  const renew = page.getByRole('button', { name: 'Renouveler', exact: true });
+  if (await renew.count()) await renew.click();
+  await page.getByRole('radio', { name: /^1 mois/ }).click();
+  await page.fill('#payer-phone', L.PHONE);
+  await page.locator('[data-testid=payment-submit]').click();
+}
+
+async function apiPay(token) {
+  const res = await L.http(
+    'POST',
+    '/organizations/current/subscription/payments',
+    {
+      token,
+      body: {
+        term: 'monthly',
+        payerPhone: L.PHONE,
+        clientOperationId: crypto.randomUUID(),
+      },
+    },
+  );
+  return res;
+}
+async function apiRefreshPayment(token, paymentId) {
+  return L.http(
+    'POST',
+    `/organizations/current/subscription/payments/${paymentId}/refresh`,
+    { token },
+  );
+}
+async function periodsOfPayment(paymentId) {
+  return (await L.db()).collection('subscription_periods').countDocuments({
+    source: 'payment',
+    sourceReference: `payment:${paymentId}`,
+  });
+}
+
+/** Séquence des `data-status` affichés (observateur posé dans la page). */
+async function recordStatusSequence(page) {
+  await page.evaluate(() => {
+    const seq = [];
+    window.__rtStatusSeq = seq;
+    const read = () => {
+      const el = document.querySelector('[data-testid=current-payment]');
+      const status = el ? el.getAttribute('data-status') : null;
+      if (seq[seq.length - 1] !== status) seq.push(status);
+    };
+    read();
+    new MutationObserver(read).observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-status'],
+    });
+  });
+}
+const statusSequence = (page) => page.evaluate(() => window.__rtStatusSeq);
+
 // ─── Exécution ──────────────────────────────────────────────────────────────
 
 async function scenario(id, title, fn) {
@@ -2895,6 +3020,430 @@ async function main() {
         'nom refusé jamais affiché',
       );
       return 'simulation sans écriture ; nom confirmé, prix non confirmé signalé, 1 impossible ; refus jamais historique ; rejeu sans effet';
+    },
+  );
+
+  // ═══════════════ 1-15F : abonnements et paiements ═══════════════
+
+  // RT29 — second onglet du propriétaire : création, succès, session, suspension.
+  await scenario(
+    'RT29',
+    'Paiement visible dans un second onglet du propriétaire, sans appel au prestataire',
+    async (ctx) => {
+      const ownerA = await L.registerOwner('rt29');
+      const t1 = await openUser(ctx.browser, 'owner-tab1');
+      ctx.users.push(t1);
+      await loginUi(t1.page, ownerA.email);
+      const t2 = await openTab(t1, 'owner-tab2');
+      ctx.users.push(t2);
+      await openSubscriptionPage(t1.page);
+      await openSubscriptionPage(t2.page);
+      await markNoReload(t2.page);
+      await waitQuiet(t2, 1500);
+      ok((await periodsShown(t2.page)) === 1, 'essai seul au départ');
+      const since = Date.now();
+      const socketsBefore = t2.sockets;
+      const calls0 = await providerCalls();
+
+      // 1. Création dans l'onglet 1 → `pending` dans l'onglet 2.
+      await payFromUi(t1.page);
+      await waitPaymentStatus(t1.page, 'pending', 'onglet 1 : paiement créé');
+      await waitPaymentStatus(
+        t2.page,
+        'pending',
+        'onglet 2 : paiement visible',
+      );
+      await waitQuiet(t2, 1500);
+      const markerAfterPay = await paymentMarker(t1.page);
+      ok(
+        markerAfterPay &&
+          /"clientOperationId":"[0-9a-f-]{36}"/.test(markerAfterPay),
+        `marqueur de reprise de l'onglet 1 (UUID) : ${markerAfterPay}`,
+      );
+      ok(
+        (await paymentMarker(t2.page)) === markerAfterPay,
+        'marqueur inchangé par la relecture de l’onglet 2',
+      );
+      let calls = await providerCalls();
+      ok(
+        calls.initiations === calls0.initiations + 1 &&
+          calls.status === calls0.status,
+        `une collecte, aucune consultation : ${JSON.stringify(calls)}`,
+      );
+
+      // 2. Succès vérifié dans l'onglet 1 → onglet 2 à jour.
+      const reference = await t1.page
+        .locator('[data-testid=current-payment] dd.font-mono')
+        .innerText();
+      await L.sim.settle(reference.trim(), 'succeeded');
+      await t1.page
+        .getByRole('button', { name: 'Vérifier le paiement' })
+        .click();
+      await waitPaymentStatus(t1.page, 'succeeded', 'onglet 1 : succès');
+      await waitPaymentStatus(t2.page, 'succeeded', 'onglet 2 : succès relu');
+      await until(
+        async () => (await periodsShown(t2.page)) === 2,
+        async () =>
+          `onglet 2 : période ajoutée (vu ${await periodsShown(t2.page)})`,
+      );
+      await waitQuiet(t2, 1500);
+      calls = await providerCalls();
+      ok(
+        calls.initiations === calls0.initiations + 1 &&
+          calls.status === calls0.status + 1,
+        `une seule consultation (clic de l'onglet 1) : ${JSON.stringify(calls)}`,
+      );
+      const paymentId = (
+        await (
+          await L.db()
+        )
+          .collection('subscription_payments')
+          .findOne({ organizationId: L.oid(ownerA.orgId) })
+      )._id.toString();
+      ok((await periodsOfPayment(paymentId)) === 1, 'une seule période payée');
+
+      // Onglet 2 : lectures locales seulement, session inchangée.
+      ok(
+        requestsTo(t2, 'POST', /./, since).length === 0,
+        `onglet 2 : aucun POST (${JSON.stringify(requestsTo(t2, 'POST', /./, since))})`,
+      );
+      ok(
+        requestsTo(t2, 'GET', /^\/auth\/context$/, since).length === 0,
+        'onglet 2 : contexte non relu par un signal',
+      );
+      ok(t2.sockets === socketsBefore, 'onglet 2 : aucun nouveau socket');
+      ok(await stillSameDocument(t2.page), 'onglet 2 : aucun rechargement');
+      const frames = subscriptionFrames(t2, since);
+      ok(
+        frames.length >= 2 && frames.every(emptyPayload),
+        `signaux {} : ${JSON.stringify(frames.map((f) => [f.event, f.payload]))}`,
+      );
+      ok(
+        (await paymentMarker(t2.page)) === (await paymentMarker(t1.page)),
+        'marqueur identique dans les deux onglets',
+      );
+
+      // 3. Suspension prioritaire : la reprise explicite relit le contexte.
+      await (
+        await L.db()
+      )
+        .collection('organizations')
+        .updateOne(
+          { _id: L.oid(ownerA.orgId) },
+          { $set: { status: 'suspended' } },
+        );
+      await t2.page
+        .locator('[data-testid=current-payment]')
+        .getByRole('button', { name: 'Vérifier mon abonnement' })
+        .click();
+      await t2.page.locator('[data-testid=access-refused]').waitFor();
+      return `pending puis succeeded dans l'onglet 2 ; prestataire : 1 collecte, 1 consultation ; ${frames.length} signaux {} ; période 1→2 ; suspension → accès refusé`;
+    },
+  );
+
+  // RT30 — administrateur non propriétaire, organisation B, refus.
+  await scenario(
+    'RT30',
+    'Administrateur et organisation B : aucun signal de paiement ni relecture',
+    async (ctx) => {
+      const ownerA = await L.registerOwner('rt30A');
+      const admin = await L.inviteMember(ownerA.token, 'admin', 'rt30adm');
+      const ownerB = await L.registerOwner('rt30B');
+      const owner = await openUser(ctx.browser, 'owner-a');
+      const adm = await openUser(ctx.browser, 'admin-a');
+      const b = await openUser(ctx.browser, 'owner-b');
+      ctx.users.push(owner, adm, b);
+      await loginUi(owner.page, ownerA.email);
+      await loginUi(adm.page, admin.email);
+      await loginUi(b.page, ownerB.email);
+      await openSubscriptionPage(owner.page);
+      await adm.page.goto(`${WEB}/app/organization/subscription`);
+      await adm.page
+        .getByText('La gestion de l', { exact: false })
+        .first()
+        .waitFor();
+      await openSubscriptionPage(b.page);
+      for (const u of [owner, adm, b]) await waitQuiet(u, 1500);
+      const bPeriods = await periodsShown(b.page);
+      const since = Date.now();
+
+      // Refus : second paiement (409) et vérification par l'admin (403).
+      const created = await apiPay(ownerA.token);
+      ok(created.status === 201, `paiement ${created.status}`);
+      await waitPaymentStatus(
+        owner.page,
+        'pending',
+        'propriétaire A : pending',
+      );
+      await waitQuiet(owner, 1500);
+      const refusalsFrom = Date.now();
+      const again = await apiPay(ownerA.token);
+      ok(again.status === 409, `second paiement refusé : ${again.status}`);
+      const adminRefresh = await apiRefreshPayment(
+        await apiLogin(admin.email),
+        created.body.paymentId,
+      );
+      ok(adminRefresh.status === 403, `admin refusé : ${adminRefresh.status}`);
+      await observeFor(1500);
+      ok(
+        subscriptionFrames(owner, refusalsFrom).length === 0 &&
+          requestsTo(owner, 'GET', PAYMENT_PATH, refusalsFrom).length === 0,
+        'refus : aucun signal ni relecture chez le propriétaire',
+      );
+
+      // Succès chez A.
+      await L.sim.settle(created.body.reference, 'succeeded');
+      const done = await apiRefreshPayment(
+        ownerA.token,
+        created.body.paymentId,
+      );
+      ok(done.body.status === 'succeeded', `succès ${done.status}`);
+      await waitPaymentStatus(
+        owner.page,
+        'succeeded',
+        'propriétaire A : succès',
+      );
+      // Chemin actif : le propriétaire reçoit le signal d'abonnement.
+      await until(
+        () =>
+          owner.frames.some(
+            (f) => f.event === 'subscription:changed' && f.at >= since,
+          ),
+        'propriétaire A : signal d’abonnement reçu',
+      );
+      await observeFor(1500);
+
+      // Administrateur non propriétaire : aucun des deux signaux.
+      const admFrames = subscriptionFrames(adm, since);
+      ok(
+        admFrames.length === 0,
+        `admin : aucun signal d'abonnement ni de paiement : ${JSON.stringify(admFrames.map((f) => [f.event, f.payload]))}`,
+      );
+      ok(
+        requestsTo(adm, 'GET', SUBSCRIPTION_PATH, since).length === 0,
+        `admin : aucune lecture abonnement/paiements (${JSON.stringify(requestsTo(adm, 'GET', SUBSCRIPTION_PATH, since))})`,
+      );
+      ok(
+        subscriptionFrames(b, since).length === 0 &&
+          requestsTo(b, 'GET', SUBSCRIPTION_PATH, since).length === 0,
+        'organisation B : aucun signal ni relecture',
+      );
+      ok(
+        (await periodsShown(b.page)) === bPeriods &&
+          (await paymentPanel(b.page).getByText('Aucun paiement.').count()) ===
+            1,
+        'organisation B : affichage inchangé',
+      );
+      return `admin : 0 subscription:changed, 0 payments:changed, 0 lecture ; B : 0 ; refus muets`;
+    },
+  );
+
+  // RT31 — relecture ancienne retenue, succès entre-temps : jamais `pending`.
+  await scenario(
+    'RT31',
+    'Lecture ancienne retenue puis succès : aucun retour à pending',
+    async (ctx) => {
+      const ownerA = await L.registerOwner('rt31');
+      await L.sim.queueInit('lost');
+      const created = await apiPay(ownerA.token);
+      ok(
+        created.status === 201 && created.body.status === 'uncertain',
+        `paiement incertain : ${created.status} ${created.body.status}`,
+      );
+      const u = await openUser(ctx.browser, 'owner');
+      ctx.users.push(u);
+      await loginUi(u.page, ownerA.email);
+      await openSubscriptionPage(u.page);
+      await waitPaymentStatus(u.page, 'uncertain', 'incertain affiché');
+      await waitQuiet(u, 1500);
+      await recordStatusSequence(u.page);
+      const calls0 = await providerCalls();
+
+      // Relecture déclenchée par `uncertain → pending` (API), réponse retenue :
+      // son contenu (`pending`) est lu par le serveur à l'arrivée.
+      const gate = await holdResponses(u.page, (url) =>
+        /\/organizations\/current\/subscription\/payments\?/.test(url),
+      );
+      const toPending = await apiRefreshPayment(
+        ownerA.token,
+        created.body.paymentId,
+      );
+      ok(toPending.body.status === 'pending', 'pending côté serveur');
+      await until(() => gate.held.length === 1, 'relecture retenue');
+
+      // Succès vérifié dans la page pendant la barrière.
+      await L.sim.settle(created.body.reference, 'succeeded');
+      await u.page
+        .getByRole('button', { name: 'Vérifier le paiement' })
+        .click();
+      await waitPaymentStatus(u.page, 'succeeded', 'succès affiché');
+      gate.release();
+      await waitQuiet(u, 2000);
+      await gate.stop();
+      const seq = await statusSequence(u.page);
+      const firstSuccess = seq.indexOf('succeeded');
+      ok(
+        firstSuccess >= 0 &&
+          !seq.slice(firstSuccess).includes('pending') &&
+          seq[seq.length - 1] === 'succeeded',
+        `séquence affichée : ${JSON.stringify(seq)}`,
+      );
+      const firstHistory = await u.page
+        .locator('[data-testid=payment-history-item]')
+        .first()
+        .getAttribute('data-status');
+      ok(firstHistory === 'succeeded', `historique : ${firstHistory}`);
+      const calls = await providerCalls();
+      ok(
+        calls.status === calls0.status + 2 &&
+          calls.initiations === calls0.initiations,
+        `consultations : API + clic seulement (${JSON.stringify(calls)})`,
+      );
+      return `séquence ${seq.join(' → ')} ; réponse retenue ignorée`;
+    },
+  );
+
+  // RT32 — reconnexion après un changement manqué.
+  await scenario(
+    'RT32',
+    'Reconnexion : paiement et abonnement changés pendant la coupure rattrapés',
+    async (ctx) => {
+      const ownerA = await L.registerOwner('rt32');
+      const created = await apiPay(ownerA.token);
+      const u = await openUser(ctx.browser, 'owner');
+      ctx.users.push(u);
+      await loginUi(u.page, ownerA.email);
+      await openSubscriptionPage(u.page);
+      await waitPaymentStatus(u.page, 'pending', 'pending affiché');
+      await markNoReload(u.page);
+      await waitQuiet(u, 1500);
+
+      await u.context.setOffline(true);
+      await u.page.locator('[data-testid=payment-offline]').waitFor();
+      const offlineFrom = Date.now();
+      await L.sim.settle(created.body.reference, 'succeeded');
+      const done = await apiRefreshPayment(
+        ownerA.token,
+        created.body.paymentId,
+      );
+      ok(done.body.status === 'succeeded', 'succès pendant la coupure');
+      await observeFor(1000);
+      ok(
+        subscriptionFrames(u, offlineFrom).length === 0,
+        'aucun signal pendant la coupure',
+      );
+      ok(
+        (await paymentStatus(u.page)) === 'pending',
+        'encore pending hors ligne',
+      );
+      const calls0 = await providerCalls();
+
+      await u.context.setOffline(false);
+      await waitPaymentStatus(u.page, 'succeeded', 'succès rattrapé');
+      await until(
+        async () => (await periodsShown(u.page)) === 2,
+        'période rattrapée',
+      );
+      await waitQuiet(u, 1500);
+      ok(await stillSameDocument(u.page), 'aucun rechargement');
+      ok(
+        requestsTo(u, 'POST', PAYMENT_PATH, offlineFrom).length === 0,
+        'aucune vérification relancée',
+      );
+      const calls = await providerCalls();
+      ok(
+        calls.status === calls0.status &&
+          calls.initiations === calls0.initiations,
+        `aucun appel au prestataire au rattrapage : ${JSON.stringify(calls)}`,
+      );
+      return 'pending → succeeded et période rattrapés à la reconnexion, sans appel au prestataire';
+    },
+  );
+
+  // RT33 — transfert de propriété.
+  await scenario(
+    'RT33',
+    'Transfert de propriété : ancien propriétaire exclu, nouveau autorisé',
+    async (ctx) => {
+      const ownerA = await L.registerOwner('rt33');
+      const succ = await L.inviteMember(ownerA.token, 'admin', 'rt33new');
+      const former = await openUser(ctx.browser, 'former-owner');
+      const next = await openUser(ctx.browser, 'new-owner');
+      ctx.users.push(former, next);
+      await loginUi(former.page, ownerA.email);
+      await loginUi(next.page, succ.email);
+      await openSubscriptionPage(former.page);
+      await next.page.goto(`${WEB}/app/organization/subscription`);
+      await next.page
+        .getByText('La gestion de l', { exact: false })
+        .first()
+        .waitFor();
+
+      const membershipId = await memberIdOf(ownerA.token, succ.email);
+      const transfer = await L.http(
+        'POST',
+        `/organizations/members/${membershipId}/transfer-ownership`,
+        { token: ownerA.token },
+      );
+      ok(
+        transfer.status === 200 || transfer.status === 201,
+        `transfert ${transfer.status} ${transfer.text}`,
+      );
+      // Remontage existant (1-15A) : droits relus, nouveau socket.
+      await former.page
+        .getByText('La gestion de l', { exact: false })
+        .first()
+        .waitFor();
+      await paymentPanel(next.page).waitFor({ timeout: 20000 });
+      await waitQuiet(former, 1500);
+      await waitQuiet(next, 1500);
+      const since = Date.now();
+
+      const created = await apiPay(await apiLogin(succ.email));
+      ok(
+        created.status === 201,
+        `paiement du nouveau propriétaire ${created.status}`,
+      );
+      await waitPaymentStatus(
+        next.page,
+        'pending',
+        'nouveau propriétaire : pending',
+      );
+      await observeFor(1500);
+      // Succès vérifié par le nouveau propriétaire : nouvelle période.
+      await L.sim.settle(created.body.reference, 'succeeded');
+      const done = await apiRefreshPayment(
+        await apiLogin(succ.email),
+        created.body.paymentId,
+      );
+      ok(done.body.status === 'succeeded', `succès ${done.status}`);
+      await waitPaymentStatus(
+        next.page,
+        'succeeded',
+        'nouveau propriétaire : succès',
+      );
+      await until(
+        async () => (await periodsShown(next.page)) === 2,
+        'nouveau propriétaire : période ajoutée',
+      );
+      await observeFor(1500);
+      const formerFrames = subscriptionFrames(former, since);
+      ok(
+        formerFrames.length === 0,
+        `ancien propriétaire : aucun signal d'abonnement ni de paiement (${JSON.stringify(formerFrames.map((f) => f.event))})`,
+      );
+      ok(
+        requestsTo(former, 'GET', SUBSCRIPTION_PATH, since).length === 0,
+        'ancien propriétaire : aucune lecture abonnement/paiements',
+      );
+      const nextEvents = subscriptionFrames(next, since).map((f) => f.event);
+      ok(
+        nextEvents.includes('payments:changed') &&
+          nextEvents.includes('subscription:changed') &&
+          subscriptionFrames(next, since).every(emptyPayload),
+        `nouveau propriétaire : signaux {} reçus (${JSON.stringify(nextEvents)})`,
+      );
+      return 'nouveau propriétaire : pending puis succeeded et période sans rechargement ; ancien : 0 signal, 0 lecture';
     },
   );
 

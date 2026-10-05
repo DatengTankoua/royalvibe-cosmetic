@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,6 +11,8 @@ import {
   type ApiSubscription,
 } from "@/lib/api";
 import type { PaymentIdentity } from "@/lib/payment-intent";
+import { createResponseOrder } from "@/lib/refresh-coordinator";
+import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
 import { SubscriptionOverview } from "./subscription-overview";
 import { SubscriptionPaymentPanel } from "./subscription-payment-panel";
 
@@ -21,6 +23,18 @@ import { SubscriptionPaymentPanel } from "./subscription-payment-panel";
 // 1-14D.2C — Renouvellement par paiement Mobile Money
 // (`SubscriptionPaymentPanel`) ; aucune activation locale : l'abonnement
 // n'est actif qu'après confirmation serveur, puis reprise via `onVerify`.
+//
+// 1-15F — session applicative (socket du shell) : `subscription:changed`
+// (payload vide) → relecture SILENCIEUSE regroupée de
+// `GET /organizations/current/subscription` (lecture locale en base, jamais
+// le prestataire), rattrapée à la reconnexion. Réponse ignorée si elle
+// appartient à une autre session / organisation ou si une réponse plus
+// récente a déjà été appliquée. Aucun échange de session, aucune relecture
+// du contexte : la reprise reste l'action explicite `onVerify`. Session
+// limitée ou écran de blocage : aucun socket, donc aucun signal.
+
+const SUBSCRIPTION_SIGNALS = ["subscription:changed"] as const;
+const NO_SIGNALS: readonly string[] = [];
 
 export function SubscriptionManager({
   token,
@@ -45,27 +59,52 @@ export function SubscriptionManager({
     null,
   );
   const [loadError, setLoadError] = useState<string | null>(null);
-
+  const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
+  // Portée des réponses : identité serveur + nature du jeton.
+  const scope = `${identity?.userId ?? "-"}:${identity?.organizationId ?? "-"}:${token ? "limited" : "app"}`;
+  const scopeRef = useRef(scope);
   useEffect(() => {
-    let cancelled = false;
-    setLoadError(null);
-    fetchSubscription(token)
-      .then((data) => {
-        if (!cancelled) setSubscription(data);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
+    scopeRef.current = scope;
+  }, [scope]);
+  const order = useRef(createResponseOrder());
+
+  const load = useCallback(
+    async (silent: boolean) => {
+      const requestScope = scope;
+      const requestedAt = Date.now();
+      const ticket = order.current.begin();
+      if (!silent) setLoadError(null);
+      try {
+        const data = await fetchSubscription(token);
+        if (scopeRef.current !== requestScope) return;
+        if (!order.current.accept(ticket)) return;
+        setSubscription(data);
+        setLoadError(null);
+        setLoadedAt(requestedAt);
+      } catch (err: unknown) {
+        // Relecture silencieuse en échec : l'affichage est conservé.
+        if (silent || scopeRef.current !== requestScope) return;
         setLoadError(
           isNetworkError(err) ||
             getApiErrorCode(err) === SUBSCRIPTION_STATUS_UNAVAILABLE
             ? "Vérification momentanément indisponible."
             : "Informations d'abonnement indisponibles.",
         );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [token, reloadKey]);
+      }
+    },
+    [scope, token],
+  );
+
+  useEffect(() => {
+    void load(false);
+  }, [load, reloadKey]);
+
+  const live = token === undefined && identity !== null;
+  const requestReload = useLiveRefresh(
+    () => load(true),
+    live ? loadedAt : undefined,
+  );
+  useSocketSignals(live ? SUBSCRIPTION_SIGNALS : NO_SIGNALS, requestReload);
 
   return (
     <div className="space-y-6">

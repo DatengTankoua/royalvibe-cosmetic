@@ -41,7 +41,7 @@ Pilotage (terminal 2, recette démarrée) :
 
 Campagne navigateur (stack démarrée en mode simulated) :
   scenarios [ids...] --playwright=<dossier contenant node_modules/playwright> [--chromium=<chrome.exe>] [--out=<dossier>]
-  realtime [RT1..RT28] (mêmes options)    temps réel 1-15A/B/C/D : collègues, organisations, droits, coupure, outbox, analyse, corbeille, sections, purge, membres, invitations, image de marque, historique après purge
+  realtime [RT1..RT33] (mêmes options)    temps réel 1-15A/B/C/D/F : collègues, organisations, droits, coupure, outbox, analyse, corbeille, sections, purge, membres, invitations, image de marque, historique après purge, abonnement et paiements
 
 Contrôles d'isolement (.env) :
   isolated selftest               auto-test Jest : .env factices, garde, témoin sans garde
