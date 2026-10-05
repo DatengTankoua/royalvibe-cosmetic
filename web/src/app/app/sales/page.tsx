@@ -140,10 +140,21 @@ export default function SalesPage() {
       {canView && !isLoading && sales.length > 0 && (
         <div className="space-y-2">
           {sales.map((s) => {
-            const productName =
+            // 1-15D : nom ENREGISTRÉ à la vente d'abord (historique, même
+            // après renommage) ; sinon nom actuel du produit, puis dernier
+            // nom connu figé à sa suppression. Jamais de nom inventé.
+            const product =
               s.productId && typeof s.productId === "object"
-                ? s.productId.name
-                : (s.productName ?? "—");
+                ? s.productId
+                : null;
+            const productDeleted = s.productId === null;
+            const productName =
+              s.productName ?? product?.name ?? s.lastKnownProductName ?? null;
+            const renamedTo =
+              s.productName && product && product.name !== s.productName
+                ? product.name
+                : null;
+            const nameNotRecorded = !s.productName && productName !== null;
             const sellerName =
               s.sellerId && typeof s.sellerId === "object"
                 ? s.sellerId.name
@@ -152,7 +163,25 @@ export default function SalesPage() {
               <Card key={s._id}>
                 <CardContent className="py-3 flex justify-between gap-4 text-sm">
                   <div>
-                    <p className="font-semibold">{productName}</p>
+                    <p className="font-semibold">
+                      {productName ?? (
+                        <span className="italic text-muted-foreground">
+                          (nom non conservé)
+                        </span>
+                      )}
+                    </p>
+                    {(productDeleted || renamedTo || nameNotRecorded) && (
+                      <p className="text-xs text-muted-foreground">
+                        {productDeleted && (
+                          <span className="mr-2 rounded bg-muted px-1.5 py-0.5 font-medium">
+                            Produit supprimé
+                          </span>
+                        )}
+                        {nameNotRecorded &&
+                          "nom non enregistré lors de la vente"}
+                        {renamedTo && `Désormais : ${renamedTo}`}
+                      </p>
+                    )}
                     <p className="text-xs text-muted-foreground">
                       Vendeur : {sellerName} ·{" "}
                       {new Date(s.createdAt).toLocaleString("fr-FR")}

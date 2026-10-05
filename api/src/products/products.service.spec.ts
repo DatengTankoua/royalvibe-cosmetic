@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { ProductsService } from './products.service';
@@ -9,6 +9,7 @@ import { Section } from '../sections/schemas/section.schema';
 import { S3Service } from '../s3/s3.service';
 import { EventsGateway } from '../events/events.gateway';
 import { AuditService } from '../audit/audit.service';
+import { PurgedStockAdjustment } from './schemas/purged-stock-adjustment.schema';
 
 const PRODUCT_OBJECT_ID = '112233445566778899001122';
 const UNKNOWN_PRODUCT_ID = '6300000000000000000000f1';
@@ -22,6 +23,21 @@ function makeSession() {
     endSession: jest.fn().mockResolvedValue(true),
     abortTransaction: jest.fn(),
     commitTransaction: jest.fn(),
+  };
+}
+
+/**
+ * 1-15D — connexion de test : `withTransaction` exécute le callback une fois
+ * (le pilote réel peut le rejouer ; voir l'e2e de purge).
+ */
+function makeConnection() {
+  const session = {
+    withTransaction: jest.fn((fn: () => Promise<void>) => fn()),
+    endSession: jest.fn().mockResolvedValue(undefined),
+  };
+  return {
+    session,
+    connection: { startSession: jest.fn().mockResolvedValue(session) },
   };
 }
 
@@ -60,6 +76,10 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
       providers: [
         ProductsService,
         { provide: getModelToken(Product.name), useValue: productModel },
+        {
+          provide: getModelToken(PurgedStockAdjustment.name),
+          useValue: {},
+        },
         { provide: getModelToken(Sale.name), useValue: baseOpts.saleModel },
         {
           provide: getModelToken(Section.name),
@@ -68,6 +88,10 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
         { provide: S3Service, useValue: baseOpts.s3Service },
         { provide: EventsGateway, useValue: baseOpts.eventsGateway },
         { provide: AuditService, useValue: baseOpts.auditService },
+        {
+          provide: getConnectionToken(),
+          useValue: makeConnection().connection,
+        },
       ],
     }).compile();
     service = module.get(ProductsService);
@@ -220,8 +244,15 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     findOneAndDelete: jest.Mock;
   };
   let sectionModel: { findOne: jest.Mock; countDocuments: jest.Mock };
-  let saleModel: { find: jest.Mock; aggregate: jest.Mock };
-  let aggregateChain: { exec: jest.Mock };
+  let saleModel: {
+    find: jest.Mock;
+    aggregate: jest.Mock;
+    updateMany: jest.Mock;
+  };
+  let aggregateChain: { session: jest.Mock; exec: jest.Mock };
+  let stockAdjustmentModel: { create: jest.Mock };
+  let updateManyChain: { exec: jest.Mock };
+  let tx: ReturnType<typeof makeConnection>;
   let s3Service: { deleteFile: jest.Mock; uploadFile: jest.Mock };
   let auditService: { log: jest.Mock; findByProduct: jest.Mock };
   let eventsGateway: { emitToOrganization: jest.Mock };
@@ -302,11 +333,21 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       findOne: jest.fn(() => sectionOneChain),
       countDocuments: jest.fn(() => countChain),
     };
-    aggregateChain = { exec: jest.fn().mockResolvedValue([]) };
+    aggregateChain = {
+      session: jest.fn(),
+      exec: jest.fn().mockResolvedValue([]),
+    };
+    aggregateChain.session.mockReturnValue(aggregateChain);
+    stockAdjustmentModel = { create: jest.fn().mockResolvedValue([]) };
+    updateManyChain = {
+      exec: jest.fn().mockResolvedValue({ modifiedCount: 0 }),
+    };
     saleModel = {
       find: jest.fn(() => saleChain),
       aggregate: jest.fn(() => aggregateChain),
+      updateMany: jest.fn(() => updateManyChain),
     };
+    tx = makeConnection();
     s3Service = { deleteFile: jest.fn(), uploadFile: jest.fn() };
     auditService = { log: jest.fn(), findByProduct: jest.fn() };
     auditService.findByProduct.mockResolvedValue([]);
@@ -316,11 +357,16 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       providers: [
         ProductsService,
         { provide: getModelToken(Product.name), useValue: productModel },
+        {
+          provide: getModelToken(PurgedStockAdjustment.name),
+          useValue: stockAdjustmentModel,
+        },
         { provide: getModelToken(Sale.name), useValue: saleModel },
         { provide: getModelToken(Section.name), useValue: sectionModel },
         { provide: S3Service, useValue: s3Service },
         { provide: EventsGateway, useValue: eventsGateway },
         { provide: AuditService, useValue: auditService },
+        { provide: getConnectionToken(), useValue: tx.connection },
       ],
     }).compile();
     service = module.get(ProductsService);
@@ -965,10 +1011,119 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       doc.imageUrl,
       `organizations/${ORG_A}/products`,
     );
-    expect(productModel.findOneAndDelete).toHaveBeenCalledWith({
-      _id: PRODUCT_ID,
-      organizationId: new Types.ObjectId(ORG_A),
+    expect(productModel.findOneAndDelete).toHaveBeenCalledWith(
+      { _id: PRODUCT_ID, organizationId: new Types.ObjectId(ORG_A) },
+      { session: tx.session },
+    );
+    // Fichier supprimé AVANT et HORS de la transaction (jamais rejoué).
+    expect(s3Service.deleteFile.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.session.withTransaction.mock.invocationCallOrder[0],
+    );
+    expect(tx.session.endSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('1-15D : purge → historique figé sur les ventes du produit, dans la MÊME transaction', async () => {
+    await build();
+    const doc = productDoc({ name: 'Nom final', purchasePrice: 7 });
+    productOneChain.exec.mockResolvedValue(doc);
+    deleteChain.exec.mockResolvedValue(doc);
+
+    await service.permanentDelete(ORG_A, PRODUCT_ID);
+    expect(saleModel.updateMany).toHaveBeenCalledTimes(1);
+    expect(saleModel.updateMany).toHaveBeenCalledWith(
+      {
+        organizationId: new Types.ObjectId(ORG_A),
+        productId: doc._id,
+        // Idempotent : jamais d'écrasement d'un historique déjà posé.
+        lastKnownSource: { $exists: false },
+      },
+      {
+        $set: {
+          lastKnownProductName: 'Nom final',
+          lastKnownUnitCost: 7,
+          lastKnownSource: 'purge',
+        },
+      },
+      { session: tx.session },
+    );
+    // `productName` (nom enregistré à la vente) n'est jamais réécrit.
+    const [, update] = saleModel.updateMany.mock.calls[0] as [
+      unknown,
+      { $set: Record<string, unknown> },
+    ];
+    expect(update.$set).not.toHaveProperty('productName');
+    // Ordre : suppression du document puis historique ; émission après.
+    expect(
+      productModel.findOneAndDelete.mock.invocationCallOrder[0],
+    ).toBeLessThan(saleModel.updateMany.mock.invocationCallOrder[0]);
+    expect(
+      eventsGateway.emitToOrganization.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(tx.session.withTransaction.mock.invocationCallOrder[0]);
+  });
+
+  it('1-15D : document déjà supprimé par une autre requête → aucun historique réécrit ni émission', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+    deleteChain.exec.mockResolvedValue(null);
+    await service.permanentDelete(ORG_A, PRODUCT_ID);
+    expect(saleModel.updateMany).not.toHaveBeenCalled();
+    expect(eventsGateway.emitToOrganization).not.toHaveBeenCalled();
+  });
+
+  it('1-15D : stock et ventes concordants → aucun écart figé', async () => {
+    await build();
+    const doc = productDoc({ initialQuantity: 10, remainingQuantity: 7 });
+    productOneChain.exec.mockResolvedValue(doc);
+    deleteChain.exec.mockResolvedValue(doc);
+    aggregateChain.exec.mockResolvedValue([{ units: 3 }]);
+    await service.permanentDelete(ORG_A, PRODUCT_ID);
+    expect(saleModel.aggregate).toHaveBeenCalledWith([
+      {
+        $match: {
+          organizationId: new Types.ObjectId(ORG_A),
+          productId: doc._id,
+        },
+      },
+      { $group: { _id: null, units: { $sum: '$quantity' } } },
+    ]);
+    expect(aggregateChain.session).toHaveBeenCalledWith(tx.session);
+    expect(stockAdjustmentModel.create).not.toHaveBeenCalled();
+  });
+
+  it('1-15D : stock et ventes divergents → écart figé dans la MÊME transaction', async () => {
+    await build();
+    const doc = productDoc({
+      initialQuantity: 25,
+      remainingQuantity: 23,
+      purchasePrice: 7,
     });
+    productOneChain.exec.mockResolvedValue(doc);
+    deleteChain.exec.mockResolvedValue(doc);
+    aggregateChain.exec.mockResolvedValue([{ units: 5 }]);
+    await service.permanentDelete(ORG_A, PRODUCT_ID);
+    expect(stockAdjustmentModel.create).toHaveBeenCalledWith(
+      [
+        {
+          organizationId: new Types.ObjectId(ORG_A),
+          productId: doc._id,
+          unitCost: 7,
+          units: -3,
+        },
+      ],
+      { session: tx.session },
+    );
+  });
+
+  it('1-15D : échec de la transaction → erreur propagée, session fermée, aucune émission', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+    deleteChain.exec.mockResolvedValue(productDoc());
+    updateManyChain.exec.mockRejectedValue(new Error('écriture refusée'));
+    await expect(service.permanentDelete(ORG_A, PRODUCT_ID)).rejects.toThrow(
+      'écriture refusée',
+    );
+    expect(tx.session.endSession).toHaveBeenCalledTimes(1);
+    expect(eventsGateway.emitToOrganization).not.toHaveBeenCalled();
   });
 
   it('permanentDelete : produit étranger → 404, S3 deleteFile JAMAIS appelé, pas de purge', async () => {
@@ -981,6 +1136,8 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     expect(err).toBeInstanceOf(NotFoundException);
     expect(s3Service.deleteFile).not.toHaveBeenCalled();
     expect(productModel.findOneAndDelete).not.toHaveBeenCalled();
+    expect(tx.connection.startSession).not.toHaveBeenCalled();
+    expect(saleModel.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -1067,6 +1224,10 @@ describe('ProductsService — appelants AuditService.log portent la tenant (1-4C
         ProductsService,
         { provide: getModelToken(Product.name), useValue: productModel },
         {
+          provide: getModelToken(PurgedStockAdjustment.name),
+          useValue: {},
+        },
+        {
           provide: getModelToken(Sale.name),
           useValue: { find: jest.fn(() => saleChain) },
         },
@@ -1083,6 +1244,10 @@ describe('ProductsService — appelants AuditService.log portent la tenant (1-4C
           useValue: { emitToOrganization: jest.fn() },
         },
         { provide: AuditService, useValue: auditService },
+        {
+          provide: getConnectionToken(),
+          useValue: makeConnection().connection,
+        },
       ],
     }).compile();
     service = module.get(ProductsService);
@@ -1149,11 +1314,19 @@ describe('ProductsService.adjustStock — tenant et session (1-4C.2)', () => {
       providers: [
         ProductsService,
         { provide: getModelToken(Product.name), useValue: productModel },
+        {
+          provide: getModelToken(PurgedStockAdjustment.name),
+          useValue: {},
+        },
         { provide: getModelToken(Sale.name), useValue: {} },
         { provide: getModelToken(Section.name), useValue: {} },
         { provide: S3Service, useValue: {} },
         { provide: EventsGateway, useValue: {} },
         { provide: AuditService, useValue: {} },
+        {
+          provide: getConnectionToken(),
+          useValue: makeConnection().connection,
+        },
       ],
     }).compile();
     service = module.get(ProductsService);

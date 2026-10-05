@@ -4,6 +4,7 @@ import { Types } from 'mongoose';
 import { AnalyticsService } from './analytics.service';
 import { Sale } from '../sales/schemas/sale.schema';
 import { Product } from '../products/schemas/product.schema';
+import { PurgedStockAdjustment } from '../products/schemas/purged-stock-adjustment.schema';
 
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 
@@ -11,17 +12,23 @@ describe('AnalyticsService — isolation tenant (1-4D)', () => {
   let service: AnalyticsService;
   let saleModel: { aggregate: jest.Mock };
   let productModel: { find: jest.Mock };
+  let stockAdjustmentModel: { aggregate: jest.Mock };
 
   beforeEach(async () => {
     saleModel = { aggregate: jest.fn().mockResolvedValue([]) };
     productModel = {
       find: jest.fn(() => ({ exec: jest.fn().mockResolvedValue([]) })),
     };
+    stockAdjustmentModel = { aggregate: jest.fn().mockResolvedValue([]) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AnalyticsService,
         { provide: getModelToken(Sale.name), useValue: saleModel },
         { provide: getModelToken(Product.name), useValue: productModel },
+        {
+          provide: getModelToken(PurgedStockAdjustment.name),
+          useValue: stockAdjustmentModel,
+        },
       ],
     }).compile();
     service = module.get(AnalyticsService);
@@ -113,5 +120,147 @@ describe('AnalyticsService — isolation tenant (1-4D)', () => {
       year: { $year: effective },
       month: { $month: effective },
     });
+  });
+
+  // ---- 1-15D : historique après suppression définitive ----
+
+  const productDoc = (
+    purchasePrice: number,
+    initial: number,
+    remaining: number,
+  ) => ({
+    purchasePrice,
+    initialQuantity: initial,
+    remainingQuantity: remaining,
+  });
+
+  it('1-15D overview : le coût figé des produits supprimés reste dans le bénéfice (tenant vérifié)', async () => {
+    saleModel.aggregate
+      .mockResolvedValueOnce([
+        { totalRevenue: 1600, totalUnitsSold: 4, totalTransactions: 2 },
+      ])
+      .mockResolvedValueOnce([{ cost: 200, unknownCostUnits: 0 }]);
+    productModel.find.mockReturnValue({
+      exec: jest.fn().mockResolvedValue([productDoc(100, 10, 8)]),
+    });
+
+    const res = await service.getOverview(ORG_A);
+    // 1600 − (100 × 2 existants + 200 figés) ; inventaire courant inchangé.
+    expect(res.netProfit).toBe(1200);
+    expect(res.avgMargin).toBe(75);
+    expect(res.totalInvested).toBe(1000);
+    expect(res.productsCount).toBe(1);
+
+    const purgedPipeline = saleModel.aggregate.mock.calls[1][0] as Record<
+      string,
+      unknown
+    >[];
+    expectTenantMatch(purgedPipeline);
+    const lookup = purgedPipeline.find((stage) => '$lookup' in stage)
+      ?.$lookup as { let: { organizationId: Types.ObjectId } };
+    expect(String(lookup.let.organizationId)).toBe(ORG_A);
+    expect(purgedPipeline).toContainEqual({
+      $match: { product: { $size: 0 } },
+    });
+  });
+
+  it('1-15D overview : coût inconnu → bénéfice et marge `null`, jamais calculés avec 0', async () => {
+    saleModel.aggregate
+      .mockResolvedValueOnce([
+        { totalRevenue: 800, totalUnitsSold: 2, totalTransactions: 1 },
+      ])
+      .mockResolvedValueOnce([{ cost: 0, unknownCostUnits: 2 }]);
+    const res = await service.getOverview(ORG_A);
+    expect(res.totalRevenue).toBe(800);
+    expect(res.unitsSold).toBe(2);
+    expect(res.netProfit).toBeNull();
+    expect(res.avgMargin).toBeNull();
+  });
+
+  it('1-15D overview : sans vente de produit supprimé, résultat identique à la règle existante', async () => {
+    saleModel.aggregate
+      .mockResolvedValueOnce([
+        { totalRevenue: 800, totalUnitsSold: 2, totalTransactions: 1 },
+      ])
+      .mockResolvedValueOnce([]);
+    productModel.find.mockReturnValue({
+      exec: jest.fn().mockResolvedValue([productDoc(100, 10, 8)]),
+    });
+    const res = await service.getOverview(ORG_A);
+    expect(res.netProfit).toBe(600);
+    expect(res.avgMargin).toBe(75);
+  });
+
+  it('1-15D ranking : groupé par identifiant ; supprimé → nom conservé, stock `null`, bénéfice figé ou `null`', async () => {
+    await service.getProductsRanking(ORG_A);
+    const pipeline = saleModel.aggregate.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >[];
+    const group = pipeline.find((stage) => '$group' in stage)?.$group as Record<
+      string,
+      unknown
+    >;
+    expect(group._id).toBe('$productId');
+    const project = pipeline.find((stage) => '$project' in stage)
+      ?.$project as Record<string, unknown>;
+    expect(project.productName).toEqual({
+      $ifNull: [
+        '$product.name',
+        {
+          $ifNull: [
+            '$lastKnownName',
+            { $ifNull: ['$latestRecorded.name', null] },
+          ],
+        },
+      ],
+    });
+    expect(project.remainingQuantity).toEqual({
+      $ifNull: ['$product.remainingQuantity', null],
+    });
+    expect(project.productDeleted).toBe(1);
+    const profit = pipeline
+      .filter((stage) => '$addFields' in stage)
+      .map((stage) => stage.$addFields as Record<string, unknown>)
+      .find((fields) => 'netProfit' in fields)?.netProfit;
+    expect(profit).toEqual({
+      $cond: [
+        '$productDeleted',
+        {
+          $cond: [
+            { $gt: ['$unknownCostUnits', 0] },
+            null,
+            { $subtract: ['$totalRevenue', '$purgedCost'] },
+          ],
+        },
+        {
+          $subtract: [
+            '$totalRevenue',
+            { $multiply: ['$product.purchasePrice', '$totalUnitsSold'] },
+          ],
+        },
+      ],
+    });
+    // Aucun 0 de substitution sur le prix d'achat.
+    expect(JSON.stringify(pipeline)).not.toContain(
+      '["$product.purchasePrice",0]',
+    );
+  });
+
+  it('1-15D overview : écart figé à la purge ajouté au coût (règle de stock conservée), tenant vérifié', async () => {
+    saleModel.aggregate
+      .mockResolvedValueOnce([
+        { totalRevenue: 2000, totalUnitsSold: 5, totalTransactions: 2 },
+      ])
+      .mockResolvedValueOnce([{ cost: 500, unknownCostUnits: 0 }]);
+    stockAdjustmentModel.aggregate.mockResolvedValue([{ cost: -300 }]);
+    const res = await service.getOverview(ORG_A);
+    // 2000 − (500 − 300) : identique à 100 × (25 − 23) avant la purge.
+    expect(res.netProfit).toBe(1800);
+    const pipeline = stockAdjustmentModel.aggregate.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >[];
+    expectTenantMatch(pipeline);
   });
 });

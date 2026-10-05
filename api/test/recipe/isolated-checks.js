@@ -19,6 +19,9 @@
  *   node api/test/recipe/recipe.js isolated api-unit   jest (équivalent de `pnpm --filter api test`)
  *   node api/test/recipe/recipe.js isolated api-e2e    jest e2e (`test:e2e`)
  *   node api/test/recipe/recipe.js isolated web-build  next build dans la copie isolée
+ * 1-15D : `api-unit` et `api-e2e` acceptent des motifs de chemins de tests
+ * (`isolated api-e2e sale-history-purge`), validés et transmis à Jest ; la
+ * garde et l'environnement construit restent identiques.
  * Le témoin du build web est `recipe.js web-canary-check` (1-14D.2H).
  */
 'use strict';
@@ -299,7 +302,15 @@ async function webBuild() {
   }
 }
 
-async function main(what) {
+/** 1-15D — motifs de chemins de tests : caractères de chemin uniquement. */
+function testPatterns(patterns) {
+  for (const p of patterns) {
+    if (!/^[\w./-]+$/.test(p)) throw new Error(`Motif de test refusé : ${p}`);
+  }
+  return patterns;
+}
+
+async function main(what, patterns = []) {
   switch (what) {
     case 'selftest': {
       const r = await selftest();
@@ -307,14 +318,19 @@ async function main(what) {
       return r.pass ? 0 : 1;
     }
     case 'api-unit': {
-      const r = await apiJest('api-unit', []);
+      const r = await apiJest('api-unit', testPatterns(patterns));
       process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
       return r.exit;
     }
     case 'api-e2e': {
       const r = await apiJest(
         'api-e2e',
-        ['--config', './test/jest-e2e.json', '--maxWorkers=1'],
+        [
+          '--config',
+          './test/jest-e2e.json',
+          '--maxWorkers=1',
+          ...testPatterns(patterns),
+        ],
         { allowTestOwnedEnv: true },
       );
       process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);

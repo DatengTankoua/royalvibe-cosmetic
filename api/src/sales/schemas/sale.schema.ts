@@ -31,9 +31,35 @@ export class Sale {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Product' })
   productId: Types.ObjectId;
 
-  // snapshot so the name survives permanent product deletion
+  /**
+   * Nom du produit ENREGISTRÉ AU MOMENT DE LA VENTE, lu côté serveur dans la
+   * transaction de vente (jamais fourni par le client). Absent sur les
+   * ventes antérieures à cet instantané.
+   */
   @Prop()
   productName?: string;
+
+  /**
+   * 1-15D — DERNIER nom connu du produit, figé juste avant sa suppression
+   * définitive (`purge`) ou reconstruit depuis le journal d'audit par le CLI
+   * de rattrapage (`audit`). Distinct de `productName` : ce n'est pas
+   * forcément le nom au moment de la vente. Jamais écrasé une fois posé.
+   */
+  @Prop({ type: String, required: false })
+  lastKnownProductName?: string;
+
+  /**
+   * 1-15D — prix d'achat unitaire connu au même moment (celui qu'utilisaient
+   * les analyses tant que le produit existait). Donnée financière : exclue
+   * de toute lecture par défaut (`select: false`), lue uniquement par les
+   * agrégations d'analyse (`analytics.read`).
+   */
+  @Prop({ type: Number, required: false, select: false })
+  lastKnownUnitCost?: number;
+
+  /** 1-15D — origine de `lastKnown*` ; sa présence rend l'opération idempotente. */
+  @Prop({ type: String, enum: ['purge', 'audit'], required: false })
+  lastKnownSource?: 'purge' | 'audit';
 
   @Prop({ required: true, min: 1 })
   quantity: number;

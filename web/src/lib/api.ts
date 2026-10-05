@@ -80,8 +80,13 @@ function flattenProduct({ product, ...metrics }: ApiProductEnvelope) {
 
 export interface ApiSale {
   _id: string;
+  // `null` une fois le produit supprimé définitivement (référence non peuplée).
   productId: string | { _id: string; name: string } | null;
+  /** Nom enregistré par le serveur au moment de la vente. */
   productName?: string;
+  /** 1-15D : dernier nom connu, figé à la purge ou reconstruit (audit). */
+  lastKnownProductName?: string;
+  lastKnownSource?: "purge" | "audit";
   quantity: number;
   salePrice: number;
   sellerId: { _id: string; name: string; email: string };
@@ -102,8 +107,9 @@ export interface ApiAuditLog {
 export interface AnalyticsOverview {
   totalInvested: number;
   totalRevenue: number;
-  netProfit: number;
-  avgMargin: number;
+  // 1-15D : `null` si le coût d'achat de produits supprimés est inconnu.
+  netProfit: number | null;
+  avgMargin: number | null;
   unitsSold: number;
   totalTransactions: number;
   productsCount: number;
@@ -113,12 +119,15 @@ export interface AnalyticsOverview {
 
 export interface ProductRanking {
   productId: string;
-  productName: string;
-  imageUrl: string;
-  remainingQuantity: number;
+  // 1-15D : produit supprimé définitivement → nom conservé (ou `null` si
+  // aucun n'a pu l'être), stock `null`, bénéfice `null` si coût inconnu.
+  productName: string | null;
+  productDeleted: boolean;
+  imageUrl: string | null;
+  remainingQuantity: number | null;
   totalUnitsSold: number;
   totalRevenue: number;
-  netProfit: number;
+  netProfit: number | null;
   transactionCount: number;
 }
 

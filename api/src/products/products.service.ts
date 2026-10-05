@@ -5,7 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { Connection } from 'mongoose';
 import { Product, ProductDocument } from './schemas/product.schema';
@@ -18,6 +18,10 @@ import { EventsGateway } from '../events/events.gateway';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/schemas/audit-log.schema';
 import { Section, SectionDocument } from '../sections/schemas/section.schema';
+import {
+  PurgedStockAdjustment,
+  PurgedStockAdjustmentDocument,
+} from './schemas/purged-stock-adjustment.schema';
 import {
   COMMON_VISIBILITY,
   ProductMetricsView,
@@ -59,6 +63,9 @@ export class ProductsService {
     private s3Service: S3Service,
     private eventsGateway: EventsGateway,
     private auditService: AuditService,
+    @InjectConnection() private connection: Connection,
+    @InjectModel(PurgedStockAdjustment.name)
+    private stockAdjustmentModel: Model<PurgedStockAdjustmentDocument>,
   ) {}
 
   /**
@@ -508,34 +515,123 @@ export class ProductsService {
     id: string,
     visibility: ProductVisibility = COMMON_VISIBILITY,
   ): Promise<ProductView> {
+    const orgOid = new Types.ObjectId(organizationId);
     // §6 — le produit est d'abord localisé par filtre composite tenant :
     // un produit étranger/absent provoque un 404 AVANT tout traitement,
     // donc `s3Service.deleteFile` n'est JAMAIS appelé sur une ressource
     // non rattachée à l'organisation demandée.
     const product = await this.productModel
-      .findOne({ _id: id, organizationId: new Types.ObjectId(organizationId) })
+      .findOne({ _id: id, organizationId: orgOid })
       .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
+    // Fichier supprimé AVANT et HORS de la transaction (jamais dans un
+    // callback rejouable) : un échec ultérieur laisse le produit en place et
+    // la purge reste relançable, sans fichier orphelin.
     await this.s3Service.deleteFile(
       product.imageUrl,
       `organizations/${organizationId}/products`,
     );
-    const deleted = await this.productModel
-      .findOneAndDelete({
-        _id: id,
-        organizationId: new Types.ObjectId(organizationId),
-      })
-      .exec();
+    // 1-15D — suppression du document ET conservation de l'historique de
+    // ses ventes dans la MÊME transaction. Une vente concurrente écrit le
+    // même document produit (décrément du stock) : l'une des deux
+    // transactions est rejouée par le pilote. Toute vente validée avant la
+    // suppression est donc couverte ; aucune ne peut l'être après (produit
+    // introuvable → 404).
+    let removed: ProductDocument | undefined;
+    const session = await this.connection.startSession();
+    try {
+      await session.withTransaction(async () => {
+        removed = undefined;
+        const target = await this.productModel
+          .findOneAndDelete({ _id: id, organizationId: orgOid }, { session })
+          .exec();
+        if (!target) return;
+        await this.preserveSaleHistory(orgOid, target, session);
+        await this.preserveStockContribution(orgOid, target, session);
+        removed = target;
+      });
+    } finally {
+      await session.endSession();
+    }
     // 1-15B — suppression DÉFINITIVE, distincte de la mise à la corbeille
     // (`product:deleted`) : le produit n'est plus restaurable. Identifiant
     // seul, émis seulement si cette requête a réellement supprimé le
-    // document (aucune émission sur 404 ni sur échec).
-    if (deleted) {
+    // document (aucune émission sur 404 ni sur échec), après le commit.
+    if (removed) {
       this.emitBestEffort(organizationId, 'product:purged', {
-        _id: String(deleted._id),
+        _id: String(removed._id),
       });
     }
-    return toProductView(deleted ?? product, visibility);
+    return toProductView(removed ?? product, visibility);
+  }
+
+  /**
+   * 1-15D — fige, sur les ventes du produit supprimé, le dernier nom connu
+   * et le prix d'achat unitaire que les analyses utilisaient jusque-là.
+   * Valeurs lues dans le document supprimé (serveur), jamais chez le
+   * client. Idempotent : une vente déjà marquée (`lastKnownSource`) n'est
+   * jamais réécrite ; `productName` (nom enregistré à la vente) n'est
+   * jamais touché. Aucun fichier copié.
+   */
+  private async preserveSaleHistory(
+    organizationOid: Types.ObjectId,
+    product: ProductDocument,
+    session: MongooseSession,
+  ): Promise<void> {
+    await this.saleModel
+      .updateMany(
+        {
+          organizationId: organizationOid,
+          productId: product._id,
+          lastKnownSource: { $exists: false },
+        },
+        {
+          $set: {
+            lastKnownProductName: product.name,
+            lastKnownUnitCost: product.purchasePrice,
+            lastKnownSource: 'purge',
+          },
+        },
+        { session },
+      )
+      .exec();
+  }
+
+  /**
+   * 1-15D — conservation EXACTE de la contribution du produit au coût des
+   * ventes de la vue d'ensemble (règle existante : prix d'achat × (stock
+   * initial − stock restant)). Après la purge, ce coût est porté par les
+   * ventes (prix figé × quantités) ; si les deux quantités ont divergé
+   * (écriture perdue, données anciennes), l'écart est figé dans la même
+   * transaction. Lecture des ventes dans la session : même instantané que
+   * la suppression.
+   */
+  private async preserveStockContribution(
+    organizationOid: Types.ObjectId,
+    product: ProductDocument,
+    session: MongooseSession,
+  ): Promise<void> {
+    const [sold] = await this.saleModel
+      .aggregate<{ units: number }>([
+        { $match: { organizationId: organizationOid, productId: product._id } },
+        { $group: { _id: null, units: { $sum: '$quantity' } } },
+      ])
+      .session(session)
+      .exec();
+    const units =
+      product.initialQuantity - product.remainingQuantity - (sold?.units ?? 0);
+    if (units === 0) return;
+    await this.stockAdjustmentModel.create(
+      [
+        {
+          organizationId: organizationOid,
+          productId: product._id,
+          unitCost: product.purchasePrice,
+          units,
+        },
+      ],
+      { session },
+    );
   }
 
   /** Adjusts remainingQuantity by delta (positive = restore, negative = consume) */

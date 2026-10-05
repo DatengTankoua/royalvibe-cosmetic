@@ -489,6 +489,145 @@ function forbiddenKeysIn(frame) {
   return found;
 }
 
+// ─── 1-15D : historique des ventes après purge ──────────────────────────────
+
+/** Requête multipart sur une route existante (produits). */
+async function apiMultipart(method, url, token, fields, image) {
+  const form = new FormData();
+  for (const [k, v] of Object.entries(fields)) form.append(k, String(v));
+  if (image)
+    form.append('image', new Blob([image], { type: 'image/png' }), 'p.png');
+  const res = await fetch(`${API}${url}`, {
+    method,
+    headers: { authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const text = await res.text();
+  return { status: res.status, text, body: text ? JSON.parse(text) : null };
+}
+
+let historySeq = 0;
+/**
+ * Produit créé par `POST /products` : image PNG réellement envoyée au
+ * stockage simulé (vrai `S3Service`), audit `created` écrit par l'API.
+ */
+async function apiCreateProduct(token, sectionId, label, options = {}) {
+  historySeq += 1;
+  const name =
+    options.name || `RT ${label} ${Date.now().toString(36)}${historySeq}`;
+  const res = await apiMultipart(
+    'POST',
+    '/products',
+    token,
+    {
+      sectionId,
+      name,
+      purchasePrice: options.purchasePrice ?? 100,
+      salePrice: 400,
+      initialQuantity: options.qty ?? 20,
+    },
+    await pngLogo(64, 64, '#2e86de'),
+  );
+  ok(res.status === 201, `produit ${res.status} ${res.text}`);
+  return {
+    productId: String(res.body._id),
+    imageUrl: res.body.imageUrl,
+    name,
+  };
+}
+
+async function apiPatchProduct(token, productId, fields) {
+  const res = await apiMultipart(
+    'PATCH',
+    `/products/${productId}`,
+    token,
+    fields,
+  );
+  ok(res.status === 200, `modification produit ${res.status} ${res.text}`);
+}
+
+/** Corbeille puis suppression définitive (routes existantes). */
+async function apiPurgeProduct(token, productId) {
+  const trash = await L.http('DELETE', `/products/${productId}`, { token });
+  ok(trash.status === 200, `corbeille ${trash.status} ${trash.text}`);
+  const purge = await L.http('DELETE', `/products/${productId}/permanent`, {
+    token,
+  });
+  ok(purge.status === 200, `purge ${purge.status} ${purge.text}`);
+}
+
+async function apiPurgeSection(token, sectionId) {
+  const trash = await L.http('DELETE', `/sections/${sectionId}`, { token });
+  ok(trash.status === 200, `corbeille section ${trash.status}`);
+  const purge = await L.http('DELETE', `/sections/${sectionId}/permanent`, {
+    token,
+  });
+  ok(purge.status === 200, `purge section ${purge.status} ${purge.text}`);
+}
+
+const storageKeyOf = (imageUrl) =>
+  decodeURIComponent(String(imageUrl).split('/recipe-fictitious/')[1] || '');
+
+async function apiGet(token, url) {
+  const res = await L.http('GET', url, { token });
+  ok(res.status === 200, `GET ${url} ${res.status} ${res.text}`);
+  return res.body;
+}
+const rankingRow = async (token, productId) =>
+  (await apiGet(token, '/analytics/products/ranking')).find(
+    (r) => String(r.productId) === productId,
+  );
+const saleById = async (token, saleId) =>
+  (await apiGet(token, '/sales')).find((s) => String(s._id) === saleId);
+
+/** Simule une vente antérieure à l'instantané du nom (champ retiré). */
+async function makeLegacySale(saleId) {
+  await (
+    await L.db()
+  )
+    .collection('sales')
+    .updateOne({ _id: L.oid(saleId) }, { $unset: { productName: '' } });
+}
+
+/** Texte d'affichage normalisé (espaces fines des montants fr-FR). */
+const norm = (t) => String(t || '').replace(/[  ]/g, ' ');
+const digitsOf = (t) => norm(t).replace(/[^\d-]/g, '');
+
+/** Carte d'une vente sur `/app/sales`, repérée par son acheteur unique. */
+async function saleCardText(page, buyer) {
+  const card = page.locator('[data-slot=card]').filter({ hasText: buyer });
+  await card.first().waitFor({ timeout: 15000 });
+  return norm(await card.first().innerText());
+}
+
+/** Ligne du classement produits (`/app/analytics`) : cellules texte. */
+async function rankingCells(page, name) {
+  const row = page.locator('tbody tr').filter({ hasText: name }).first();
+  await row.waitFor({ timeout: 15000 });
+  return (await row.locator('td').allInnerTexts()).map(norm);
+}
+
+/** Vrai CLI compilé de rattrapage, sur la base de la recette uniquement. */
+function runHistoryCli(args) {
+  const { spawnSync } = require('child_process');
+  const state = L.C.requireRunningState();
+  const res = spawnSync(
+    process.execPath,
+    [
+      path.join(L.C.DIST, 'migrations', 'backfill-sale-product-history.js'),
+      ...args,
+    ],
+    { env: L.C.apiEnv(state.mongodbUri), encoding: 'utf8', timeout: 60000 },
+  );
+  let json = null;
+  try {
+    json = JSON.parse(res.stdout);
+  } catch {
+    // sortie non JSON : signalée par l'appelant
+  }
+  return { code: res.status, json, stdout: res.stdout, stderr: res.stderr };
+}
+
 // ─── Exécution ──────────────────────────────────────────────────────────────
 
 async function scenario(id, title, fn) {
@@ -2092,6 +2231,670 @@ async function main() {
         'vendeur : aucune lecture protégée',
       );
       return `${signals.length} signaux, tous {} ; vendeur : 0 lecture protégée`;
+    },
+  );
+
+  // RT22 — vente puis purge du produit et de son image.
+  await scenario(
+    'RT22',
+    'Purge d’un produit vendu : historique, analyses et image supprimée',
+    async (ctx) => {
+      const { ownerA } = await setupOrganizations();
+      const section = await apiSection(
+        ownerA.token,
+        `RT22 Rayon ${Date.now()}`,
+      );
+      const p = await apiCreateProduct(ownerA.token, section._id, 'rt22');
+      const key = storageKeyOf(p.imageUrl);
+      ok((await storageStats()).keys.includes(key), 'image au stockage simulé');
+      const buyer = `Acheteur RT22 ${Date.now().toString(36)}`;
+      const { sale } = await apiSale(ownerA.token, p.productId, 2, {
+        buyerName: buyer,
+      });
+      const beforeRow = await rankingRow(ownerA.token, p.productId);
+      const beforeOverview = await apiGet(ownerA.token, '/analytics/overview');
+      ok(beforeRow && beforeRow.netProfit === 600, 'bénéfice avant purge 600');
+
+      const viewer = await openUser(ctx.browser, 'owner-analytics');
+      ctx.users.push(viewer);
+      await loginUi(viewer.page, ownerA.email);
+      await viewer.page.goto(`${WEB}/app/analytics`);
+      await rankingCells(viewer.page, p.name);
+      await markNoReload(viewer.page);
+
+      await apiPurgeProduct(ownerA.token, p.productId);
+      ok(
+        !(await storageStats()).keys.includes(key),
+        'image supprimée du stockage simulé',
+      );
+      const img = await fetch(p.imageUrl);
+      ok(img.status === 404, `image encore servie : ${img.status}`);
+      ok(
+        (await (
+          await L.db()
+        )
+          .collection('products')
+          .countDocuments({ _id: L.oid(p.productId) })) === 0,
+        'document produit supprimé',
+      );
+
+      const s = await saleById(ownerA.token, String(sale._id));
+      ok(s, 'vente toujours listée par /sales');
+      ok(s.productName === p.name, `nom conservé : ${s.productName}`);
+      ok(s.quantity === 2 && s.salePrice === 400, 'quantité et prix conservés');
+      ok(!('lastKnownUnitCost' in s), 'coût d’achat jamais exposé par /sales');
+
+      const row = await rankingRow(ownerA.token, p.productId);
+      ok(row, 'groupe du produit purgé conservé dans le classement');
+      ok(row.productName === p.name, `nom au classement : ${row.productName}`);
+      ok(
+        row.totalUnitsSold === 2 &&
+          row.totalRevenue === 800 &&
+          row.transactionCount === 1,
+        `chiffres du classement : ${JSON.stringify(row)}`,
+      );
+      ok(row.netProfit === 600, `bénéfice historique : ${row.netProfit}`);
+      ok(
+        row.remainingQuantity === null,
+        `stock d’un produit supprimé remplacé par ${row.remainingQuantity}`,
+      );
+      const overview = await apiGet(ownerA.token, '/analytics/overview');
+      ok(
+        overview.totalRevenue === beforeOverview.totalRevenue &&
+          overview.unitsSold === beforeOverview.unitsSold &&
+          overview.totalTransactions === beforeOverview.totalTransactions,
+        'totaux de ventes inchangés',
+      );
+      ok(
+        overview.netProfit === beforeOverview.netProfit,
+        `bénéfice net global : ${beforeOverview.netProfit} → ${overview.netProfit}`,
+      );
+      ok(
+        overview.productsCount === beforeOverview.productsCount - 1 &&
+          overview.totalInvested === beforeOverview.totalInvested - 2000,
+        'inventaire courant : produit retiré',
+      );
+
+      // Écran d'analyse ouvert : relecture temps réel, sans rechargement.
+      const cells = await until(async () => {
+        const c = await rankingCells(viewer.page, p.name);
+        return /supprimé/i.test(c[0]) && c[4].trim() === '—' ? c : null;
+      }, 'ligne du produit supprimé (temps réel)');
+      ok(
+        digitsOf(cells[1]) === '2' &&
+          digitsOf(cells[2]) === '800' &&
+          digitsOf(cells[3]) === '600',
+        `ligne affichée : ${cells.join(' | ')}`,
+      );
+      ok(await stillSameDocument(viewer.page), 'sans rechargement');
+
+      await viewer.page.goto(`${WEB}/app/sales`);
+      const card = await saleCardText(viewer.page, buyer);
+      ok(
+        card.includes(p.name) &&
+          card.includes('Produit supprimé') &&
+          card.includes('2 × 400') &&
+          card.includes('= 800'),
+        `carte de vente : ${card}`,
+      );
+      return 'image supprimée ; nom, quantités, CA et bénéfice conservés ; stock « — »';
+    },
+  );
+
+  // RT23 — renommage entre deux ventes ; homonyme après purge.
+  await scenario(
+    'RT23',
+    'Renommage entre deux ventes : noms historiques ; homonymes distincts',
+    async (ctx) => {
+      const { ownerA } = await setupOrganizations();
+      const tag = Date.now().toString(36);
+      const section = await apiSection(ownerA.token, `RT23 Rayon ${tag}`);
+      const first = `RT23 Avant ${tag}`;
+      const second = `RT23 Après ${tag}`;
+      const p = await apiCreateProduct(ownerA.token, section._id, 'rt23', {
+        name: first,
+      });
+      const b1 = `Acheteur RT23-1 ${tag}`;
+      const b2 = `Acheteur RT23-2 ${tag}`;
+      const s1 = (
+        await apiSale(ownerA.token, p.productId, 1, { buyerName: b1 })
+      ).sale;
+      await apiPatchProduct(ownerA.token, p.productId, { name: second });
+      const s2 = (
+        await apiSale(ownerA.token, p.productId, 1, { buyerName: b2 })
+      ).sale;
+
+      ok(
+        (await saleById(ownerA.token, String(s1._id))).productName === first &&
+          (await saleById(ownerA.token, String(s2._id))).productName === second,
+        'noms enregistrés par le serveur à chaque vente',
+      );
+      const viewer = await openUser(ctx.browser, 'owner-sales');
+      ctx.users.push(viewer);
+      await loginUi(viewer.page, ownerA.email);
+      await viewer.page.goto(`${WEB}/app/sales`);
+      const c1 = await saleCardText(viewer.page, b1);
+      const c2 = await saleCardText(viewer.page, b2);
+      ok(c1.includes(first), `vente 1 sous son nom historique : ${c1}`);
+      ok(c2.includes(second), `vente 2 : ${c2}`);
+
+      const rows = (
+        await apiGet(ownerA.token, '/analytics/products/ranking')
+      ).filter((r) => String(r.productId) === p.productId);
+      ok(
+        rows.length === 1 &&
+          rows[0].totalUnitsSold === 2 &&
+          rows[0].productName === second,
+        `un seul groupe par identifiant : ${JSON.stringify(rows)}`,
+      );
+
+      await apiPurgeProduct(ownerA.token, p.productId);
+      // Homonyme : nouveau produit au nom du produit purgé.
+      const twin = await apiCreateProduct(ownerA.token, section._id, 'rt23', {
+        name: second,
+      });
+      await apiSale(ownerA.token, twin.productId, 3, {
+        buyerName: `Acheteur RT23-3 ${tag}`,
+      });
+      const ranking = await apiGet(ownerA.token, '/analytics/products/ranking');
+      const purgedRow = ranking.find(
+        (r) => String(r.productId) === p.productId,
+      );
+      const twinRow = ranking.find(
+        (r) => String(r.productId) === twin.productId,
+      );
+      ok(
+        purgedRow &&
+          twinRow &&
+          purgedRow.productName === second &&
+          twinRow.productName === second,
+        'deux groupes homonymes',
+      );
+      ok(
+        purgedRow.totalUnitsSold === 2 &&
+          purgedRow.netProfit === 600 &&
+          purgedRow.productDeleted === true &&
+          twinRow.totalUnitsSold === 3 &&
+          twinRow.productDeleted === false,
+        `groupes distincts : ${JSON.stringify([purgedRow, twinRow])}`,
+      );
+      await viewer.page.reload();
+      const d1 = await saleCardText(viewer.page, b1);
+      ok(
+        d1.includes(first) && d1.includes('Produit supprimé'),
+        `vente 1 après purge : ${d1}`,
+      );
+      return 'noms historiques par vente ; un groupe par identifiant, homonymes séparés';
+    },
+  );
+
+  // RT24 — vente ancienne sans nom enregistré, produit encore présent.
+  await scenario(
+    'RT24',
+    'Vente ancienne sans nom : dernier nom connu préservé avant la purge',
+    async (ctx) => {
+      const { ownerA } = await setupOrganizations();
+      const section = await apiSection(
+        ownerA.token,
+        `RT24 Rayon ${Date.now()}`,
+      );
+      const p = await apiCreateProduct(ownerA.token, section._id, 'rt24');
+      const buyer = `Acheteur RT24 ${Date.now().toString(36)}`;
+      const { sale } = await apiSale(ownerA.token, p.productId, 2, {
+        buyerName: buyer,
+      });
+      await makeLegacySale(String(sale._id));
+
+      const viewer = await openUser(ctx.browser, 'owner-sales');
+      ctx.users.push(viewer);
+      await loginUi(viewer.page, ownerA.email);
+      await viewer.page.goto(`${WEB}/app/sales`);
+      const before = await saleCardText(viewer.page, buyer);
+      ok(before.includes(p.name), `avant purge (nom actuel) : ${before}`);
+
+      await apiPurgeProduct(ownerA.token, p.productId);
+      const raw = await (
+        await L.db()
+      )
+        .collection('sales')
+        .findOne({ _id: L.oid(String(sale._id)) });
+      ok(
+        !('productName' in raw),
+        'aucun nom « enregistré à la vente » inventé',
+      );
+      ok(
+        raw.lastKnownProductName === p.name &&
+          raw.lastKnownSource === 'purge' &&
+          raw.lastKnownUnitCost === 100,
+        `dernier nom connu préservé : ${JSON.stringify(raw)}`,
+      );
+      const s = await saleById(ownerA.token, String(sale._id));
+      ok(
+        s.lastKnownProductName === p.name && !('lastKnownUnitCost' in s),
+        'API : dernier nom connu, sans coût',
+      );
+      const row = await rankingRow(ownerA.token, p.productId);
+      ok(
+        row &&
+          row.productName === p.name &&
+          row.totalRevenue === 800 &&
+          row.netProfit === 600,
+        `classement : ${JSON.stringify(row)}`,
+      );
+      await viewer.page.reload();
+      const after = await saleCardText(viewer.page, buyer);
+      ok(
+        after.includes(p.name) &&
+          after.includes('Produit supprimé') &&
+          after.includes('nom non enregistré lors de la vente'),
+        `après purge : ${after}`,
+      );
+      return 'dernier nom connu distinct du nom enregistré ; chiffres conservés';
+    },
+  );
+
+  // RT25 — purge de catégorie : comportement actuel, aucune cascade.
+  await scenario(
+    'RT25',
+    'Purge de catégorie sans cascade, puis purge du produit',
+    async (ctx) => {
+      const { ownerA } = await setupOrganizations();
+      const section = await apiSection(
+        ownerA.token,
+        `RT25 Rayon ${Date.now()}`,
+      );
+      const p = await apiCreateProduct(ownerA.token, section._id, 'rt25');
+      const key = storageKeyOf(p.imageUrl);
+      const buyer = `Acheteur RT25 ${Date.now().toString(36)}`;
+      await apiSale(ownerA.token, p.productId, 2, { buyerName: buyer });
+      const rowBefore = await rankingRow(ownerA.token, p.productId);
+
+      await apiPurgeSection(ownerA.token, section._id);
+      const doc = await (
+        await L.db()
+      )
+        .collection('products')
+        .findOne({ _id: L.oid(p.productId) });
+      ok(
+        doc && doc.deletedAt === null && String(doc.sectionId) === section._id,
+        'produit conservé tel quel (aucune suppression en cascade)',
+      );
+      ok(
+        (await storageStats()).keys.includes(key),
+        'image du produit conservée',
+      );
+      ok(
+        JSON.stringify(await rankingRow(ownerA.token, p.productId)) ===
+          JSON.stringify(rowBefore),
+        'classement inchangé par la purge de catégorie',
+      );
+
+      await apiPurgeProduct(ownerA.token, p.productId);
+      ok(!(await storageStats()).keys.includes(key), 'image supprimée ensuite');
+      const row = await rankingRow(ownerA.token, p.productId);
+      ok(
+        row && row.productName === p.name && row.netProfit === 600,
+        `classement après purge : ${JSON.stringify(row)}`,
+      );
+      const viewer = await openUser(ctx.browser, 'owner-sales');
+      ctx.users.push(viewer);
+      await loginUi(viewer.page, ownerA.email);
+      await viewer.page.goto(`${WEB}/app/sales`);
+      const card = await saleCardText(viewer.page, buyer);
+      ok(card.includes(p.name) && card.includes('= 800'), `carte : ${card}`);
+      return 'catégorie purgée sans cascade ; historique intact après purge du produit';
+    },
+  );
+
+  // RT26 — vente et purge concurrentes, ordonnées par barrières.
+  await scenario(
+    'RT26',
+    'Vente et purge concurrentes (barrières) : aucune vente sans historique',
+    async (ctx) => {
+      const { ownerA } = await setupOrganizations();
+      const section = await apiSection(
+        ownerA.token,
+        `RT26 Rayon ${Date.now()}`,
+      );
+      const owner = await openUser(ctx.browser, 'owner-sheet');
+      ctx.users.push(owner);
+      await loginUi(owner.page, ownerA.email);
+      const isSalePost = (r) =>
+        r.method() === 'POST' && new URL(r.url()).pathname === '/sales';
+
+      async function sellFromSheet(productId, buyer) {
+        await openProduct(owner.page, productId);
+        await owner.page
+          .getByRole('button', { name: 'Enregistrer une vente' })
+          .click();
+        await owner.page.fill('#s-qty', '2');
+        await owner.page.fill('#s-buyer', buyer);
+        await owner.page
+          .getByRole('button', { name: 'Confirmer la vente' })
+          .click();
+      }
+
+      // a) Requête retenue AVANT le serveur ; purge ; libération → refus.
+      const pa = await apiCreateProduct(ownerA.token, section._id, 'rt26a');
+      let releaseA;
+      const gateA = new Promise((r) => (releaseA = r));
+      let heldA = 0;
+      await owner.page.route(
+        (u) => new URL(u.toString()).pathname === '/sales',
+        async (route) => {
+          if (!isSalePost(route.request())) return route.continue();
+          heldA += 1;
+          await gateA;
+          await route.continue();
+        },
+      );
+      const responseA = owner.page.waitForResponse(
+        (r) => isSalePost(r.request()),
+        { timeout: 30000 },
+      );
+      await sellFromSheet(pa.productId, `Acheteur RT26a ${Date.now()}`);
+      await until(() => heldA === 1, 'vente a retenue');
+      await apiPurgeProduct(ownerA.token, pa.productId);
+      releaseA();
+      const resA = await responseA;
+      ok(resA.status() === 404, `vente après purge : ${resA.status()}`);
+      ok((await salesCount(pa.productId)) === 0, 'aucune vente orpheline');
+      await owner.page.unroute(() => true).catch(() => {});
+
+      // b) Vente validée (réponse retenue) ; purge ; libération.
+      const pb = await apiCreateProduct(ownerA.token, section._id, 'rt26b');
+      const buyerB = `Acheteur RT26b ${Date.now().toString(36)}`;
+      const barrier = await holdResponses(
+        owner.page,
+        (u) => new URL(u).pathname === '/sales',
+      );
+      await sellFromSheet(pb.productId, buyerB);
+      await until(
+        () => barrier.held.length === 1,
+        'vente b validée, réponse retenue',
+      );
+      await apiPurgeProduct(ownerA.token, pb.productId);
+      barrier.release();
+      await barrier.stop();
+      const raw = await (
+        await L.db()
+      )
+        .collection('sales')
+        .findOne({ productId: L.oid(pb.productId) });
+      ok(
+        raw &&
+          raw.productName === pb.name &&
+          raw.lastKnownProductName === pb.name &&
+          raw.lastKnownUnitCost === 100,
+        `vente validée avant la purge : ${JSON.stringify(raw)}`,
+      );
+      const row = await rankingRow(ownerA.token, pb.productId);
+      ok(
+        row && row.totalRevenue === 800 && row.netProfit === 600,
+        `classement : ${JSON.stringify(row)}`,
+      );
+      await owner.page.goto(`${WEB}/app/sales`);
+      const card = await saleCardText(owner.page, buyerB);
+      ok(
+        card.includes(pb.name) && card.includes('Produit supprimé'),
+        `carte : ${card}`,
+      );
+      return 'a) refus 404 sans vente ; b) vente validée conservée avec nom et coût';
+    },
+  );
+
+  // RT27 — isolation entre organisations et droits.
+  await scenario(
+    'RT27',
+    'Historique après purge : isolation entre organisations et droits',
+    async (ctx) => {
+      const { ownerA, std, ownerB } = await setupOrganizations();
+      const tStd = await apiLogin(std.email);
+      const section = await apiSection(
+        ownerA.token,
+        `RT27 Rayon ${Date.now()}`,
+      );
+      const p = await apiCreateProduct(ownerA.token, section._id, 'rt27');
+      const key = storageKeyOf(p.imageUrl);
+      const tag = Date.now().toString(36);
+      const bStd = `Acheteur RT27 vendeur ${tag}`;
+      const bOwner = `Acheteur RT27 proprio ${tag}`;
+      const own = (await apiSale(tStd, p.productId, 1, { buyerName: bStd }))
+        .sale;
+      await makeLegacySale(String(own._id));
+      await apiSale(ownerA.token, p.productId, 1, { buyerName: bOwner });
+
+      const bView = await openUser(ctx.browser, 'ownerB-sales');
+      ctx.users.push(bView);
+      await loginUi(bView.page, ownerB.email);
+      await bView.page.goto(`${WEB}/app/sales`);
+      await bView.page.getByText('Aucune vente enregistrée').waitFor();
+      const since = Date.now();
+
+      // B ne peut ni purger ni voir le produit de A.
+      const foreign = await L.http(
+        'DELETE',
+        `/products/${p.productId}/permanent`,
+        {
+          token: ownerB.token,
+        },
+      );
+      ok(foreign.status === 404, `purge étrangère : ${foreign.status}`);
+      ok((await storageStats()).keys.includes(key), 'image de A intacte');
+
+      await apiPurgeProduct(ownerA.token, p.productId);
+      const stdSales = await apiGet(tStd, '/sales');
+      ok(
+        stdSales.length === 1 &&
+          String(stdSales[0]._id) === String(own._id) &&
+          stdSales[0].lastKnownProductName === p.name,
+        `vendeur : sa seule vente, nommée : ${JSON.stringify(stdSales)}`,
+      );
+      ok(
+        !/Cost|purchasePrice/.test(JSON.stringify(stdSales)),
+        'aucun coût d’achat exposé au vendeur',
+      );
+      const analytics = await L.http('GET', '/analytics/overview', {
+        token: tStd,
+      });
+      ok(analytics.status === 403, `analyses vendeur : ${analytics.status}`);
+      const seller = await openUser(ctx.browser, 'std-sales');
+      ctx.users.push(seller);
+      await loginUi(seller.page, std.email);
+      await seller.page.goto(`${WEB}/app/sales`);
+      const card = await saleCardText(seller.page, bStd);
+      ok(
+        card.includes(p.name) && card.includes('Produit supprimé'),
+        `carte du vendeur : ${card}`,
+      );
+      ok(
+        (await seller.page.getByText(bOwner).count()) === 0,
+        'vente du propriétaire invisible au vendeur',
+      );
+
+      ok(
+        !(await apiGet(ownerB.token, '/sales')).some(
+          (s) => String(s.productId?._id ?? s.productId) === p.productId,
+        ),
+        'B : aucune vente de A',
+      );
+      ok(
+        !(await apiGet(ownerB.token, '/analytics/products/ranking')).some(
+          (r) => String(r.productId) === p.productId,
+        ),
+        'B : aucun groupe de A',
+      );
+      await observeFor(1000);
+      ok(businessFrames(bView, since).length === 0, 'B : aucun signal de A');
+      ok(
+        (await bView.page.getByText(p.name).count()) === 0,
+        'B : nom de A jamais affiché',
+      );
+      return 'vendeur : sa vente nommée, sans coût ; B : 0 signal, 0 donnée de A';
+    },
+  );
+
+  // RT28 — ventes de produits purgés avant 1-15D : CLI explicite.
+  await scenario(
+    'RT28',
+    'Rattrapage explicite des ventes anciennes déjà purgées (CLI)',
+    async (ctx) => {
+      const { ownerA } = await setupOrganizations();
+      const tag = Date.now().toString(36);
+      const section = await apiSection(ownerA.token, `RT28 Rayon ${tag}`);
+      // Produit tracé par l'audit : création, renommage, prix, corbeille.
+      const p = await apiCreateProduct(ownerA.token, section._id, 'rt28', {
+        name: `RT28 Initial ${tag}`,
+      });
+      const renamed = `RT28 Final ${tag}`;
+      await apiPatchProduct(ownerA.token, p.productId, { name: renamed });
+      await apiPatchProduct(ownerA.token, p.productId, { purchasePrice: 150 });
+      // Modification journalisée puis REFUSÉE avant l'enregistrement
+      // (section absente) : nom et prix restent ceux enregistrés.
+      const refused = await apiMultipart(
+        'PATCH',
+        `/products/${p.productId}`,
+        ownerA.token,
+        {
+          name: `RT28 Refusé ${tag}`,
+          purchasePrice: 999,
+          sectionId: '0123456789abcdef01234567',
+        },
+      );
+      ok(refused.status === 404, `modification refusée : ${refused.status}`);
+      const b1 = `Acheteur RT28-1 ${tag}`;
+      const s1 = (
+        await apiSale(ownerA.token, p.productId, 2, { buyerName: b1 })
+      ).sale;
+      await makeLegacySale(String(s1._id));
+      const trash = await L.http('DELETE', `/products/${p.productId}`, {
+        token: ownerA.token,
+      });
+      ok(trash.status === 200, 'corbeille');
+      // Produit sans aucune trace d'audit (inséré directement).
+      const q = await seedNamedProduct(ownerA.token, ownerA.orgId, 'rt28q', 10);
+      const b2 = `Acheteur RT28-2 ${tag}`;
+      const s2 = (
+        await apiSale(ownerA.token, q.productId, 1, { buyerName: b2 })
+      ).sale;
+      await makeLegacySale(String(s2._id));
+      const db = await L.db();
+      await db
+        .collection('auditlogs')
+        .deleteMany({ productId: L.oid(q.productId) });
+      // Purge ANTÉRIEURE à 1-15D simulée : document supprimé sans instantané.
+      await db.collection('products').deleteMany({
+        _id: { $in: [L.oid(p.productId), L.oid(q.productId)] },
+      });
+      const snapshot = async () =>
+        JSON.stringify(
+          await db
+            .collection('sales')
+            .find({
+              _id: { $in: [L.oid(String(s1._id)), L.oid(String(s2._id))] },
+            })
+            .toArray(),
+        );
+      const initial = await snapshot();
+
+      const scope = [`--organization-id=${ownerA.orgId}`];
+      const dry = runHistoryCli(scope);
+      ok(dry.code === 0 && dry.json, `simulation : ${dry.code} ${dry.stderr}`);
+      ok(
+        dry.json.mode === 'dry-run' &&
+          dry.json.candidates === 2 &&
+          dry.json.recoverable === 1 &&
+          dry.json.unrecoverable === 1 &&
+          dry.json.updated === 0,
+        `simulation : ${dry.stdout}`,
+      );
+      ok((await snapshot()) === initial, 'simulation : aucune écriture');
+
+      const applied = runHistoryCli([...scope, '--apply']);
+      ok(
+        applied.code === 0 && applied.json && applied.json.updated === 1,
+        `application : ${applied.stdout} ${applied.stderr}`,
+      );
+      ok(
+        applied.json.unrecoverableSaleIds.includes(String(s2._id)),
+        'cas impossible signalé',
+      );
+      const r1 = await db
+        .collection('sales')
+        .findOne({ _id: L.oid(String(s1._id)) });
+      const r2 = await db
+        .collection('sales')
+        .findOne({ _id: L.oid(String(s2._id)) });
+      ok(
+        !('productName' in r1) &&
+          r1.lastKnownProductName === renamed &&
+          !('lastKnownUnitCost' in r1) &&
+          r1.lastKnownSource === 'audit',
+        `nom confirmé par la corbeille, prix non confirmé : ${JSON.stringify(r1)}`,
+      );
+      ok(
+        applied.json.costUnknownSaleIds.includes(String(s1._id)) &&
+          !applied.json.nameUnknownSaleIds.includes(String(s1._id)),
+        'coût non confirmé signalé',
+      );
+      ok(
+        !('lastKnownProductName' in r2) && !('lastKnownSource' in r2),
+        'aucun nom inventé',
+      );
+      const again = runHistoryCli([...scope, '--apply']);
+      ok(
+        again.code === 0 && again.json && again.json.updated === 0,
+        `rejeu idempotent : ${again.stdout}`,
+      );
+
+      const overview = await apiGet(ownerA.token, '/analytics/overview');
+      ok(
+        overview.netProfit === null && overview.totalRevenue === 1200,
+        `bénéfice global inconnu, CA conservé : ${JSON.stringify(overview)}`,
+      );
+      const row1 = await rankingRow(ownerA.token, p.productId);
+      const row2 = await rankingRow(ownerA.token, q.productId);
+      ok(
+        row1.productName === renamed && row1.netProfit === null,
+        `groupe reconstruit : ${JSON.stringify(row1)}`,
+      );
+      ok(
+        row2.productName === null &&
+          row2.netProfit === null &&
+          row2.totalRevenue === 400,
+        `groupe irrécupérable : ${JSON.stringify(row2)}`,
+      );
+      const viewer = await openUser(ctx.browser, 'owner');
+      ctx.users.push(viewer);
+      await loginUi(viewer.page, ownerA.email);
+      await viewer.page.goto(`${WEB}/app/sales`);
+      const c1 = await saleCardText(viewer.page, b1);
+      const c2 = await saleCardText(viewer.page, b2);
+      ok(
+        c1.includes(renamed) &&
+          c1.includes('nom non enregistré lors de la vente'),
+        `vente reconstruite : ${c1}`,
+      );
+      ok(
+        c2.includes('nom non conservé') && c2.includes('= 400'),
+        `vente sans nom : ${c2}`,
+      );
+      await viewer.page.goto(`${WEB}/app/analytics`);
+      const profit = viewer.page
+        .locator('[data-slot=card]')
+        .filter({ hasText: 'Bénéfice net' })
+        .first();
+      await profit.waitFor();
+      ok(
+        /—/.test(await profit.innerText()),
+        `carte bénéfice : ${await profit.innerText()}`,
+      );
+      ok(
+        !(await viewer.page.locator('body').innerText()).includes('Refusé') &&
+          !c1.includes('Refusé'),
+        'nom refusé jamais affiché',
+      );
+      return 'simulation sans écriture ; nom confirmé, prix non confirmé signalé, 1 impossible ; refus jamais historique ; rejeu sans effet';
     },
   );
 

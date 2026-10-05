@@ -41,11 +41,11 @@ Pilotage (terminal 2, recette démarrée) :
 
 Campagne navigateur (stack démarrée en mode simulated) :
   scenarios [ids...] --playwright=<dossier contenant node_modules/playwright> [--chromium=<chrome.exe>] [--out=<dossier>]
-  realtime [RT1..RT21] (mêmes options)    temps réel 1-15A/B/C : collègues, organisations, droits, coupure, outbox, analyse, corbeille, sections, purge, membres, invitations, image de marque
+  realtime [RT1..RT28] (mêmes options)    temps réel 1-15A/B/C/D : collègues, organisations, droits, coupure, outbox, analyse, corbeille, sections, purge, membres, invitations, image de marque, historique après purge
 
 Contrôles d'isolement (.env) :
   isolated selftest               auto-test Jest : .env factices, garde, témoin sans garde
-  isolated api-unit|api-e2e       suites API (jest) isolées des .env réels
+  isolated api-unit|api-e2e [motifs]  suites API (jest) isolées des .env réels
   isolated web-build              next build dans la copie isolée (recette arrêtée)
   env-guard-selftest              garde JavaScript (canaris, témoin sans garde)
   web-canary-check [--out=<f>]    vrai next build / next start avec canaris (témoin, garde, copie isolée)
@@ -419,7 +419,7 @@ async function main(argv) {
       );
     }
     case 'isolated':
-      return require('./isolated-checks').main(rest[0]);
+      return require('./isolated-checks').main(rest[0], rest.slice(1));
     case 'web-canary-check': {
       const result = await require('./web-canary').webCanaryCheck();
       if (typeof flags.out === 'string')

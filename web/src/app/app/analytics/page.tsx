@@ -55,6 +55,11 @@ const ANALYTICS_SIGNALS = [
 
 const fmt = fmtXof;
 const pct = (n: number) => `${n.toFixed(1)}%`;
+// 1-15D : un chiffre inconnu (coût d'achat d'un produit supprimé non
+// conservé, stock d'un produit supprimé) s'affiche « — », jamais 0.
+const UNKNOWN = "—";
+const UNKNOWN_COST_HINT = "Coût d'achat inconnu (produits supprimés)";
+const UNNAMED_PRODUCT = "Nom non conservé";
 
 // "2025-03" → "mars 2025"
 function formatMonthLabel(period: string): string {
@@ -244,10 +249,30 @@ export default function AnalyticsPage() {
               />
               <StatCard
                 label="Bénéfice net"
-                value={fmt(overview.netProfit)}
-                sub={overview.netProfit >= 0 ? "✓ Positif" : "⚠ Négatif"}
+                value={
+                  overview.netProfit === null
+                    ? UNKNOWN
+                    : fmt(overview.netProfit)
+                }
+                sub={
+                  overview.netProfit === null
+                    ? UNKNOWN_COST_HINT
+                    : overview.netProfit >= 0
+                      ? "✓ Positif"
+                      : "⚠ Négatif"
+                }
               />
-              <StatCard label="Marge moyenne" value={pct(overview.avgMargin)} />
+              <StatCard
+                label="Marge moyenne"
+                value={
+                  overview.avgMargin === null
+                    ? UNKNOWN
+                    : pct(overview.avgMargin)
+                }
+                sub={
+                  overview.avgMargin === null ? UNKNOWN_COST_HINT : undefined
+                }
+              />
               <StatCard
                 label="Unités vendues"
                 value={String(overview.unitsSold)}
@@ -335,7 +360,13 @@ export default function AnalyticsPage() {
               <Card>
                 <CardContent className="pt-4 h-64">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={products.slice(0, 8)} layout="vertical">
+                    <BarChart
+                      data={products.slice(0, 8).map((p) => ({
+                        ...p,
+                        productName: p.productName ?? UNNAMED_PRODUCT,
+                      }))}
+                      layout="vertical"
+                    >
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis type="number" tick={{ fontSize: 11 }} />
                       <YAxis
@@ -375,7 +406,16 @@ export default function AnalyticsPage() {
                           <span className="text-muted-foreground mr-2">
                             {i + 1}.
                           </span>
-                          {p.productName}
+                          {p.productName ?? (
+                            <span className="italic text-muted-foreground">
+                              {UNNAMED_PRODUCT}
+                            </span>
+                          )}
+                          {p.productDeleted && (
+                            <Badge variant="secondary" className="ml-2">
+                              supprimé
+                            </Badge>
+                          )}
                         </td>
                         <td className="text-right py-2 px-2">
                           {p.totalUnitsSold}
@@ -384,12 +424,15 @@ export default function AnalyticsPage() {
                           {fmt(p.totalRevenue)}
                         </td>
                         <td
-                          className={`text-right py-2 px-2 font-semibold ${p.netProfit >= 0 ? "text-green-600" : "text-red-600"}`}
+                          className={`text-right py-2 px-2 font-semibold ${p.netProfit === null ? "text-muted-foreground" : p.netProfit >= 0 ? "text-green-600" : "text-red-600"}`}
+                          title={
+                            p.netProfit === null ? UNKNOWN_COST_HINT : undefined
+                          }
                         >
-                          {fmt(p.netProfit)}
+                          {p.netProfit === null ? UNKNOWN : fmt(p.netProfit)}
                         </td>
                         <td className="text-right py-2">
-                          {p.remainingQuantity}
+                          {p.remainingQuantity ?? UNKNOWN}
                         </td>
                       </tr>
                     ))}
