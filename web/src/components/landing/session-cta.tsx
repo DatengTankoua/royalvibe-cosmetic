@@ -1,68 +1,78 @@
 "use client";
 
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/auth-context";
 
 // Jamais d'appel API ici : useAuth() ne fait que lire le user/token déjà en
 // mémoire (localStorage, sans les afficher) — aucune donnée organisationnelle
 // n'est rendue (pas de redirection automatique, la landing reste visible).
-export function SessionCta({
-  variant,
-}: {
-  variant: "header" | "hero" | "final";
-}) {
+// 1-16B : liens stylés directement (plus de <button> dans un <a>), libellés
+// qui disent l'action, et lien d'inscription masqué quand le flag
+// d'affichage la ferme (le backend reste l'autorité finale).
+type Variant = "header" | "menu" | "final";
+
+const base =
+  "inline-flex h-11 items-center justify-center rounded-lg px-5 text-sm font-semibold whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-2";
+
+// `final` est posé sur le bandeau bleu marine : contrastes inversés.
+const STYLES: Record<"light" | "dark", { primary: string; secondary: string }> =
+  {
+    light: {
+      primary: `${base} bg-(--brand-navy) text-white hover:bg-(--brand-navy)/90 focus-visible:outline-(--brand-navy)`,
+      secondary: `${base} border border-(--brand-navy)/40 text-(--brand-navy) hover:border-(--brand-navy) hover:bg-(--brand-navy)/5 focus-visible:outline-(--brand-navy)`,
+    },
+    dark: {
+      primary: `${base} bg-(--brand-orange) text-(--brand-navy) hover:bg-[#ff8533] focus-visible:outline-white`,
+      secondary: `${base} border border-white/50 text-white hover:border-white hover:bg-white/10 focus-visible:outline-white`,
+    },
+  };
+
+export function SessionCta({ variant }: { variant: Variant }) {
   const { user, isLoading } = useAuth();
+  const registrationEnabled =
+    process.env.NEXT_PUBLIC_REGISTRATION_ENABLED === "true";
+  const styles = STYLES[variant === "final" ? "dark" : "light"];
+  const layout =
+    variant === "header"
+      ? "flex items-center gap-2"
+      : variant === "menu"
+        ? "grid grid-cols-1 gap-2"
+        : "flex flex-col gap-3 sm:flex-row";
 
   // Session non résolue : état neutre non interactif, hauteur stable (h-11)
   // — jamais traité comme "non connecté" (pas de flash Connexion/Inscription).
   if (isLoading) {
     return (
-      <div aria-busy="true" className="flex items-center justify-center">
-        <Button
-          type="button"
-          disabled
-          variant="outline"
-          className="h-11 border-(--brand-navy)/30 px-6 text-(--brand-navy)/60"
-        >
-          Chargement…
-        </Button>
+      <div aria-busy="true" className={layout}>
+        <span className={`${styles.secondary} opacity-60`}>Chargement…</span>
       </div>
     );
   }
 
   if (user) {
     return (
-      <Link href="/app">
-        <Button className="h-11 bg-(--brand-navy) px-6 text-white hover:bg-(--brand-navy)/90">
+      <div className={layout}>
+        <Link href="/app" className={styles.primary}>
           Ouvrir l&apos;application
-        </Button>
-      </Link>
+        </Link>
+      </div>
     );
   }
 
-  const stacked = variant !== "header";
+  const login = (
+    <Link key="login" href="/auth/login" className={styles.secondary}>
+      Se connecter
+    </Link>
+  );
+  const register = registrationEnabled && (
+    <Link key="register" href="/auth/register" className={styles.primary}>
+      Créer un compte
+    </Link>
+  );
+  // Appel final : l'inscription d'abord (action principale de la section).
   return (
-    <div
-      className={
-        stacked
-          ? "flex flex-col items-center gap-3 sm:flex-row"
-          : "flex items-center gap-2"
-      }
-    >
-      <Link href="/auth/login">
-        <Button
-          variant="outline"
-          className="h-11 border-(--brand-navy) px-6 text-(--brand-navy) hover:bg-(--brand-navy)/5"
-        >
-          Connexion
-        </Button>
-      </Link>
-      <Link href="/auth/register">
-        <Button className="h-11 bg-(--brand-navy) px-6 text-white hover:bg-(--brand-navy)/90">
-          Inscription
-        </Button>
-      </Link>
+    <div className={layout}>
+      {variant === "final" ? [register, login] : [login, register]}
     </div>
   );
 }
