@@ -41,6 +41,7 @@ Pilotage (terminal 2, recette démarrée) :
 
 Campagne navigateur (stack démarrée en mode simulated) :
   scenarios [ids...] --playwright=<dossier contenant node_modules/playwright> [--chromium=<chrome.exe>] [--out=<dossier>]
+  push-browser [P1..P9] (mêmes options)  notifications push 1-16A : transport simulé, livraison CDP au service worker
   realtime [RT1..RT33] (mêmes options)    temps réel 1-15A/B/C/D/F : collègues, organisations, droits, coupure, outbox, analyse, corbeille, sections, purge, membres, invitations, image de marque, historique après purge, abonnement et paiements
 
 Contrôles d'isolement (.env) :
@@ -388,7 +389,8 @@ async function main(argv) {
       );
     }
     case 'scenarios':
-    case 'realtime': {
+    case 'realtime':
+    case 'push-browser': {
       C.requireRunningState();
       const playwright = flags.playwright;
       if (typeof playwright !== 'string')
@@ -405,7 +407,11 @@ async function main(argv) {
       return runInherited(
         path.join(
           __dirname,
-          command === 'realtime' ? 'realtime-scenarios.js' : 'scenarios.js',
+          command === 'realtime'
+            ? 'realtime-scenarios.js'
+            : command === 'push-browser'
+              ? 'push-browser.js'
+              : 'scenarios.js',
         ),
         rest,
         C.baseEnv({

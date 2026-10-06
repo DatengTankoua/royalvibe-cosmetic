@@ -23,5 +23,7 @@ import { AnalyticsController } from './analytics.controller';
   ],
   providers: [AnalyticsService],
   controllers: [AnalyticsController],
+  // 1-16A.1 : bilan mensuel calculé avec les MÊMES règles et bornes.
+  exports: [AnalyticsService],
 })
 export class AnalyticsModule {}

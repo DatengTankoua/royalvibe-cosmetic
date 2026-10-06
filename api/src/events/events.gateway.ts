@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
 import { JwtService } from '@nestjs/jwt';
 import type { IncomingHttpHeaders, IncomingMessage } from 'http';
@@ -8,6 +8,7 @@ import { OrganizationsService } from '../organizations/organizations.service';
 import { SocketRegistryService } from '../organizations/socket-registry.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { SubscriptionSignalsService } from '../subscriptions/subscription-signals.service';
+import { NotificationSignalsService } from '../notifications/notification-signals.service';
 import {
   buildOriginAllowlist,
   parseCORSOrigin,
@@ -150,6 +151,9 @@ export class EventsGateway {
     private readonly socketRegistry: SocketRegistryService,
     private readonly subscriptionsService: SubscriptionsService,
     private readonly subscriptionSignals: SubscriptionSignalsService,
+    // 1-16A.1 : optionnel (specs unitaires construites sans le centre).
+    @Optional()
+    private readonly notificationSignals?: NotificationSignalsService,
   ) {}
 
   /**
@@ -184,6 +188,12 @@ export class EventsGateway {
     // 1-15F : signaux d'abonnement et de paiement au propriétaire réel
     // seul (désigné par le service), mêmes room et filtre de couverture.
     this.subscriptionSignals.attachEmitter({
+      toMember: (organizationId, userId, event, payload) =>
+        this.emitToMember(organizationId, userId, event, payload),
+    });
+    // 1-16A.1 : compteur du centre — signal privé au seul destinataire,
+    // mêmes room et filtre de couverture.
+    this.notificationSignals?.attachEmitter({
       toMember: (organizationId, userId, event, payload) =>
         this.emitToMember(organizationId, userId, event, payload),
     });

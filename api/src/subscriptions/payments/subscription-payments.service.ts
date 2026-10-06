@@ -1,4 +1,9 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Optional,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -13,6 +18,7 @@ import {
 } from '../subscription-pricing';
 import { SUBSCRIPTION_CLOCK } from '../subscription-clock';
 import { SubscriptionSignalsService } from '../subscription-signals.service';
+import { PushOutboxService } from '../../push/push-outbox.service';
 import type { SubscriptionClock } from '../subscription-clock';
 import {
   OPEN_PAYMENT_STATUSES,
@@ -138,6 +144,8 @@ export class SubscriptionPaymentsService {
     @Inject(SUBSCRIPTION_CLOCK) private readonly clock: SubscriptionClock,
     private readonly signals: SubscriptionSignalsService,
     config: ConfigService,
+    // 1-16A : optionnel (tests unitaires construits sans module push).
+    @Optional() private readonly pushOutbox?: PushOutboxService,
   ) {
     this.fingerprintKey = derivePaymentFingerprintKey(
       config.getOrThrow<string>('JWT_SECRET'),
@@ -538,6 +546,14 @@ export class SubscriptionPaymentsService {
             return 'mismatch' as const;
           }
           await this.grantAndMarkSucceededInSession(session, current, verified);
+          // 1-16A — « paiement confirmé » enregistré dans CETTE transaction,
+          // après attribution et passage à `succeeded` : annulé par un
+          // rollback, unique par paiement sur un rejeu du callback. Jamais
+          // pour `pending`, `uncertain` ni `review`.
+          await this.pushOutbox?.paymentSucceededInSession(session, {
+            organizationId: current.organizationId,
+            paymentId: current._id,
+          });
           return 'granted' as const;
         },
         { budgetMs: PAYMENT_CONFIRMATION_BUDGET_MS },

@@ -180,3 +180,174 @@ async function cacheFirst(request) {
   }
   return response;
 }
+
+// ─── Notifications Web Push (1-16A) ─────────────────────────────────────────
+// Ajout au service worker EXISTANT : aucun changement de scope, de cache
+// (CACHE_VERSION inchangée), de stratégie fetch ni de l'outbox des ventes.
+// Ces gestionnaires n'émettent AUCUNE requête réseau : ni vente, ni
+// confirmation de paiement, ni échange de session, ni passe d'outbox.
+//
+// Contrôle local minimal avant affichage : le message chiffré porte son
+// titulaire (`aud` : utilisateur, organisation), comparé au pointeur
+// d'identité hors ligne de l'appareil (`stockmaster-offline-identity`, écrit
+// après chaque contexte authentifié, effacé à la déconnexion). Sans identité
+// ou pour un autre compte (déconnexion hors ligne, appareil partagé), aucun
+// contenu métier n'est affiché et l'abonnement du navigateur est retiré.
+const PUSH_IDENTITY_DB = "stockmaster-offline-identity";
+const PUSH_IDENTITY_STORE = "identity";
+const PUSH_IDENTITY_KEY = "current";
+const PUSH_NAVIGATE_MESSAGE = "stockmaster:push-navigate";
+const PUSH_ICON = "/icons/icon-192.png";
+
+// Lecture SANS création : si la base n'existe pas, la mise à niveau est
+// annulée (aucune base vide n'est laissée, le schéma de la page reste seul
+// maître de sa création).
+function readPushIdentity() {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => {
+      if (!settled) {
+        settled = true;
+        resolve(value);
+      }
+    };
+    setTimeout(() => done(null), 2000);
+    let request;
+    try {
+      request = indexedDB.open(PUSH_IDENTITY_DB);
+    } catch {
+      done(null);
+      return;
+    }
+    request.onupgradeneeded = () => {
+      request.transaction.abort();
+    };
+    request.onerror = () => done(null);
+    request.onblocked = () => done(null);
+    request.onsuccess = () => {
+      const db = request.result;
+      try {
+        if (!db.objectStoreNames.contains(PUSH_IDENTITY_STORE)) {
+          db.close();
+          done(null);
+          return;
+        }
+        const get = db
+          .transaction(PUSH_IDENTITY_STORE, "readonly")
+          .objectStore(PUSH_IDENTITY_STORE)
+          .get(PUSH_IDENTITY_KEY);
+        get.onsuccess = () => {
+          db.close();
+          const value = get.result;
+          done(
+            value && typeof value.userId === "string" && typeof value.organizationId === "string"
+              ? { userId: value.userId, organizationId: value.organizationId }
+              : null,
+          );
+        };
+        get.onerror = () => {
+          db.close();
+          done(null);
+        };
+      } catch {
+        db.close();
+        done(null);
+      }
+    };
+  });
+}
+
+// Seuls les chemins internes de l'application sont ouverts.
+function safeAppPath(url) {
+  return typeof url === "string" && /^\/app(\/[A-Za-z0-9/_-]*)?$/.test(url) && !url.includes("//")
+    ? url
+    : "/app";
+}
+
+function parsePushMessage(event) {
+  try {
+    const data = event.data ? event.data.json() : null;
+    if (
+      !data ||
+      data.v !== 1 ||
+      typeof data.title !== "string" ||
+      typeof data.body !== "string" ||
+      typeof data.tag !== "string" ||
+      !data.aud ||
+      typeof data.aud.u !== "string" ||
+      typeof data.aud.o !== "string"
+    ) {
+      return null;
+    }
+    return {
+      title: data.title.slice(0, 80),
+      body: data.body.slice(0, 200),
+      tag: data.tag.slice(0, 120),
+      url: safeAppPath(data.url),
+      aud: data.aud,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function handlePush(event) {
+  const message = parsePushMessage(event);
+  const identity = await readPushIdentity();
+  if (
+    !message ||
+    !identity ||
+    identity.userId !== message.aud.u ||
+    identity.organizationId !== message.aud.o
+  ) {
+    try {
+      const subscription = await self.registration.pushManager.getSubscription();
+      if (subscription) await subscription.unsubscribe();
+    } catch {
+      // Désabonnement best effort : le serveur désactivera l'endpoint (404/410).
+    }
+    // Les navigateurs exigent un affichage pour chaque message reçu : texte
+    // neutre, sans aucune donnée métier.
+    return self.registration.showNotification("Stock Master", {
+      body: "Notifications désactivées sur cet appareil.",
+      tag: "stockmaster-push-disabled",
+      icon: PUSH_ICON,
+      data: { url: "/app" },
+    });
+  }
+  return self.registration.showNotification(message.title, {
+    body: message.body,
+    tag: message.tag,
+    icon: PUSH_ICON,
+    badge: PUSH_ICON,
+    data: { url: message.url },
+  });
+}
+
+self.addEventListener("push", (event) => {
+  event.waitUntil(handlePush(event));
+});
+
+async function openFromNotification(url) {
+  const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const existing = windows.find((client) => new URL(client.url).origin === self.location.origin);
+  if (existing) {
+    // Navigation côté client dans la fenêtre ouverte (aucun rechargement).
+    existing.postMessage({ type: PUSH_NAVIGATE_MESSAGE, url });
+    try {
+      // Autorisé pendant `notificationclick` ; refus éventuel sans effet sur
+      // la navigation déjà demandée.
+      await existing.focus();
+    } catch {
+      // fenêtre non focalisable
+    }
+    return;
+  }
+  return self.clients.openWindow(url);
+}
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = safeAppPath(event.notification.data && event.notification.data.url);
+  event.waitUntil(openFromNotification(url));
+});

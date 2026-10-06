@@ -24,6 +24,9 @@ const TABS = [
     ownerOnly: true,
   },
   { href: "/app/organization/offline-data", label: "Hors connexion" },
+  // 1-16A : réglages de CET appareil, tout membre actif (les catégories
+  // proposées sont décidées par le serveur selon le rôle et les droits).
+  { href: "/app/organization/notifications", label: "Notifications" },
 ];
 
 // Sous-shell de la section « Organisation » (1-9C) : onglets filtrés par

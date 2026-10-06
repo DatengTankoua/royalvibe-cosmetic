@@ -35,6 +35,13 @@ import {
 
 export type { ProductStatus } from './product-projection';
 
+/** 1-16A.1 — résultat d'un ajustement de stock (détection des seuils). */
+export interface StockAdjustment {
+  initialQuantity: number;
+  remainingBefore: number;
+  remainingAfter: number;
+}
+
 export interface ProductDetail extends ProductMetricsView {
   sales: SaleDocument[];
   auditLogs: unknown[];
@@ -664,13 +671,18 @@ export class ProductsService {
     );
   }
 
-  /** Adjusts remainingQuantity by delta (positive = restore, negative = consume) */
+  /**
+   * Adjusts remainingQuantity by delta (positive = restore, negative = consume).
+   * 1-16A / 1-16A.1 : renvoie le stock initial et le stock restant avant /
+   * après ajustement (même lecture, même session), ou `undefined` si le
+   * produit n'existe plus (aucun ajustement, comme avant).
+   */
   async adjustStock(
     organizationId: string,
     productId: string,
     delta: number,
     session?: MongooseSession,
-  ): Promise<void> {
+  ): Promise<StockAdjustment | undefined> {
     const product = await this.productModel
       .findOne(
         {
@@ -687,8 +699,14 @@ export class ProductsService {
         `Insufficient stock. Available: ${product.remainingQuantity}`,
       );
     }
+    const remainingBefore = product.remainingQuantity;
     product.remainingQuantity += delta;
     await product.save({ session: session ?? null });
+    return {
+      initialQuantity: product.initialQuantity,
+      remainingBefore,
+      remainingAfter: product.remainingQuantity,
+    };
   }
 
   /**

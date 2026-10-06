@@ -34,6 +34,7 @@ import {
   setRestrictedToken,
 } from "@/lib/restricted-session";
 import { purgeAllOfflineData } from "@/lib/offline-purge";
+import { releasePushOnLogout } from "@/lib/push-notifications";
 import { clearTenantBrand } from "@/lib/offline-tenant-brand-db";
 
 export type LoginOutcome =
@@ -216,8 +217,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // 1-11B : purge du catalogue hors ligne AVANT de terminer la déconnexion —
   // un échec (déjà journalisé en générique par le module) ne bloque jamais
   // le logout lui-même.
+  // 1-16A : appareil retiré des notifications (serveur puis navigateur,
+  // best effort borné) AVANT d'effacer le jeton qui l'autorise ; hors ligne,
+  // seul le désabonnement local est tenté.
   const logout = useCallback(async () => {
     epochRef.current += 1;
+    await releasePushOnLogout(getToken() ?? getRestrictedToken());
     await purgeAllOfflineData();
     clearAuth();
     markInstalled();

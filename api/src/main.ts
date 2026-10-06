@@ -13,6 +13,8 @@ import {
 } from './common/trust-proxy';
 import type { ExpressSettings } from './common/trust-proxy';
 import { API_APPLICATION_OPTIONS } from './common/application-options';
+import { resolveWebPushConfig } from './push/push-config';
+import { startNotifications } from './push/push-bootstrap';
 
 async function bootstrap() {
   // CORS HTTP fermé (phase 0B.4) : la config est parsée UNE FOIS au
@@ -32,6 +34,10 @@ async function bootstrap() {
   // proxys identifiés) ou `TRUST_PROXY_HOPS` (N sauts), jamais les deux ;
   // toute valeur invalide → erreur fatale au démarrage.
   const trustProxy = resolveTrustProxySetting(process.env);
+
+  // Web Push (1-16A) : désactivé par défaut ; `WEB_PUSH_ENABLED=true` avec
+  // une configuration VAPID invalide → erreur fatale au démarrage.
+  const webPush = resolveWebPushConfig(process.env);
 
   const app = await NestFactory.create(AppModule, API_APPLICATION_OPTIONS);
 
@@ -55,6 +61,11 @@ async function bootstrap() {
     }),
   );
   app.useGlobalFilters(new HttpExceptionFilter());
+
+  // Centre de notifications et traitement de fond (1-16A.1), push si
+  // configuré : démarrage HTTP UNIQUEMENT (les CLI chargent `AppModule` sans
+  // jamais passer par ici).
+  await startNotifications(app, webPush);
 
   await app.listen(process.env.PORT ?? 4000);
 }

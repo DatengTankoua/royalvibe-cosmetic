@@ -11,6 +11,7 @@ import { SaleOperationIndexCheck } from './sale-operation-index';
 import { ProductsModule } from '../products/products.module';
 import { EventsModule } from '../events/events.module';
 import { AuditModule } from '../audit/audit.module';
+import { PushModule } from '../push/push.module';
 
 @Module({
   imports: [
@@ -22,6 +23,8 @@ import { AuditModule } from '../audit/audit.module';
     ProductsModule,
     EventsModule,
     AuditModule,
+    // 1-16A : travail « stock épuisé » enregistré dans la transaction.
+    PushModule,
   ],
   providers: [SalesService, SaleOperationIndexCheck],
   controllers: [SalesController],

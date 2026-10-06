@@ -53,6 +53,10 @@ Toutes les valeurs par défaut du `.env.example` sont compatibles avec le `docke
 | `S3_BUCKET` | `heyama-objects` | Nom du bucket |
 | `S3_FORCE_PATH_STYLE` | `true` | Obligatoire pour MinIO |
 | `S3_PUBLIC_URL` | _(vide)_ | URL publique des images si différente de `S3_ENDPOINT` |
+| `WEB_PUSH_ENABLED` | `false` | Notifications Web Push (1-16A) ; `true` exige les trois clés VAPID ci-dessous (démarrage refusé si invalides). Le centre de notifications (1-16A.1) fonctionne dans tous les cas ; la migration `migrate:push-notification-indexes` est requise en production et dès que le push est activé |
+| `WEB_PUSH_VAPID_PUBLIC_KEY` | _(vide)_ | Clé publique P-256 base64url, **stable** entre redémarrages |
+| `WEB_PUSH_VAPID_PRIVATE_KEY` | _(vide)_ | Clé privée correspondante — **secret**, jamais journalisée |
+| `WEB_PUSH_VAPID_SUBJECT` | _(vide)_ | Contact `mailto:` ou URL `https:` |
 
 ---
 

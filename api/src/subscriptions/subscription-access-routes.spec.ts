@@ -15,6 +15,8 @@ import { TrashController } from '../trash/trash.controller';
 import { SubscriptionsController } from './subscriptions.controller';
 import { SubscriptionPaymentsController } from './payments/subscription-payments.controller';
 import { CamPayWebhookController } from './payments/campay/campay-webhook.controller';
+import { PushController } from '../push/push.controller';
+import { NotificationsController } from '../notifications/notifications.controller';
 import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
 import { SKIP_ORGANIZATION_CONTEXT_KEY } from '../auth/decorators/skip-organization-context.decorator';
 import {
@@ -46,6 +48,8 @@ const CONTROLLERS = [
   SubscriptionPaymentsController,
   CamPayWebhookController,
   TrashController,
+  PushController,
+  NotificationsController,
 ];
 
 type Category =
@@ -128,7 +132,67 @@ describe('Matrice des routes — contrôle commercial (1-14C.1)', () => {
         'GET /auth/organizations',
         'POST /auth/subscription-access/complete',
         'POST /auth/switch-organization',
+        // 1-16A : retrait de l'appareil de l'utilisateur courant (déconnexion
+        // d'une session limitée ou d'une organisation expirée).
+        'POST /notifications/push/subscription/remove',
       ].sort((a, b) => a.localeCompare(b)),
+    );
+  });
+
+  it('centre de notifications (1-16A.1) : toutes les routes métier, sans exception commerciale', () => {
+    const center = collectRoutes().filter((r) =>
+      /^\/notifications(\/|$)(?!push)/.test(r.route.split(' ')[1]),
+    );
+    expect(center.map((r) => r.route)).toEqual(
+      [
+        'GET /notifications',
+        'GET /notifications/:id/report/unsold',
+        'GET /notifications/preferences',
+        'GET /notifications/unread-count',
+        'POST /notifications/:id/open',
+        'POST /notifications/:id/read',
+        'POST /notifications/read-all',
+        'PUT /notifications/preferences',
+      ].sort((a, b) => a.localeCompare(b)),
+    );
+    for (const route of center) {
+      expect(route.category).toBe('business');
+      expect(route.skipsOrganizationContext).toBe(false);
+    }
+  });
+
+  it('notifications push (1-16A) : gestion métier par défaut, seul le retrait est exempté', () => {
+    const push = collectRoutes().filter((r) =>
+      r.route.split(' ')[1].startsWith('/notifications/push'),
+    );
+    expect(push).toEqual(
+      [
+        {
+          route: 'GET /notifications/push/config',
+          category: 'business',
+          skipsOrganizationContext: false,
+        },
+        {
+          route: 'PATCH /notifications/push/subscription',
+          category: 'business',
+          skipsOrganizationContext: false,
+        },
+        {
+          route: 'POST /notifications/push/subscription',
+          category: 'business',
+          skipsOrganizationContext: false,
+        },
+        {
+          route: 'POST /notifications/push/subscription/remove',
+          category: 'identity',
+          skipsOrganizationContext: false,
+        },
+        {
+          route: 'POST /notifications/push/subscription/status',
+          category: 'business',
+          skipsOrganizationContext: false,
+        },
+      ].sort((a, b) => a.route.localeCompare(b.route)),
     );
   });
 

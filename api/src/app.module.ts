@@ -15,6 +15,7 @@ import { AuditModule } from './audit/audit.module';
 import { TrashModule } from './trash/trash.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { ImageSecurityModule } from './common/image/image-security.module';
+import { PushModule } from './push/push.module';
 
 @Module({
   imports: [
@@ -40,6 +41,9 @@ import { ImageSecurityModule } from './common/image/image-security.module';
     TrashModule,
     // 1-1A : modèles multi-tenant (Organization + Membership), données seules.
     OrganizationsModule,
+    // 1-16A : notifications Web Push (inactives tant que le démarrage HTTP
+    // ne les active pas ; aucun traitement de fond au chargement).
+    PushModule,
   ],
   controllers: [AppController],
   providers: [AppService],

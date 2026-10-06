@@ -48,6 +48,7 @@ import {
   CAMPAY_WEBHOOK_CONFIG,
   DISABLED_CAMPAY_WEBHOOK,
 } from './payments/campay/campay-webhook.config';
+import { PushModule } from '../push/push.module';
 
 /**
  * 1-14B — Importé par `OrganizationsModule` (essai attribué à la création).
@@ -69,6 +70,9 @@ import {
  * module). Le modèle `OrganizationMembership` est enregistré en LECTURE
  * seule pour désigner le propriétaire réel, sans importer
  * `OrganizationsModule`.
+ *
+ * 1-16A — `PushModule` (feuille) : travail « paiement confirmé » enregistré
+ * dans la transaction d'attribution.
  */
 @Module({
   imports: [
@@ -85,6 +89,8 @@ import {
         schema: SubscriptionPaymentReconciliationSchema,
       },
     ]),
+    // 1-16A : outbox des notifications (module feuille, aucun cycle).
+    PushModule,
   ],
   controllers: [
     SubscriptionsController,

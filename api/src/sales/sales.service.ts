@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectModel, InjectConnection } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -27,6 +28,8 @@ import { EventsGateway } from '../events/events.gateway';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/schemas/audit-log.schema';
 import { subscriptionInactiveException } from '../subscriptions/subscription-access';
+import { PushOutboxService } from '../push/push-outbox.service';
+import { stockLowCrossed } from '../push/stock-thresholds';
 
 @Injectable()
 export class SalesService {
@@ -40,6 +43,8 @@ export class SalesService {
     private productsService: ProductsService,
     private eventsGateway: EventsGateway,
     private auditService: AuditService,
+    // 1-16A : optionnel (tests unitaires construits sans module push).
+    @Optional() private pushOutbox?: PushOutboxService,
   ) {}
 
   /**
@@ -240,6 +245,22 @@ export class SalesService {
           input.quantity,
           session,
         );
+        // 1-16A / 1-16A.1 — seuils de stock franchis par CETTE décrémentation
+        // atomique (valeurs avant / après exactes) : événement enregistré
+        // dans la transaction (annulé avec elle ; clé stable `sale:<id>`
+        // d'une tentative à l'autre). Rupture prioritaire : jamais deux
+        // alertes de stock pour la même opération. Aucun envoi ici.
+        await this.recordStockThresholds(
+          session,
+          organizationId,
+          input.productId,
+          {
+            initialQuantity: product.initialQuantity,
+            remainingBefore: product.remainingQuantity + input.quantity,
+            remainingAfter: product.remainingQuantity,
+          },
+          `sale:${saleId.toHexString()}`,
+        );
 
         // 2. Création de la vente, MÊME session. L'org SERVEUR est écrite
         //    dans le document (jamais issue du DTO). Sur échec, le rollback
@@ -285,6 +306,15 @@ export class SalesService {
           },
           session,
         );
+
+        // 1-16A.1 — nouvelle vente VALIDÉE : événement durable dans la même
+        // transaction (aucun après rollback ; un rejeu idempotent ne passe
+        // jamais par ici).
+        await this.pushOutbox?.saleCreatedInSession(session, {
+          organizationId,
+          productId: input.productId,
+          saleId: String(sale._id),
+        });
 
         created = sale;
       });
@@ -349,6 +379,9 @@ export class SalesService {
   ): Promise<SaleDocument> {
     const session = await this.connection.startSession();
     let saved: SaleDocument | undefined;
+    // 1-16A : clé stable de CETTE modification (réutilisée si le driver
+    // rejoue le callback transactionnel).
+    const operationId = new Types.ObjectId().toHexString();
     try {
       await session.withTransaction(async () => {
         const filter: Record<string, Types.ObjectId> = {
@@ -366,12 +399,23 @@ export class SalesService {
         const changes: Record<string, unknown> = {};
         if (dto.quantity !== undefined && dto.quantity !== sale.quantity) {
           const delta = sale.quantity - dto.quantity;
-          await this.productsService.adjustStock(
+          const adjustment = await this.productsService.adjustStock(
             organizationId,
             sale.productId.toString(),
             delta,
             session,
           );
+          // 1-16A / 1-16A.1 — correction de quantité : seuils franchis
+          // (une baisse de la quantité vendue ne franchit rien et réarme).
+          if (adjustment) {
+            await this.recordStockThresholds(
+              session,
+              organizationId,
+              sale.productId.toString(),
+              adjustment,
+              `sale-update:${operationId}`,
+            );
+          }
           changes.quantity = { from: sale.quantity, to: dto.quantity };
           sale.quantity = dto.quantity;
         }
@@ -406,6 +450,41 @@ export class SalesService {
       productId: String(saved.productId),
     });
     return saved.populate('sellerId', 'name email');
+  }
+
+  /**
+   * 1-16A / 1-16A.1 — événements de stock d'UNE écriture : rupture (passage
+   * réel d'un stock positif à zéro) OU, sinon, franchissement de 80 %
+   * consommé. Enregistrés dans la session de la transaction appelante.
+   */
+  private async recordStockThresholds(
+    session: Parameters<PushOutboxService['stockDepletedInSession']>[0],
+    organizationId: string,
+    productId: string,
+    stock: {
+      initialQuantity: number;
+      remainingBefore: number;
+      remainingAfter: number;
+    },
+    trigger: string,
+  ): Promise<void> {
+    if (!this.pushOutbox) return;
+    const input = { organizationId, productId, trigger };
+    if (stock.remainingBefore > 0 && stock.remainingAfter === 0) {
+      await this.pushOutbox.stockDepletedInSession(session, input);
+      return;
+    }
+    if (
+      stock.remainingAfter > 0 &&
+      stockLowCrossed(
+        stock.initialQuantity,
+        stock.remainingBefore,
+        stock.initialQuantity,
+        stock.remainingAfter,
+      )
+    ) {
+      await this.pushOutbox.stockLowInSession(session, input);
+    }
   }
 
   /**

@@ -10,6 +10,10 @@
  *   - `campay` : VRAI adaptateur CamPay et VRAI transport `fetch`, dont
  *     l'origine officielle est redirigée vers le faux CamPay du lanceur
  *     (127.0.0.1), et webhook ACTIVÉ avec une clé FICTIVE.
+ * - 1-16A, notifications push : activées avec une paire VAPID FICTIVE
+ *   générée pour la recette et un transport SIMULÉ qui écrit chaque message
+ *   dans `push.jsonl` (aucune requête vers un service push) ; traitement de
+ *   fond démarré toutes les secondes.
  *
  * Ce fichier est hors `dist/` (`tsconfig.build.json` exclut `test/`) : aucun
  * binaire de production ne contient ces remplacements, et `main.ts` n'en
@@ -84,10 +88,61 @@ async function main() {
     }),
   );
   app.useGlobalFilters(new HttpExceptionFilter());
+  activateSimulatedPush(app);
   await app.listen(C.PORTS.api, C.HOST);
   console.log(
     `API READY provider=${provider} ${C.API_URL} (base ${new URL(uri).pathname})`,
   );
+}
+
+/** Fichier des messages push « envoyés » par le transport simulé. */
+const PUSH_FILE = path.join(C.STATE_DIR, 'push.jsonl');
+const VAPID_FILE = path.join(C.STATE_DIR, 'push-vapid.json');
+
+/**
+ * 1-16A — Paire VAPID FICTIVE (stable pendant la recette, régénérée à chaque
+ * nouvelle stack) et transport simulé : la politique d'endpoint est appliquée
+ * comme en production, puis le message est consigné localement.
+ */
+function activateSimulatedPush(app) {
+  const { PushRuntime } = C.dist('push/push-runtime');
+  const { PushDispatcherService } = C.dist('push/push-dispatcher.service');
+  const { isAllowedPushEndpoint } = C.dist('push/push-endpoint-policy');
+  if (!fs.existsSync(VAPID_FILE)) {
+    const ecdh = require('crypto').createECDH('prime256v1');
+    ecdh.generateKeys();
+    fs.writeFileSync(
+      VAPID_FILE,
+      JSON.stringify({
+        publicKey: ecdh.getPublicKey().toString('base64url'),
+        privateKey: ecdh.getPrivateKey().toString('base64url'),
+      }),
+    );
+  }
+  const pair = JSON.parse(fs.readFileSync(VAPID_FILE, 'utf8'));
+  const transport = {
+    async send(target, payload, options) {
+      if (!isAllowedPushEndpoint(target.endpoint)) {
+        return { statusCode: null, error: 'refused-endpoint' };
+      }
+      fs.appendFileSync(
+        PUSH_FILE,
+        `${JSON.stringify({ endpoint: target.endpoint, payload: JSON.parse(payload), options })}
+`,
+      );
+      return { statusCode: 201 };
+    },
+  };
+  app.get(PushRuntime).activate(
+    {
+      enabled: true,
+      publicKey: pair.publicKey,
+      privateKey: pair.privateKey,
+      subject: 'mailto:recette@recette.local',
+    },
+    transport,
+  );
+  app.get(PushDispatcherService).start(1000);
 }
 
 function assertImplicitWritesDisabled() {

@@ -163,6 +163,21 @@ Sans Playwright ou Chromium disponibles, la commande répond « AUCUNE
 campagne exécutée » (code 3). Les scénarios redémarrent l'API et changent
 de fournisseur eux-mêmes ; lancer la campagne sur une stack dédiée.
 
+### Notifications push (1-16A)
+
+L'API de recette active les notifications avec une paire VAPID **fictive**
+(`push-vapid.json` du répertoire d'état) et un transport **simulé** : chaque
+message est consigné dans `push.jsonl`, aucun service push n'est contacté.
+
+```bash
+$R push-browser --playwright=<dir> [--chromium=<exe>] [--out=<dir>] [P1..P6]
+```
+
+La page reçoit un abonnement navigateur fictif ; le message consigné est
+livré au service worker existant par le protocole DevTools
+(`ServiceWorker.deliverPushMessage`). L'API est redémarrée avant chaque
+scénario (limiteur de connexion en mémoire).
+
 ## 5. Consulter et nettoyer
 
 - Résultats de campagne : `results.json` et captures dans `--out`

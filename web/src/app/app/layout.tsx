@@ -28,6 +28,8 @@ import { PendingSalesIfAny } from "@/components/sales/pending-sales-panel";
 import { TenantLogo } from "@/components/brand/tenant-logo";
 import { OnlineStatusIndicator } from "@/components/layout/online-status-indicator";
 import { CurrencyConverter } from "@/components/currency/currency-converter";
+import { NotificationBell } from "@/components/notifications/notification-bell";
+import { EngagementPrompt } from "@/components/notifications/engagement-prompt";
 import {
   Dialog,
   DialogContent,
@@ -935,6 +937,16 @@ export default function AppShellLayout({
                   >
                     <ArrowLeftRightIcon className="h-4 w-4" />
                   </button>
+                  {/* 1-16A.1 : cloche du centre, juste avant le nom ; session
+                      applicative avec contexte courant uniquement. */}
+                  {contextIsCurrent &&
+                    !commercialBlock &&
+                    authContext &&
+                    hasApplicationAccess(authContext) && (
+                      <NotificationBell
+                        key={`${sessionKey}:${authContext.organizationId}`}
+                      />
+                    )}
                   <span
                     className="hidden max-w-32 truncate text-sm text-muted-foreground sm:inline"
                     title={userFullName ?? undefined}
@@ -1017,6 +1029,16 @@ export default function AppShellLayout({
             <main
               className={`flex flex-1 flex-col ${navOffline ? "pb-24 md:pb-16" : "pb-16"}`}
             >
+              {/* 1-16A.1 : invitation installation / notifications, après
+                  chargement du contexte, en session applicative seulement. */}
+              {contextIsCurrent &&
+                !commercialBlock &&
+                authContext &&
+                hasApplicationAccess(authContext) && (
+                  <EngagementPrompt
+                    key={`${sessionKey}:${authContext.organizationId}`}
+                  />
+                )}
               {statusUnavailable ? (
                 <div className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
                   <p role="alert" className="text-sm">
