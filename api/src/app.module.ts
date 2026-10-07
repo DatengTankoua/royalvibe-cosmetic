@@ -18,6 +18,7 @@ import { ImageSecurityModule } from './common/image/image-security.module';
 import { PushModule } from './push/push.module';
 import { SupportModule } from './support/support.module';
 import { ReportsModule } from './reports/reports.module';
+import { LegalModule } from './legal/legal.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { ReportsModule } from './reports/reports.module';
     SupportModule,
     // 1-16D : historique mensuel exportable (Excel, PDF), lecture seule.
     ReportsModule,
+    LegalModule,
   ],
   controllers: [AppController],
   providers: [AppService],

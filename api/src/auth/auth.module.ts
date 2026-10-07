@@ -1,3 +1,4 @@
+import { LegalModule } from '../legal/legal.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
@@ -35,6 +36,8 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
     PasswordResetModule,
     // 1-14C.1 : contrôle commercial (garde globale + jetons limités).
     SubscriptionsModule,
+    // 1-16C.2 : preuve d'acceptation dans la transaction d'inscription.
+    LegalModule,
     PassportModule,
     // Instance du JwtModule (secret `JWT_SECRET`, `signOptions.expiresIn: '7d'`)
     // — MÊME configuration que l'auth HTTP : le handshake Socket.IO (0B.3)

@@ -42,6 +42,7 @@ import {
   RecordingEmailSender,
   verificationTokenFrom,
 } from './e2e/email-verification-fixtures';
+import { INVITATION_TERMS, OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 /**
  * E2E 1-13A — vérification des emails : `MongoMemoryReplSet` éphémère,
@@ -144,7 +145,13 @@ describe('Vérification des emails (e2e 1-13A)', () => {
   ): Promise<{ orgId: string; body: Record<string, unknown> }> {
     const res = await http()
       .post('/auth/register')
-      .send({ name: 'Owner', email, password: PASSWORD, organizationName });
+      .send({
+        ...OWNER_TERMS,
+        name: 'Owner',
+        email,
+        password: PASSWORD,
+        organizationName,
+      });
     expect(res.status).toBe(201);
     return {
       orgId: (res.body as { organization: { _id: string } }).organization._id,
@@ -319,12 +326,15 @@ describe('Vérification des emails (e2e 1-13A)', () => {
     it('compte créé par invitation : non vérifié, puis organisation et permissions conservées après confirmation', async () => {
       const owner = await verifiedOwner('owner-2-13a@verify.test', 'Org Inv');
       process.env.PUBLIC_REGISTRATION_ENABLED = 'false';
-      const closed = await http().post('/auth/register').send({
-        name: 'X',
-        email: 'closed-13a@verify.test',
-        password: PASSWORD,
-        organizationName: 'X',
-      });
+      const closed = await http()
+        .post('/auth/register')
+        .send({
+          ...OWNER_TERMS,
+          name: 'X',
+          email: 'closed-13a@verify.test',
+          password: PASSWORD,
+          organizationName: 'X',
+        });
       expect(closed.status).toBe(403);
 
       const invited = 'invited-13a@verify.test';
@@ -345,7 +355,12 @@ describe('Vérification des emails (e2e 1-13A)', () => {
 
       const accepted = await http()
         .post('/auth/invitations/accept')
-        .send({ token: invitationToken, name: 'Invited', password: PASSWORD });
+        .send({
+          ...INVITATION_TERMS,
+          token: invitationToken,
+          name: 'Invited',
+          password: PASSWORD,
+        });
       expect(accepted.status).toBe(200);
       expect(accepted.body.emailVerification).toEqual({ status: 'sent' });
       // Le lien d'invitation n'est PAS une preuve d'accès à la boîte mail.
@@ -773,12 +788,15 @@ describe('Vérification des emails (e2e 1-13A)', () => {
 
         expect(await userModel.countDocuments({ email })).toBe(1);
         expect((await internals(email))!.emailVerifiedAt ?? null).toBeNull();
-        const duplicate = await http().post('/auth/register').send({
-          name: 'Owner',
-          email,
-          password: PASSWORD,
-          organizationName: 'Org Fail 2',
-        });
+        const duplicate = await http()
+          .post('/auth/register')
+          .send({
+            ...OWNER_TERMS,
+            name: 'Owner',
+            email,
+            password: PASSWORD,
+            organizationName: 'Org Fail 2',
+          });
         expect(duplicate.status).toBe(400);
         expect(await userModel.countDocuments({ email })).toBe(1);
         expect((await login(email, orgId)).body.code).toBe(

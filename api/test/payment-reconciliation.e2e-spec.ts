@@ -54,6 +54,7 @@ import {
   stopEphemeralMongoSafe,
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 /**
  * E2E 1-14D.2G — rapprochement OPÉRATEUR (CLI), exécuté par la couche CLI
@@ -168,6 +169,7 @@ describe('Rapprochement opérateur par CLI (e2e 1-14D.2G)', () => {
     const reg = await request(server())
       .post('/auth/register')
       .send({
+        ...OWNER_TERMS,
         name: 'Owner',
         email,
         password: PASSWORD,

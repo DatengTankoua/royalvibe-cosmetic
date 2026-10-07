@@ -57,6 +57,18 @@ export default function GuidePage() {
                   caractères au plus).
                 </li>
                 <li>
+                  Lisez puis acceptez les{" "}
+                  <Link href="/conditions-utilisation">
+                    conditions d&apos;utilisation
+                  </Link>{" "}
+                  et les{" "}
+                  <Link href="/conditions-abonnement">
+                    conditions d&apos;abonnement
+                  </Link>{" "}
+                  en cochant la case prévue : le compte n&apos;est pas créé sans
+                  elle.
+                </li>
+                <li>
                   Un e-mail de confirmation vous est envoyé. Ouvrez le lien
                   qu&apos;il contient dans les 24 heures.
                 </li>
@@ -102,7 +114,11 @@ export default function GuidePage() {
                   par e-mail. Le lien n&apos;est affiché qu&apos;une fois et
                   reste valable 72 heures.
                 </li>
-                <li>La personne ouvre le lien et crée son accès.</li>
+                <li>
+                  La personne ouvre le lien et crée son accès. Si elle n&apos;a
+                  pas encore de compte, elle accepte les conditions
+                  d&apos;utilisation en cochant la case prévue.
+                </li>
               </ol>
               <h3>Rôles et droits</h3>
               <ul>

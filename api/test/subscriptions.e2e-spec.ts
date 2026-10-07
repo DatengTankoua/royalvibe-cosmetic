@@ -50,6 +50,7 @@ import {
   createE2eEmailSender,
   verificationTokenFrom,
 } from './e2e/email-verification-fixtures';
+import { INVITATION_TERMS, OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -107,6 +108,7 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
     const reg = await request(app.getHttpServer())
       .post('/auth/register')
       .send({
+        ...OWNER_TERMS,
         name: 'Owner',
         email,
         password: PASSWORD,
@@ -372,12 +374,15 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
           : originalCreate(docs, opts)) as unknown as typeof periodModel.create;
       let res: request.Response;
       try {
-        res = await request(app.getHttpServer()).post('/auth/register').send({
-          name: 'Rollback',
-          email,
-          password: PASSWORD,
-          organizationName: 'Rollback Org',
-        });
+        res = await request(app.getHttpServer())
+          .post('/auth/register')
+          .send({
+            ...OWNER_TERMS,
+            name: 'Rollback',
+            email,
+            password: PASSWORD,
+            organizationName: 'Rollback Org',
+          });
       } finally {
         periodModel.create =
           originalCreate as unknown as typeof periodModel.create;
@@ -457,6 +462,7 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
         const reg = await request(app.getHttpServer())
           .post('/auth/register')
           .send({
+            ...OWNER_TERMS,
             name: 'Late',
             email,
             password: PASSWORD,
@@ -498,7 +504,12 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
       clearThrottle();
       const accepted = await request(app.getHttpServer())
         .post('/auth/invitations/accept')
-        .send({ token, name: 'Invitee', password: PASSWORD });
+        .send({
+          ...INVITATION_TERMS,
+          token,
+          name: 'Invitee',
+          password: PASSWORD,
+        });
       expect(accepted.status).toBe(200);
       await login(inviteeEmail);
       await login(owner.email);

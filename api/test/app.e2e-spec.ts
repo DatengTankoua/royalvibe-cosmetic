@@ -43,6 +43,7 @@ import {
   autoConfirmVerificationEmails,
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -325,6 +326,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       const res = await request(app.getHttpServer())
         .post('/auth/register')
         .send({
+          ...OWNER_TERMS,
           name: 'Isolation E2E',
           email: ISO_EMAIL,
           password: 'iso-e2e-pw-!1x',
@@ -626,6 +628,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       const res = await request(app.getHttpServer())
         .post('/auth/register')
         .send({
+          ...OWNER_TERMS,
           name: 'Refusé',
           email: 'refuse-0b5@royalvibe.test',
           password: 'secret-123',
@@ -769,6 +772,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
         const res = await request(app.getHttpServer())
           .post('/auth/register')
           .send({
+            ...OWNER_TERMS,
             name: 'RL',
             email: `rl-${i}-${Date.now()}@royalvibe.test`,
             password: 'secret-123',
@@ -2066,6 +2070,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       request(app.getHttpServer()).post('/auth/register').send(body);
 
     const validBody = (email: string) => ({
+      ...OWNER_TERMS,
       name: 'Owner E2E',
       email,
       password: 'owner-e2e-pw-!1x',

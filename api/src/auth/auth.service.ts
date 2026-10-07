@@ -9,6 +9,8 @@ import type { Connection } from 'mongoose';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { UsersService } from '../users/users.service';
+import { LegalAcceptanceService } from '../legal/legal-acceptance.service';
+import { LegalAcceptanceContext } from '../legal/legal-documents';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { SwitchOrganizationDto } from './dto/switch-organization.dto';
@@ -112,6 +114,7 @@ export class AuthService {
     @InjectConnection() private connection: Connection,
     private emailVerificationService: EmailVerificationService,
     private subscriptionsService: SubscriptionsService,
+    private legalAcceptance: LegalAcceptanceService,
   ) {}
 
   /**
@@ -147,10 +150,19 @@ export class AuthService {
    * dans UNE seule transaction (même session sur les trois écritures).
    * Le flag `PUBLIC_REGISTRATION_ENABLED` est vérifié par le contrôleur
    * AVANT cet appel (jamais de logique/écriture si désactivé).
+   *
+   * 1-16C.2 : acceptation des conditions d'utilisation ET d'abonnement
+   * vérifiée AVANT toute écriture (case cochée, versions en vigueur,
+   * langue publiée), puis preuve enregistrée dans la MÊME transaction :
+   * sans preuve, ni compte ni commerce.
    */
   private async registerOwner(
     dto: RegisterDto,
   ): Promise<Omit<OwnerOnboardingResult, 'emailVerification'>> {
+    const legal = this.legalAcceptance.resolveSubmission(
+      LegalAcceptanceContext.OWNER_REGISTRATION,
+      dto.legalAcceptance,
+    );
     const hashed = await bcrypt.hash(dto.password, 10);
     const session = await this.connection.startSession();
     let created:
@@ -169,6 +181,11 @@ export class AuthService {
             user._id.toString(),
             session,
           );
+        await this.legalAcceptance.record(session, {
+          userId: user._id.toString(),
+          organizationId: organization._id.toString(),
+          submission: legal,
+        });
         created = {
           user,
           organization: {

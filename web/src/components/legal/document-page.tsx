@@ -47,8 +47,14 @@ export function DocumentPage({
         id="contenu"
         tabIndex={-1}
         className="mx-auto w-full max-w-6xl flex-1 px-4 pt-8 pb-16 outline-none sm:pt-12"
+        data-legal-document={doc?.id}
+        data-legal-version={doc?.version}
       >
-        <div className="max-w-3xl">
+        {/* 1-16C.2 : `data-legal-text` délimite le texte PRÉSENTÉ d'un
+        document versionné (titre, version, introduction, sections), extrait
+        du HTML prérendu et archivé par `web/scripts/legal-archive.mjs`. Le
+        sommaire (dérivé des titres) et les liens d'aide en sont exclus. */}
+        <div className="max-w-3xl" data-legal-text={doc ? "" : undefined}>
           <h1 className="text-3xl font-extrabold tracking-tight text-balance sm:text-4xl">
             {title}
           </h1>
@@ -91,23 +97,25 @@ export function DocumentPage({
           </nav>
 
           <div className="min-w-0 max-w-3xl">
-            {sections.map((section, index) => (
-              <section
-                key={section.id}
-                id={section.id}
-                aria-labelledby={`${section.id}-titre`}
-                className="scroll-mt-24 border-t border-(--brand-navy)/10 pt-8 pb-4 first:border-t-0 first:pt-0"
-              >
-                <h2
-                  id={`${section.id}-titre`}
-                  className="text-2xl font-bold tracking-tight text-balance"
+            <div data-legal-text={doc ? "" : undefined}>
+              {sections.map((section, index) => (
+                <section
+                  key={section.id}
+                  id={section.id}
+                  aria-labelledby={`${section.id}-titre`}
+                  className="scroll-mt-24 border-t border-(--brand-navy)/10 pt-8 pb-4 first:border-t-0 first:pt-0"
                 >
-                  <span className="tabular-nums">{index + 1}.</span>{" "}
-                  {section.title}
-                </h2>
-                <div className={bodyClass}>{section.content}</div>
-              </section>
-            ))}
+                  <h2
+                    id={`${section.id}-titre`}
+                    className="text-2xl font-bold tracking-tight text-balance"
+                  >
+                    <span className="tabular-nums">{index + 1}.</span>{" "}
+                    {section.title}
+                  </h2>
+                  <div className={bodyClass}>{section.content}</div>
+                </section>
+              ))}
+            </div>
             <p className="mt-10 text-sm text-[#3d4e66]">
               Une question sur ce texte ?{" "}
               <Link

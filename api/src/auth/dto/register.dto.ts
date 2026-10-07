@@ -1,11 +1,14 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsEmail,
   IsNotEmpty,
+  IsOptional,
   IsString,
   MaxLength,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
+import { LegalAcceptanceDto } from '../../legal/dto/legal-acceptance.dto';
 import {
   ORGANIZATION_NAME_MAX_LENGTH,
   ORGANIZATION_NAME_MESSAGE,
@@ -42,4 +45,12 @@ export class RegisterDto {
     message: ORGANIZATION_NAME_MESSAGE,
   })
   organizationName: string;
+
+  // 1-16C.2 : documents affichés et case cochée. Facultatif AU DTO pour un
+  // refus au code stable (`LEGAL_ACCEPTANCE_REQUIRED`) par le service, avant
+  // toute écriture ; versions, date et empreintes fixées par le serveur.
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => LegalAcceptanceDto)
+  legalAcceptance?: LegalAcceptanceDto;
 }

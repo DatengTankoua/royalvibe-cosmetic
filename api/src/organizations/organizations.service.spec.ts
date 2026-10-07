@@ -45,6 +45,18 @@ import {
   OrganizationRole,
   OrganizationStatus,
 } from './permissions';
+import { LegalAcceptanceService } from '../legal/legal-acceptance.service';
+
+/** 1-16C.2 : acceptation des conditions (validée et enregistrée en e2e). */
+const legalAcceptanceStub = () => ({
+  resolveSubmission: jest.fn(() => ({
+    context: 'owner_registration',
+    locale: 'fr',
+    documents: [],
+    notices: [],
+  })),
+  record: jest.fn(() => Promise.resolve(undefined)),
+});
 
 const USER_OBJECT_ID = '112233445566778899001122';
 const ORG_OBJECT_ID = '223344556677889900112233';
@@ -100,6 +112,7 @@ describe('OrganizationsService.resolveActiveContext', () => {
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
+        { provide: LegalAcceptanceService, useValue: legalAcceptanceStub() },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -441,6 +454,7 @@ describe('OrganizationsService.listActiveOrganizations', () => {
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
+        { provide: LegalAcceptanceService, useValue: legalAcceptanceStub() },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -778,6 +792,7 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
         { provide: ConfigService, useValue: invitationConfig },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
+        { provide: LegalAcceptanceService, useValue: legalAcceptanceStub() },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1436,6 +1451,7 @@ describe('OrganizationsService.acceptInvitation (1-6B.2)', () => {
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
+        { provide: LegalAcceptanceService, useValue: legalAcceptanceStub() },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1771,6 +1787,7 @@ describe('OrganizationsService.listMembers (1-7C)', () => {
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
+        { provide: LegalAcceptanceService, useValue: legalAcceptanceStub() },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -1838,6 +1855,7 @@ describe('OrganizationsService.updateMembership (1-7C)', () => {
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
+        { provide: LegalAcceptanceService, useValue: legalAcceptanceStub() },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -2091,6 +2109,7 @@ describe('OrganizationsService.transferOwnership (1-7C)', () => {
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
+        { provide: LegalAcceptanceService, useValue: legalAcceptanceStub() },
       ],
     }).compile();
     service = module.get(OrganizationsService);
@@ -2280,6 +2299,7 @@ describe('OrganizationsService — branding (1-8A)', () => {
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
+        { provide: LegalAcceptanceService, useValue: legalAcceptanceStub() },
       ],
     }).compile();
     service = module.get(OrganizationsService);

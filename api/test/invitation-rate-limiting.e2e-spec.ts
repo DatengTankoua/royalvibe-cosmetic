@@ -34,6 +34,7 @@ import {
   autoConfirmVerificationEmails,
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -134,6 +135,7 @@ describe('Rate limiting invitations (e2e 1-10B) — POST /organizations/invitati
       const reg = await request(app.getHttpServer())
         .post('/auth/register')
         .send({
+          ...OWNER_TERMS,
           name: 'Owner A RL110B',
           email: OWNER_A_EMAIL,
           password: PASSWORD,

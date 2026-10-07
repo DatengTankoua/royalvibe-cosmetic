@@ -44,6 +44,7 @@ import {
   RecordingEmailSender,
   verificationTokenFrom,
 } from './e2e/email-verification-fixtures';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 /**
  * E2E 1-13B — mot de passe oublié et réinitialisation : `MongoMemoryReplSet`
@@ -158,7 +159,13 @@ describe('Mot de passe oublié et réinitialisation (e2e 1-13B)', () => {
   async function verifiedOwner(email: string, organizationName: string) {
     const reg = await http()
       .post('/auth/register')
-      .send({ name: 'Owner', email, password: PASSWORD, organizationName });
+      .send({
+        ...OWNER_TERMS,
+        name: 'Owner',
+        email,
+        password: PASSWORD,
+        organizationName,
+      });
     expect(reg.status).toBe(201);
     const sent = recorder.sentTo(email);
     const confirmed = await http()
@@ -389,12 +396,15 @@ describe('Mot de passe oublié et réinitialisation (e2e 1-13B)', () => {
   describe('3. Compte non vérifié', () => {
     it('mot de passe changé, adresse toujours non vérifiée, connexion toujours soumise à 1-13A', async () => {
       const email = 'unverified-13b@reset.test';
-      const reg = await http().post('/auth/register').send({
-        name: 'Unverified',
-        email,
-        password: PASSWORD,
-        organizationName: 'Org Unverified',
-      });
+      const reg = await http()
+        .post('/auth/register')
+        .send({
+          ...OWNER_TERMS,
+          name: 'Unverified',
+          email,
+          password: PASSWORD,
+          organizationName: 'Org Unverified',
+        });
       expect(reg.status).toBe(201);
       const before = await internals(email);
       await resetPassword(email);

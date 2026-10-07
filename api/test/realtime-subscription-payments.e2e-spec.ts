@@ -55,6 +55,7 @@ import {
 } from './e2e/ephemeral-mongodb';
 import { SimulatedPaymentProvider } from './e2e/simulated-payment-provider';
 import { until } from './e2e/barriers';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 /**
  * E2E 1-15F — signaux temps réel des abonnements et paiements, sur le replica
@@ -139,6 +140,7 @@ describe('Temps réel abonnements et paiements (e2e 1-15F)', () => {
     const reg = await request(server())
       .post('/auth/register')
       .send({
+        ...OWNER_TERMS,
         name: 'Owner',
         email,
         password: PASSWORD,

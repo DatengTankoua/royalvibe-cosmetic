@@ -24,6 +24,39 @@ function verificationTokenFor(email) {
   return decodeURIComponent(match[1]);
 }
 
+/**
+ * 1-16C.2 — Acceptation telle que l'envoie le web (case cochée) : versions
+ * COURANTES lues dans le manifeste compilé (`api/dist/legal/archive`).
+ */
+const LEGAL_REQUIREMENTS = {
+  owner_registration: {
+    documents: ['conditions-utilisation', 'conditions-abonnement'],
+    notices: ['confidentialite'],
+  },
+  invitation_account: {
+    documents: ['conditions-utilisation'],
+    notices: ['confidentialite'],
+  },
+};
+
+function legalAcceptance(context) {
+  const manifest = JSON.parse(
+    fs.readFileSync(
+      path.join(C.DIST, 'legal', 'archive', 'manifest.json'),
+      'utf8',
+    ),
+  );
+  const refs = (ids) =>
+    ids.map((id) => ({ id, version: manifest.documents[id].current }));
+  const r = LEGAL_REQUIREMENTS[context];
+  return {
+    accepted: true,
+    locale: 'fr',
+    documents: refs(r.documents),
+    notices: refs(r.notices),
+  };
+}
+
 let sequence = 0;
 const uniqueEmail = (label) => {
   sequence += 1;
@@ -39,6 +72,7 @@ async function registerOwner(label) {
       email,
       password: C.PASSWORD,
       organizationName: `Shop ${label}`.slice(0, 20),
+      legalAcceptance: legalAcceptance('owner_registration'),
     },
   });
   if (registered.status !== 201)
@@ -75,7 +109,12 @@ async function inviteMember(ownerToken, role, label) {
     'token',
   );
   const accepted = await C.api('POST', '/auth/invitations/accept', {
-    body: { token, name: label.slice(0, 20), password: C.PASSWORD },
+    body: {
+      token,
+      name: label.slice(0, 20),
+      password: C.PASSWORD,
+      legalAcceptance: legalAcceptance('invitation_account'),
+    },
   });
   if (accepted.status !== 200)
     throw new Error(`acceptation : HTTP ${accepted.status} ${accepted.text}`);
@@ -180,6 +219,7 @@ function runReconciliation(kind, uri, args) {
 }
 
 module.exports = {
+  legalAcceptance,
   verificationTokenFor,
   registerOwner,
   inviteMember,

@@ -34,6 +34,7 @@ import {
   autoConfirmVerificationEmails,
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -191,6 +192,7 @@ describe('Phase 1-4E — portail transversal d’isolation multi-tenant', () => 
       const registration = await request(app.getHttpServer())
         .post('/auth/register')
         .send({
+          ...OWNER_TERMS,
           name: 'Admin Gate 1-4E',
           email: ADMIN_EMAIL,
           password: ADMIN_PASSWORD,

@@ -30,6 +30,7 @@ import {
   autoConfirmVerificationEmails,
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -125,6 +126,7 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
       const reg1 = await request(app.getHttpServer())
         .post('/auth/register')
         .send({
+          ...OWNER_TERMS,
           name: 'Owner 1',
           email: OWNER1_EMAIL,
           password: PASSWORD,
@@ -136,6 +138,7 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
       const reg2 = await request(app.getHttpServer())
         .post('/auth/register')
         .send({
+          ...OWNER_TERMS,
           name: 'Owner 2',
           email: OWNER2_EMAIL,
           password: PASSWORD,
@@ -241,6 +244,7 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
       const regStranded = await request(app.getHttpServer())
         .post('/auth/register')
         .send({
+          ...OWNER_TERMS,
           name: 'Stranded Owner',
           email: STRANDED_OWNER_EMAIL,
           password: PASSWORD,

@@ -32,6 +32,7 @@ import {
   autoConfirmVerificationEmails,
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -400,6 +401,7 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
         request(app.getHttpServer())
           .post('/auth/register')
           .send({
+            ...OWNER_TERMS,
             name,
             email,
             password,

@@ -44,6 +44,8 @@ const MIGRATIONS = [
   'create-push-notification-indexes.js',
   // 1-16C.1 : purge du registre des demandes d'assistance.
   'create-support-request-indexes.js',
+  // 1-16C.2 : collections et index des preuves d'acceptation.
+  'create-legal-acceptance-indexes.js',
 ];
 const NEXT_BIN = path.join(
   C.WEB_DIR,
@@ -407,6 +409,11 @@ async function start(options) {
     const env = C.apiEnv(stack.uri, {
       RECIPE_PROVIDER: stack.provider,
       RECIPE_LAUNCHED: '1',
+      // 1-16C.2 : `start --legal-prompt` (recette uniquement) active l'invite
+      // des comptes existants ; absent par défaut, comme en production.
+      ...(options.legalPrompt
+        ? { LEGAL_ACCEPTANCE_PROMPT_ENABLED: 'true' }
+        : {}),
     });
     stack.api = startChild(
       'api',

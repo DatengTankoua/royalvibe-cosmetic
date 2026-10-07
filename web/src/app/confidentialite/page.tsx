@@ -94,6 +94,27 @@ export default function ConfidentialitePage() {
                   d&apos;expiration et le nombre d&apos;envois récents.
                 </li>
               </ul>
+              <h3>Acceptation des conditions</h3>
+              <ul>
+                <li>
+                  identifiant de votre compte et, s&apos;il y a lieu, du
+                  commerce concerné ;
+                </li>
+                <li>
+                  date et heure de l&apos;acceptation, fixées par le serveur ;
+                </li>
+                <li>
+                  langue, versions et empreintes numériques des textes acceptés
+                  et de cette politique telle qu&apos;elle vous a été présentée.
+                </li>
+              </ul>
+              <p>
+                Lire cette politique ne vaut pas accord : elle vous informe.
+                Aucune autorisation facultative (par exemple pour des messages
+                commerciaux) n&apos;est demandée à l&apos;inscription, et
+                l&apos;activation des notifications sur un appareil reste un
+                choix séparé.
+              </p>
               <h3>Commerce et membres</h3>
               <ul>
                 <li>nom du commerce, logo, couleur, devise, état ;</li>
@@ -209,8 +230,23 @@ export default function ConfidentialitePage() {
                     </td>
                     <td>
                       Votre consentement
-                      {/* À COMPLÉTER : recueil et preuve du consentement à
-                      l'inscription (acceptation versionnée, lot dédié). */}
+                      {/* À VALIDER par un juriste (1-16C.2) : la case
+                      d'inscription porte sur l'acceptation des CONDITIONS ;
+                      elle n'est pas présentée comme le consentement de
+                      l'art. 9 au traitement des données du compte. Forme et
+                      preuve de ce consentement (case distincte ou autre
+                      fondement) à décider ; ne pas les confondre. */}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      Conserver la preuve de votre acceptation des conditions
+                    </td>
+                    <td>
+                      Obligation légale : la preuve de l&apos;information et de
+                      l&apos;acceptation incombe au prestataire (loi n°
+                      2010/021, art. 26 ; décret n° 2011/1521/PM, art. 12).
+                      {/* À VALIDER par un juriste. */}
                     </td>
                   </tr>
                   <tr>
@@ -430,6 +466,19 @@ export default function ConfidentialitePage() {
                     <td>
                       Tant que le compte existe.
                       {/* À COMPLÉTER : durée après une demande de suppression. */}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      Preuve d&apos;acceptation des conditions et textes
+                      acceptés
+                    </td>
+                    <td>
+                      Conservés tant que le compte existe. Rien n&apos;est
+                      supprimé automatiquement aujourd&apos;hui.
+                      {/* À COMPLÉTER (1-16C.2) : durée après la fin du compte ou
+                      du commerce (10 ans envisagés pour un contrat d'au moins
+                      20 000 FCFA, décret 2011/1521/PM art. 8 ; à valider). */}
                     </td>
                   </tr>
                   <tr>

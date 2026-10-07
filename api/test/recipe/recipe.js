@@ -49,6 +49,9 @@ Contrôles d'isolement (.env) :
   isolated api-unit|api-e2e [motifs]  suites API (jest) isolées des .env réels
                                   option --tz=<IANA> (1-16D) : fuseau du processus Jest
   isolated web-build              next build dans la copie isolée (recette arrêtée)
+                                  + contrôle des archives juridiques ;
+                                  --legal-archive=write --published-at=AAAA-MM-JJ
+                                  archive une NOUVELLE version (1-16C.2)
   env-guard-selftest              garde JavaScript (canaris, témoin sans garde)
   web-canary-check [--out=<f>]    vrai next build / next start avec canaris (témoin, garde, copie isolée)
 `;
@@ -252,6 +255,8 @@ async function main(argv) {
       await require('./launcher').start({
         provider: flags.provider,
         keepLogs: Boolean(flags['keep-logs']),
+        // 1-16C.2 : invite des comptes existants, pour la recette SEULEMENT.
+        legalPrompt: Boolean(flags['legal-prompt']),
       });
       return new Promise(() => {}); // premier plan jusqu'à l'arrêt
     case 'stop':
@@ -428,8 +433,15 @@ async function main(argv) {
     case 'isolated':
       return require('./isolated-checks').main(rest[0], [
         ...rest.slice(1),
-        // 1-16D : seule option transmise (fuseau du processus Jest).
+        // 1-16D : fuseau du processus Jest.
         ...(typeof flags.tz === 'string' ? [`--tz=${flags.tz}`] : []),
+        // 1-16C.2 : archivage d'une nouvelle version juridique (web-build).
+        ...(flags['legal-archive'] === 'write'
+          ? ['--legal-archive=write']
+          : []),
+        ...(typeof flags['published-at'] === 'string'
+          ? [`--published-at=${flags['published-at']}`]
+          : []),
       ]);
     case 'web-canary-check': {
       const result = await require('./web-canary').webCanaryCheck();

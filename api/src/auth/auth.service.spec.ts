@@ -16,6 +16,18 @@ import {
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { AccessScope } from '../subscriptions/subscription-access';
 import { EmailVerificationService } from '../email-verification/email-verification.service';
+import { LegalAcceptanceService } from '../legal/legal-acceptance.service';
+
+/** 1-16C.2 : acceptation des conditions (validée et enregistrée en e2e). */
+const legalAcceptanceStub = () => ({
+  resolveSubmission: jest.fn(() => ({
+    context: 'owner_registration',
+    locale: 'fr',
+    documents: [],
+    notices: [],
+  })),
+  record: jest.fn(() => Promise.resolve(undefined)),
+});
 
 const USER_OBJECT_ID = '112233445566778899001122';
 const ORG_A_ID = '223344556677889900112233';
@@ -127,6 +139,7 @@ describe('AuthService', () => {
         },
         { provide: EmailVerificationService, useValue: emailVerification },
         { provide: SubscriptionsService, useValue: subscriptions },
+        { provide: LegalAcceptanceService, useValue: legalAcceptanceStub() },
       ],
     }).compile();
     return module.get(AuthService);

@@ -80,6 +80,7 @@ import {
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
 import { SimulatedPaymentProvider } from './e2e/simulated-payment-provider';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 /**
  * E2E 1-16A — notifications Web Push métier, sur le replica set éphémère
@@ -214,6 +215,7 @@ describe('Notifications Web Push métier (e2e 1-16A)', () => {
     const reg = await request(server())
       .post('/auth/register')
       .send({
+        ...OWNER_TERMS,
         name: 'Owner',
         email,
         password: PASSWORD,

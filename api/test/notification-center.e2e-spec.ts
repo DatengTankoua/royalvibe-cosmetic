@@ -79,6 +79,7 @@ import {
 } from './e2e/ephemeral-mongodb';
 import { SimulatedPaymentProvider } from './e2e/simulated-payment-provider';
 import { until } from './e2e/barriers';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 /**
  * E2E 1-16A.1 — centre de notifications, seuil de 80 %, nouvelles ventes,
@@ -190,6 +191,7 @@ describe('Centre de notifications (e2e 1-16A.1)', () => {
     const reg = await request(server())
       .post('/auth/register')
       .send({
+        ...OWNER_TERMS,
         name: `Owner ${seq}`,
         email,
         password: PASSWORD,

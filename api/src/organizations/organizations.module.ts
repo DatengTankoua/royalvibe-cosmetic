@@ -1,3 +1,4 @@
+import { LegalModule } from '../legal/legal.module';
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import {
@@ -28,6 +29,8 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
     S3Module,
     // 1-14B : essai attribué dans la transaction de création.
     SubscriptionsModule,
+    // 1-16C.2 : preuve d'acceptation dans la transaction d'invitation.
+    LegalModule,
     MongooseModule.forFeature([
       { name: Organization.name, schema: OrganizationSchema },
       {

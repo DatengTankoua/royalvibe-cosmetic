@@ -35,6 +35,7 @@ import {
   autoConfirmVerificationEmails,
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
+import { INVITATION_TERMS, OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -221,6 +222,7 @@ describe('Permissions et visibilité des informations produit (e2e 1-12H)', () =
         const reg = await http()
           .post('/auth/register')
           .send({
+            ...OWNER_TERMS,
             name: `Owner ${key}`,
             email: `owner-${key}-12h@royalvibe.test`,
             password: PASSWORD,
@@ -607,7 +609,12 @@ describe('Permissions et visibilité des informations produit (e2e 1-12H)', () =
       );
       const accepted = await http()
         .post('/auth/invitations/accept')
-        .send({ token, name: 'Invité', password: PASSWORD });
+        .send({
+          ...INVITATION_TERMS,
+          token,
+          name: 'Invité',
+          password: PASSWORD,
+        });
       expect(accepted.status).toBe(200);
       const relog = await login(email);
       const context = await http()

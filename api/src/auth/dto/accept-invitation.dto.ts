@@ -1,11 +1,13 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsNotEmpty,
   IsOptional,
   IsString,
   MaxLength,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
+import { LegalAcceptanceDto } from '../../legal/dto/legal-acceptance.dto';
 import {
   USER_NAME_MAX_LENGTH,
   USER_NAME_MESSAGE,
@@ -36,4 +38,12 @@ export class AcceptInvitationDto {
   @MinLength(6)
   @MaxLength(100)
   password?: string;
+
+  // 1-16C.2 : requis seulement pour CRÉER un compte (vérifié en service).
+  // Pour un compte existant, il est ignoré : le lien d'invitation ne prouve
+  // pas l'identité, l'accord est demandé après connexion.
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => LegalAcceptanceDto)
+  legalAcceptance?: LegalAcceptanceDto;
 }

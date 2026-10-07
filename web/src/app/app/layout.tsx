@@ -31,6 +31,7 @@ import { OnlineStatusIndicator } from "@/components/layout/online-status-indicat
 import { CurrencyConverter } from "@/components/currency/currency-converter";
 import { NotificationBell } from "@/components/notifications/notification-bell";
 import { EngagementPrompt } from "@/components/notifications/engagement-prompt";
+import { LegalAcceptancePrompt } from "@/components/legal/legal-acceptance-prompt";
 import {
   Dialog,
   DialogContent,
@@ -1039,9 +1040,17 @@ export default function AppShellLayout({
                 !commercialBlock &&
                 authContext &&
                 hasApplicationAccess(authContext) && (
-                  <EngagementPrompt
-                    key={`${sessionKey}:${authContext.organizationId}`}
-                  />
+                  <>
+                    {/* 1-16C.2 : accord d'un compte existant, si le serveur
+                        l'active ; ne bloque ni les ventes ni l'outbox. */}
+                    <LegalAcceptancePrompt
+                      key={`legal:${sessionKey}:${authContext.organizationId}`}
+                      scope={`${authContext.userId}:${authContext.organizationId}`}
+                    />
+                    <EngagementPrompt
+                      key={`${sessionKey}:${authContext.organizationId}`}
+                    />
+                  </>
                 )}
               {statusUnavailable ? (
                 <div className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4 text-center">

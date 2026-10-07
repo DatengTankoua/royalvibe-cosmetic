@@ -6,6 +6,7 @@ import type {
   DelegablePermission,
   OrganizationRole,
 } from "./organization-permissions";
+import type { LegalAcceptancePayload } from "./legal/acceptance";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -276,6 +277,8 @@ export async function authRegister(payload: {
   email: string;
   password: string;
   organizationName: string;
+  /** 1-16C.2 : documents affichés et acceptés (le serveur fait foi). */
+  legalAcceptance: LegalAcceptancePayload;
 }): Promise<OwnerRegistrationResult> {
   const { data } = await apiClient.post("/auth/register", payload);
   return data;
@@ -293,6 +296,8 @@ export async function acceptInvitation(payload: {
   token: string;
   name?: string;
   password?: string;
+  /** 1-16C.2 : requis seulement pour CRÉER un compte (case cochée). */
+  legalAcceptance?: LegalAcceptancePayload;
 }): Promise<AcceptInvitationResult> {
   const { data } = await apiClient.post("/auth/invitations/accept", payload);
   return data;

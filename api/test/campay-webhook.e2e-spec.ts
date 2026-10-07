@@ -47,6 +47,7 @@ import {
   stopEphemeralMongoSafe,
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 /**
  * E2E 1-14D.2F — webhook CamPay ACTIVÉ PAR INJECTION (test uniquement :
@@ -172,6 +173,7 @@ describe('Webhook CamPay (e2e 1-14D.2F)', () => {
     const reg = await request(server())
       .post('/auth/register')
       .send({
+        ...OWNER_TERMS,
         name: 'Owner',
         email,
         password: PASSWORD,

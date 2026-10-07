@@ -323,6 +323,36 @@ export default function ConditionsUtilisationPage() {
           ),
         },
         {
+          id: "acceptation",
+          title: "Acceptation de ces conditions",
+          content: (
+            <>
+              <p>
+                Vous acceptez ces conditions en cochant la case prévue à la
+                création de votre compte, que vous créiez un commerce ou que
+                vous rejoigniez un commerce sur invitation. Cette case
+                n&apos;est jamais cochée d&apos;avance, et le compte n&apos;est
+                pas créé sans elle.
+              </p>
+              <p>
+                Le serveur de {SITE.name} enregistre alors la preuve de votre
+                acceptation : votre compte, le commerce concerné, la date et
+                l&apos;heure fixées par le serveur, la langue, la version du
+                texte et son empreinte numérique. Cette empreinte permet de
+                retrouver le texte exact que vous avez accepté. Chaque version
+                acceptée est archivée, et une nouvelle version ne remplace ni
+                les textes précédents ni les preuves déjà enregistrées.
+              </p>
+              <p>
+                Si votre compte existait avant la mise en place de cette
+                acceptation, ou si une nouvelle version vous concerne, votre
+                accord vous sera demandé dans l&apos;application. Aucune
+                acceptation n&apos;est enregistrée à votre place.
+              </p>
+            </>
+          ),
+        },
+        {
           id: "modifications",
           title: "Modification des conditions",
           content: (

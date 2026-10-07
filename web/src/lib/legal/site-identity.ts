@@ -108,6 +108,8 @@ export const PROVIDERS: ReadonlyArray<{
 export type DocumentStatus = "projet" | "en-vigueur";
 
 export interface PublicDocument {
+  /** Identifiant stable, partagé avec l'API (archive des versions). */
+  id: string;
   href: string;
   title: string;
   /** Libellé court pour les listes de liens. */
@@ -126,43 +128,80 @@ const DRAFT = {
   updatedAt: "7 octobre 2026",
 } as const;
 
+// 1-16C.2 — Documents soumis à acceptation (ou présentés à l'inscription) :
+// leur texte prérendu est archivé, avec son empreinte, dans
+// `api/src/legal/archive/` (manifeste). TOUTE modification du texte affiché
+// (y compris d'un prix ou d'une coordonnée rendus dans la page) impose une
+// NOUVELLE version ici, puis son archivage : `web/scripts/legal-archive.mjs`
+// refuse sinon le build vérifié (texte ≠ archive de la version déclarée).
+// Une version archivée n'est jamais réécrite.
+const DRAFT_0_3 = {
+  status: "projet",
+  version: "0.3",
+  updatedAt: "7 octobre 2026",
+} as const;
+
+// 1-16C.2 (finalisation) — Conditions d'abonnement 0.4 : le paiement en
+// ligne n'est pas activé (`UnavailablePaymentProvider`). La version 0.3,
+// archivée et éventuellement acceptée, reste dans l'archive sans changement.
+const DRAFT_0_4 = {
+  status: "projet",
+  version: "0.4",
+  updatedAt: "7 octobre 2026",
+} as const;
+
+// Cookies et accord de traitement : textes modifiés par 03f5459
+// (7 octobre 2026, exports mensuels) sans changement de numéro. Leur état
+// actuel reçoit la version 0.3. Non soumis à acceptation dans ce lot.
+const DRAFT_COOKIES_DPA = {
+  status: "projet",
+  version: "0.3",
+  updatedAt: "7 octobre 2026",
+} as const;
+
 /** Documents juridiques et contractuels, dans l'ordre d'affichage. */
 export const LEGAL_DOCUMENTS: readonly PublicDocument[] = Object.freeze([
   {
+    id: "mentions-legales",
     href: "/mentions-legales",
     title: "Mentions légales",
     short: "Mentions légales",
     ...DRAFT,
   },
   {
+    id: "conditions-utilisation",
     href: "/conditions-utilisation",
     title: "Conditions d'utilisation",
     short: "Conditions d'utilisation",
-    ...DRAFT,
+    ...DRAFT_0_3,
   },
   {
+    id: "conditions-abonnement",
     href: "/conditions-abonnement",
     title: "Conditions d'abonnement",
     short: "Conditions d'abonnement",
-    ...DRAFT,
+    ...DRAFT_0_4,
   },
   {
+    id: "confidentialite",
     href: "/confidentialite",
     title: "Politique de confidentialité",
     short: "Confidentialité",
-    ...DRAFT,
+    ...DRAFT_0_3,
   },
   {
+    id: "cookies",
     href: "/cookies",
     title: "Cookies et stockage sur l'appareil",
     short: "Cookies et stockage",
-    ...DRAFT,
+    ...DRAFT_COOKIES_DPA,
   },
   {
+    id: "traitement-donnees",
     href: "/traitement-donnees",
     title: "Accord de traitement des données",
     short: "Traitement des données",
-    ...DRAFT,
+    ...DRAFT_COOKIES_DPA,
   },
 ]);
 
@@ -175,4 +214,8 @@ export function legalDocument(href: string): PublicDocument {
   const doc = LEGAL_DOCUMENTS.find((d) => d.href === href);
   if (!doc) throw new Error(`Document inconnu : ${href}`);
   return doc;
+}
+
+export function legalDocumentById(id: string): PublicDocument | undefined {
+  return LEGAL_DOCUMENTS.find((d) => d.id === id);
 }

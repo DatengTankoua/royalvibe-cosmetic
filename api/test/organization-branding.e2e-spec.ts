@@ -34,6 +34,7 @@ import {
   autoConfirmVerificationEmails,
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
+import { INVITATION_TERMS, OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -170,6 +171,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       const regA = await request(app.getHttpServer())
         .post('/auth/register')
         .send({
+          ...OWNER_TERMS,
           name: 'Owner A',
           email: OWNER_A_EMAIL,
           password: PASSWORD,
@@ -181,6 +183,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       const regB = await request(app.getHttpServer())
         .post('/auth/register')
         .send({
+          ...OWNER_TERMS,
           name: 'Owner B',
           email: OWNER_B_EMAIL,
           password: PASSWORD,
@@ -494,7 +497,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
     const register = (body: Record<string, unknown>) =>
       request(app.getHttpServer())
         .post('/auth/register')
-        .send({ password: PASSWORD, ...body });
+        .send({ ...OWNER_TERMS, password: PASSWORD, ...body });
     let seq = 0;
     const email = () => `names-${++seq}-112c@royalvibe.test`;
 
@@ -587,7 +590,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       const accept = (token: string, name: string) =>
         request(app.getHttpServer())
           .post('/auth/invitations/accept')
-          .send({ token, name, password: PASSWORD });
+          .send({ ...INVITATION_TERMS, token, name, password: PASSWORD });
 
       const t81 = await issue(email());
       expect((await accept(t81, 'u'.repeat(21))).status).toBe(400);

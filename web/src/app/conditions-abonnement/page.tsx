@@ -167,25 +167,23 @@ export default function ConditionsAbonnementPage() {
           title: "Paiement et renouvellement",
           content: (
             <>
+              {/* 1-16C.2 (0.4) : remplace l'annonce d'un paiement en ligne
+              disponible (version 0.3), contraire au code
+              (`UnavailablePaymentProvider`). Aucune procédure de paiement ni
+              garantie de renouvellement n'est décrite. */}
               <p>
-                <strong>Le paiement en ligne est disponible.</strong> Les
-                paiements se font pour le moment par virements MTN ou Orange
-                Mobile Money dans {SITE.name}.
+                Le paiement en ligne n&apos;est pas encore activé. Pour toute
+                demande de renouvellement, contactez{" "}
+                <MailLink
+                  to="support"
+                  subject="Renouvellement de l'abonnement"
+                />
+                .
               </p>
               <ul>
                 <li>
                   Il n&apos;y a aucun renouvellement ni prélèvement automatique
                   : chaque nouvelle période est une décision du propriétaire.
-                </li>
-                <li>
-                  En cas de problème lors du paiement, le propriétaire écrit
-                  depuis Organisation, puis Assistance (catégorie « Abonnement
-                  »), ou à{" "}
-                  <MailLink
-                    to="support"
-                    subject="Renouvellement de l'abonnement"
-                  />
-                  .
                 </li>
                 {/* À COMPLÉTER : moyens de paiement acceptés, justificatif
                 remis et délai d'activation, une fois la procédure confirmée. */}
@@ -241,6 +239,34 @@ export default function ConditionsAbonnementPage() {
               remboursement ; droit de rétractation (loi 2010/021, art. 20 ;
               décret 2011/1521/PM, art. 13 à 15 et 20 ; loi-cadre 2011/012,
               art. 7), à fixer avec un juriste. */}
+            </>
+          ),
+        },
+        {
+          id: "acceptation",
+          title: "Qui accepte ces conditions",
+          content: (
+            <>
+              <p>
+                Ces conditions engagent la personne qui crée le commerce et en
+                devient propriétaire. Elle les accepte en cochant la case prévue
+                à l&apos;inscription, avec les conditions d&apos;utilisation.
+                Cette case n&apos;est jamais cochée d&apos;avance.
+              </p>
+              <p>
+                Les administrateurs et les vendeurs invités acceptent les
+                conditions d&apos;utilisation, pas ces conditions. Après un
+                transfert de propriété, l&apos;accord du nouveau propriétaire
+                lui sera demandé dans l&apos;application.
+              </p>
+              <p>
+                La preuve de l&apos;acceptation est enregistrée par le serveur
+                comme décrit dans les{" "}
+                <Link href="/conditions-utilisation#acceptation">
+                  conditions d&apos;utilisation
+                </Link>
+                , avec le commerce concerné.
+              </p>
             </>
           ),
         },

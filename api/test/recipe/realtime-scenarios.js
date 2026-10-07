@@ -22,6 +22,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const L = require('./lib');
+const A = require('./actions');
 
 const { WEB, API } = L;
 const only = process.argv.slice(2).filter((a) => !a.startsWith('--'));
@@ -400,7 +401,12 @@ async function apiRevoke(token, id) {
 
 async function apiAccept(rawToken, name) {
   const res = await L.http('POST', '/auth/invitations/accept', {
-    body: { token: rawToken, name, password: L.C.PASSWORD },
+    body: {
+      token: rawToken,
+      name,
+      password: L.C.PASSWORD,
+      legalAcceptance: A.legalAcceptance('invitation_account'),
+    },
   });
   ok(res.status === 200, `acceptation ${res.status} ${res.text}`);
 }

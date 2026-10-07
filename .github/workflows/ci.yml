@@ -39,3 +39,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm build
+      # 1-16C.2 : le texte prérendu des documents soumis à acceptation doit
+      # être identique à l'archive de sa version (api/src/legal/archive).
+      - run: node scripts/legal-archive.mjs check --next-dir .next

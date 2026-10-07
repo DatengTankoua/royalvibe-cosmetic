@@ -20,6 +20,7 @@ require('./preload.cjs');
 const C = require('./recipe-common');
 const { ACCOUNTS } = require('./fixtures');
 const { expireOrganization } = require('./db-tools');
+const { legalAcceptance } = require('./actions');
 
 async function main() {
   C.assertRecipeUri(process.env.MONGODB_URI);
@@ -74,6 +75,8 @@ async function main() {
         email: account.email,
         password: C.PASSWORD,
         organizationName: account.organization,
+        // 1-16C.2 : case cochée, comme le formulaire web.
+        legalAcceptance: legalAcceptance('owner_registration'),
       });
       await confirm(account.email);
       created[account.key] = {
@@ -96,6 +99,7 @@ async function main() {
         token,
         name: account.name,
         password: C.PASSWORD,
+        legalAcceptance: legalAcceptance('invitation_account'),
       });
       await confirm(account.email);
       created[account.key] = {

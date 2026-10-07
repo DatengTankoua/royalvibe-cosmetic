@@ -30,6 +30,7 @@ import {
   autoConfirmVerificationEmails,
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -76,7 +77,13 @@ describe('Gestion des membres + transfert de propriété (e2e 1-7C)', () => {
   const register = (name: string, email: string, organizationName: string) =>
     request(app.getHttpServer())
       .post('/auth/register')
-      .send({ name, email, password: PASSWORD, organizationName });
+      .send({
+        ...OWNER_TERMS,
+        name,
+        email,
+        password: PASSWORD,
+        organizationName,
+      });
   const login = (email: string, organizationId: string) =>
     request(app.getHttpServer())
       .post('/auth/login')

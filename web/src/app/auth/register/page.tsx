@@ -22,6 +22,11 @@ import { EmailVerificationResend } from "@/components/auth/email-verification-re
 import { Wordmark } from "@/components/brand/wordmark";
 import { BackToHome } from "@/components/landing/back-to-home";
 import { AuthLegalLinks } from "@/components/legal/auth-legal-links";
+import { TermsAcceptanceField } from "@/components/legal/terms-acceptance-field";
+import {
+  buildLegalAcceptance,
+  legalAcceptanceErrorMessage,
+} from "@/lib/legal/acceptance";
 import Link from "next/link";
 
 export default function RegisterPage() {
@@ -30,6 +35,9 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [organizationName, setOrganizationName] = useState("");
+  // 1-16C.2 : case NON cochée par défaut ; jamais pré-remplie.
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [termsError, setTermsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 1-13A : compte créé (adresse enregistrée + résultat de l'envoi du lien).
@@ -115,6 +123,14 @@ export default function RegisterPage() {
       setError(passwordError);
       return;
     }
+    // 1-16C.2 : aucune requête sans la case cochée (le serveur refuse aussi).
+    if (!termsAccepted) {
+      setError(null);
+      setTermsError(legalAcceptanceErrorMessage("LEGAL_ACCEPTANCE_REQUIRED"));
+      document.getElementById("register-terms")?.focus();
+      return;
+    }
+    setTermsError(null);
     submitting.current = true;
     setLoading(true);
     setError(null);
@@ -124,6 +140,7 @@ export default function RegisterPage() {
         email,
         password,
         organizationName,
+        legalAcceptance: buildLegalAcceptance("owner_registration"),
       });
       setPassword("");
       setConfirmation("");
@@ -136,7 +153,7 @@ export default function RegisterPage() {
       setError(
         code === "REGISTRATION_DISABLED"
           ? "L'inscription est actuellement désactivée."
-          : getApiErrorMessage(err),
+          : (legalAcceptanceErrorMessage(code) ?? getApiErrorMessage(err)),
       );
     } finally {
       submitting.current = false;
@@ -223,31 +240,30 @@ export default function RegisterPage() {
             </p>
           )}
 
-          {/* 1-16C : information seulement. Aucune acceptation n'est
-          enregistrée côté serveur (défaut décrit dans le rapport 1-16C). */}
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            Avant de créer ton compte, lis les{" "}
-            <Link
-              href="/conditions-utilisation"
-              className="underline underline-offset-2"
+          {/* 1-16C.2 : acceptation explicite. La personne qui crée le
+          commerce accepte aussi les conditions d'abonnement. Le serveur
+          vérifie les versions et enregistre la preuve. */}
+          <TermsAcceptanceField
+            context="owner_registration"
+            id="register-terms"
+            checked={termsAccepted}
+            onCheckedChange={(value) => {
+              setTermsAccepted(value);
+              if (value) setTermsError(null);
+            }}
+            disabled={loading}
+            invalid={termsError !== null}
+            errorId={termsError ? "register-terms-error" : undefined}
+          />
+          {termsError && (
+            <p
+              id="register-terms-error"
+              role="alert"
+              className="text-sm text-destructive"
             >
-              conditions d&apos;utilisation
-            </Link>
-            , les{" "}
-            <Link
-              href="/conditions-abonnement"
-              className="underline underline-offset-2"
-            >
-              conditions d&apos;abonnement
-            </Link>{" "}
-            et la{" "}
-            <Link
-              href="/confidentialite"
-              className="underline underline-offset-2"
-            >
-              politique de confidentialité
-            </Link>
-          </p>
+              {termsError}
+            </p>
+          )}
 
           <Button type="submit" className="w-full" disabled={loading}>
             {loading ? "Création…" : "Créer mon entreprise"}

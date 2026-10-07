@@ -46,6 +46,7 @@ import {
   autoConfirmVerificationEmails,
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 /**
  * E2E 1-16C.1 — Assistance depuis l'organisation (`/support/*`).
@@ -219,12 +220,15 @@ describe('Assistance depuis l’organisation (e2e 1-16C.1)', () => {
       supportModel = moduleFixture.get(getModelToken(SupportRequest.name));
       organizationModel = moduleFixture.get(getModelToken(Organization.name));
 
-      const reg = await http().post('/auth/register').send({
-        name: 'Awa Support',
-        email: OWNER_EMAIL,
-        password: PASSWORD,
-        organizationName: 'Boutique Support',
-      });
+      const reg = await http()
+        .post('/auth/register')
+        .send({
+          ...OWNER_TERMS,
+          name: 'Awa Support',
+          email: OWNER_EMAIL,
+          password: PASSWORD,
+          organizationName: 'Boutique Support',
+        });
       expect(reg.status).toBe(201);
       orgId = reg.body.organization._id as string;
       ownerId = reg.body.user._id as string;
@@ -330,6 +334,7 @@ describe('Assistance depuis l’organisation (e2e 1-16C.1)', () => {
     const reg = await http()
       .post('/auth/register')
       .send({
+        ...OWNER_TERMS,
         name: `${label} Owner`,
         email,
         password: PASSWORD,

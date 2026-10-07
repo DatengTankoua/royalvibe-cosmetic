@@ -54,6 +54,17 @@ async function listIndexes(
   }
 }
 
+/**
+ * 1-16C.2 — Vérification en LECTURE SEULE (`listIndexes` uniquement) :
+ * `null` si l'index TTL attendu existe, sinon le problème constaté. Aucune
+ * création, aucune donnée lue.
+ */
+export async function checkSupportRequestIndexes(
+  connection: Connection,
+): Promise<string | null> {
+  return describeSupportRequestIndexProblem(await listIndexes(connection));
+}
+
 export async function ensureSupportRequestIndexes(
   connection: Connection,
 ): Promise<'already-present' | 'created'> {

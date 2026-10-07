@@ -16,6 +16,11 @@ import {
 } from "@/lib/api";
 import { EmailVerificationResend } from "@/components/auth/email-verification-resend";
 import { Wordmark } from "@/components/brand/wordmark";
+import { TermsAcceptanceField } from "@/components/legal/terms-acceptance-field";
+import {
+  buildLegalAcceptance,
+  legalAcceptanceErrorMessage,
+} from "@/lib/legal/acceptance";
 import Link from "next/link";
 
 type Step = "loading" | "needsDetails" | "success" | "error";
@@ -51,6 +56,11 @@ export default function AcceptInvitationPage() {
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  // 1-16C.2 : case NON cochée, demandée seulement pour CRÉER un compte. Un
+  // compte existant rejoint le commerce sans acceptation enregistrée ici :
+  // le lien d'invitation ne prouve pas l'identité de la personne. Son accord
+  // lui est demandé après connexion.
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const finish = (result: AcceptInvitationResult) => {
@@ -123,18 +133,31 @@ export default function AcceptInvitationPage() {
       setFormError(passwordError);
       return;
     }
+    if (!termsAccepted) {
+      setFormError(legalAcceptanceErrorMessage("LEGAL_ACCEPTANCE_REQUIRED"));
+      document.getElementById("inv-terms")?.focus();
+      return;
+    }
     submitting.current = true;
     setLoading(true);
     setFormError(null);
     try {
       // Seul `password` part à l'API ; la confirmation reste locale.
-      const result = await acceptInvitation({ token, name, password });
+      const result = await acceptInvitation({
+        token,
+        name,
+        password,
+        legalAcceptance: buildLegalAcceptance("invitation_account"),
+      });
       finish(result);
     } catch (err: unknown) {
-      if (getApiErrorCode(err) === "INVITATION_INVALID_OR_EXPIRED") {
+      const code = getApiErrorCode(err);
+      if (code === "INVITATION_INVALID_OR_EXPIRED") {
         fail(err);
       } else {
-        setFormError(getApiErrorMessage(err));
+        setFormError(
+          legalAcceptanceErrorMessage(code) ?? getApiErrorMessage(err),
+        );
       }
     } finally {
       submitting.current = false;
@@ -251,6 +274,23 @@ export default function AcceptInvitationPage() {
               onConfirmationChange={setConfirmation}
               errorId={formError ? "inv-error" : undefined}
               disabled={loading}
+            />
+
+            <TermsAcceptanceField
+              context="invitation_account"
+              id="inv-terms"
+              checked={termsAccepted}
+              onCheckedChange={(value) => {
+                setTermsAccepted(value);
+                if (value) setFormError(null);
+              }}
+              disabled={loading}
+              invalid={
+                !termsAccepted &&
+                formError ===
+                  legalAcceptanceErrorMessage("LEGAL_ACCEPTANCE_REQUIRED")
+              }
+              errorId={formError ? "inv-error" : undefined}
             />
 
             {formError && (

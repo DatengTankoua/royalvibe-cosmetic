@@ -23,6 +23,11 @@
  * (`isolated api-e2e sale-history-purge`), validés et transmis à Jest ; la
  * garde et l'environnement construit restent identiques.
  * Le témoin du build web est `recipe.js web-canary-check` (1-14D.2H).
+ * 1-16C.2 : après un build réussi, `web/scripts/legal-archive.mjs check`
+ * vérifie, sur le `.next` de la copie (avant sa suppression), que le texte
+ * prérendu de chaque document soumis à acceptation est identique à son
+ * archive. `web-build --legal-archive=write --published-at=AAAA-MM-JJ`
+ * archive une NOUVELLE version (jamais de réécriture), puis vérifie.
  */
 'use strict';
 
@@ -267,7 +272,23 @@ async function apiJest(
 
 // ─── Build web (copie isolée) ───────────────────────────────────────────────
 
-async function webBuild() {
+const LEGAL_ARCHIVE_SCRIPT = path.join(
+  C.WEB_DIR,
+  'scripts',
+  'legal-archive.mjs',
+);
+
+/** 1-16C.2 — `check` ou `write`, sur le `.next` de la copie isolée. */
+async function legalArchive(mode, nextDir, log, publishedAt) {
+  const args = [LEGAL_ARCHIVE_SCRIPT, mode, '--next-dir', nextDir];
+  if (publishedAt) args.push('--published-at', publishedAt);
+  return run(process.execPath, args, {
+    cwd: C.REPO,
+    env: isolatedEnv(log.file),
+  });
+}
+
+async function webBuild({ legalMode = 'check', publishedAt = null } = {}) {
   if (C.readState()) {
     throw new Error(
       'Une recette utilise la copie isolée : arrêter la recette avant.',
@@ -293,10 +314,21 @@ async function webBuild() {
         NEXT_TELEMETRY_DISABLED: '1',
       }),
     });
+    const legal = {};
+    if (code === 0) {
+      const nextDir = path.join(C.WEB_COPY_DIR, '.next');
+      if (legalMode === 'write') {
+        legal.write = await legalArchive('write', nextDir, log, publishedAt);
+      }
+      legal.check = await legalArchive('check', nextDir, log);
+    }
+    const legalOk = code === 0 && Object.values(legal).every((c) => c === 0);
     const entries = readLog(log.file);
     return {
       label: 'web-build',
-      exit: code,
+      exit: code === 0 && !legalOk ? 1 : code,
+      buildExit: code,
+      legalArchive: legal,
       copy: C.WEB_COPY_DIR,
       excludedEnvFilesByName: copy.excludedEnvFiles.length,
       envFilesInCopy: envInCopy.length,
@@ -369,7 +401,18 @@ async function main(what, args = []) {
       return r.exit;
     }
     case 'web-build': {
-      const r = await webBuild();
+      const legalMode = patterns.includes('--legal-archive=write')
+        ? 'write'
+        : 'check';
+      const date = patterns
+        .find((a) => a.startsWith('--published-at='))
+        ?.slice('--published-at='.length);
+      if (legalMode === 'write' && !/^\d{4}-\d{2}-\d{2}$/.test(date ?? '')) {
+        throw new Error(
+          '--published-at=AAAA-MM-JJ requis avec --legal-archive=write',
+        );
+      }
+      const r = await webBuild({ legalMode, publishedAt: date ?? null });
       process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
       return r.exit;
     }

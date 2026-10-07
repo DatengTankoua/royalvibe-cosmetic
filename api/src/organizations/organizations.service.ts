@@ -49,6 +49,9 @@ import {
   ORGANIZATION_NAME_MESSAGE,
 } from '../common/validation/name-rules';
 import * as bcrypt from 'bcryptjs';
+import { LegalAcceptanceService } from '../legal/legal-acceptance.service';
+import type { ResolvedLegalSubmission } from '../legal/legal-acceptance.service';
+import { LegalAcceptanceContext } from '../legal/legal-documents';
 
 // Session transactionnelle Mongoose (`mongodb.ClientSession`) : même
 // convention que `products.service.ts`/`audit.service.ts`.
@@ -190,6 +193,7 @@ export class OrganizationsService {
     private s3Service: S3Service,
     private configService: ConfigService,
     private subscriptionsService: SubscriptionsService,
+    private legalAcceptance: LegalAcceptanceService,
   ) {}
 
   /**
@@ -578,6 +582,10 @@ export class OrganizationsService {
           invitation.email,
           session,
         );
+        // 1-16C.2 : preuve seulement pour un compte CRÉÉ ici. Un compte
+        // existant n'accepte rien par ce lien (il ne prouve pas l'identité) ;
+        // son accord lui est demandé après connexion.
+        let legal: ResolvedLegalSubmission | null = null;
         if (!user) {
           if (!dto.name || !dto.password) {
             throw new BadRequestException({
@@ -585,6 +593,12 @@ export class OrganizationsService {
               message: 'name et password sont requis pour créer un compte.',
             });
           }
+          // Refus (case absente, version périmée…) → toute la transaction
+          // est annulée : l'invitation reste `pending`.
+          legal = this.legalAcceptance.resolveSubmission(
+            LegalAcceptanceContext.INVITATION_ACCOUNT,
+            dto.legalAcceptance,
+          );
           const hashed = await bcrypt.hash(dto.password, 10);
           user = await this.usersService.create(
             {
@@ -637,6 +651,14 @@ export class OrganizationsService {
           throw new Error(
             'Invitation acceptance invariant violated: expected exactly one membership.',
           );
+        }
+
+        if (legal) {
+          await this.legalAcceptance.record(session, {
+            userId: user._id.toString(),
+            organizationId: invitation.organizationId.toString(),
+            submission: legal,
+          });
         }
 
         result = {

@@ -35,6 +35,7 @@ import {
   autoConfirmVerificationEmails,
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
+import { INVITATION_TERMS, OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -156,6 +157,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       const regA = await request(app.getHttpServer())
         .post('/auth/register')
         .send({
+          ...OWNER_TERMS,
           name: 'Owner A',
           email: OWNER_A_EMAIL,
           password: PASSWORD,
@@ -167,6 +169,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       const regB = await request(app.getHttpServer())
         .post('/auth/register')
         .send({
+          ...OWNER_TERMS,
           name: 'Owner B',
           email: OWNER_B_EMAIL,
           password: PASSWORD,
@@ -724,8 +727,12 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
     };
     beforeEach(clearThrottle);
 
+    // 1-16C.2 : un corps qui CRÉE un compte (mot de passe fourni) porte
+    // l'acceptation du web ; `{ token }` seul reste inchangé.
     const accept = (body: Record<string, unknown>) =>
-      request(app.getHttpServer()).post('/auth/invitations/accept').send(body);
+      request(app.getHttpServer())
+        .post('/auth/invitations/accept')
+        .send('password' in body ? { ...INVITATION_TERMS, ...body } : body);
 
     it('publique même si PUBLIC_REGISTRATION_ENABLED=false (jamais bloquée par ce flag)', async () => {
       delete process.env.PUBLIC_REGISTRATION_ENABLED;
