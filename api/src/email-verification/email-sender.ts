@@ -13,6 +13,11 @@ export interface OutgoingEmail {
   text: string;
   /** Une clé par émission logique (jamais réutilisée pour un autre lien). */
   idempotencyKey: string;
+  /**
+   * 1-16C.1 — Adresse de réponse unique, fixée par le serveur (jamais une
+   * valeur client). Absente : comportement inchangé des emails existants.
+   */
+  replyTo?: string;
 }
 
 export interface EmailSender {

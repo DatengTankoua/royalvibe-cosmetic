@@ -238,6 +238,28 @@ S3_PUBLIC_URL=<supabase-public-url>
 NEXT_PUBLIC_API_URL=https://<votre-service>.railway.app
 ```
 
+### Migrations à exécuter avant l'activation d'une version
+
+Railway et Vercel déploient automatiquement à chaque push sur `main` : une
+migration requise par une version doit donc être exécutée **avant** la
+fusion sur `main`, depuis un poste ou un job contrôlé, avec l'URI de la base
+de production (jamais commitée). Les migrations sont idempotentes et ne
+remplacent jamais un index existant de configuration différente.
+
+| Depuis | Commande | Effet |
+|---|---|---|
+| 1-16C.1 (assistance) | `pnpm --filter api migrate:support-request-indexes` | Index TTL `createdAt_1_ttl` (`expireAfterSeconds = 2592000`, 30 jours) du registre `support_requests`. **Doit précéder l'activation de cette version** : sans lui, l'assistance fonctionne mais le registre n'expire jamais |
+
+```bash
+pnpm --filter api build
+MONGODB_URI=<uri-atlas> pnpm --filter api migrate:support-request-indexes
+# Attendu : « support_requests : index TTL créé et vérifié. »
+# (ou « déjà présent (aucune modification). » lors d'un second passage)
+```
+
+Les autres migrations du dépôt (`migrate:*` dans `api/package.json`) sont
+décrites dans les rapports de leurs lots (`docs/architecture/`).
+
 ## CI/CD et rollback
 
 Le dossier `.github/workflows/` contient deux workflows GitHub Actions :

@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
+import { SKIP_SUPPORT_THROTTLER } from '../../../support/support-rate-limiting';
 import type { Request, Response } from 'express';
 import { Public } from '../../../auth/decorators/public.decorator';
 import {
@@ -36,6 +37,7 @@ export const CAMPAY_WEBHOOK_ROUTE = `${PAYMENT_WEBHOOK_PATH_PREFIX}campay`;
   'invitation-create': true,
   [PAYMENT_WRITE_THROTTLER]: true,
   [PAYMENT_READ_THROTTLER]: true,
+  ...SKIP_SUPPORT_THROTTLER,
 })
 export class CamPayWebhookController {
   constructor(private readonly webhook: CamPayWebhookService) {}

@@ -7,11 +7,10 @@ import {
   ReceiptTextIcon,
   UsersIcon,
 } from "lucide-react";
-import { Wordmark } from "@/components/brand/wordmark";
 import { LandingHeader } from "@/components/landing/landing-header";
-import { LANDING_NAV } from "@/components/landing/landing-nav";
 import { ProductPreview } from "@/components/landing/product-preview";
 import { SessionCta } from "@/components/landing/session-cta";
+import { PublicFooter } from "@/components/public/public-footer";
 import { OfferConditions } from "@/components/subscription/subscription-offers";
 import {
   SUBSCRIPTION_OFFERS,
@@ -453,43 +452,7 @@ export default function LandingPage() {
         </section>
       </div>
 
-      <footer className="border-t border-(--brand-navy)/10 bg-white">
-        <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-10 md:flex-row md:items-center md:justify-between">
-          <Wordmark size="small" />
-          <nav aria-label="Pied de page">
-            <ul className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
-              {LANDING_NAV.map((item) => (
-                <li key={item.href}>
-                  <a
-                    href={item.href}
-                    className="inline-flex min-h-11 items-center rounded-sm text-[#3d4e66] hover:text-(--brand-navy) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-navy)"
-                  >
-                    {item.label}
-                  </a>
-                </li>
-              ))}
-              <li>
-                <Link
-                  href="/auth/login"
-                  className="inline-flex min-h-11 items-center rounded-sm text-[#3d4e66] hover:text-(--brand-navy) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-navy)"
-                >
-                  Connexion
-                </Link>
-              </li>
-              {registrationEnabled && (
-                <li>
-                  <Link
-                    href="/auth/register"
-                    className="inline-flex min-h-11 items-center rounded-sm text-[#3d4e66] hover:text-(--brand-navy) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-navy)"
-                  >
-                    Inscription
-                  </Link>
-                </li>
-              )}
-            </ul>
-          </nav>
-        </div>
-      </footer>
+      <PublicFooter onHome />
     </div>
   );
 }

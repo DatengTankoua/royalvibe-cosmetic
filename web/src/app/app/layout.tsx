@@ -8,6 +8,7 @@ import {
   ArrowLeftRightIcon,
   BarChart3Icon,
   Building2Icon,
+  CircleHelpIcon,
   LayoutGridIcon,
   LogOutIcon,
   MoreHorizontalIcon,
@@ -142,6 +143,9 @@ function visibleNavItems(authContext: ApiAuthContext | null): ShellNavItem[] {
       icon: Building2Icon,
       visible: true,
     },
+    // 1-16C : guide public (hors shell, sans données). Hors ligne, il est
+    // désactivé comme les autres pages par `ShellNavLink`.
+    { href: "/guide", label: "Aide", icon: CircleHelpIcon, visible: true },
   ];
   return items.filter((i) => i.visible);
 }

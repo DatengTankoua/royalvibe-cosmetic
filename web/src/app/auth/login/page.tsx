@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LoginError, useAuth } from "@/contexts/auth-context";
 import { EmailVerificationResend } from "@/components/auth/email-verification-resend";
+import { AuthLegalLinks } from "@/components/legal/auth-legal-links";
 import type { SelectableOrganization } from "@/lib/api";
 import { Wordmark } from "@/components/brand/wordmark";
 import { BackToHome } from "@/components/landing/back-to-home";
@@ -234,6 +235,7 @@ export default function LoginPage() {
             </Link>
           </p>
         )}
+        <AuthLegalLinks />
       </div>
     </div>
   );

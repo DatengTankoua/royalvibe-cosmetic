@@ -168,7 +168,8 @@ function fileEmailSender() {
     async send(email) {
       fs.appendFileSync(
         C.MAIL_FILE,
-        `${JSON.stringify({ to: email.to, subject: email.subject, text: email.text })}\n`,
+        // 1-16C.1 : Reply-To et clé d'idempotence consignés (assistance).
+        `${JSON.stringify({ to: email.to, subject: email.subject, text: email.text, replyTo: email.replyTo ?? null, idempotencyKey: email.idempotencyKey })}\n`,
       );
     },
   };

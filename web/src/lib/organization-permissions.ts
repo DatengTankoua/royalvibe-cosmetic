@@ -17,6 +17,8 @@ export const DELEGABLE_PERMISSIONS = [
   "branding.manage",
   "members.invite",
   "members.manage",
+  // 1-16C.1 : accordée par défaut au propriétaire et à l'administrateur.
+  "support.contact",
 ] as const;
 
 export type DelegablePermission = (typeof DELEGABLE_PERMISSIONS)[number];
@@ -67,6 +69,7 @@ export const PERMISSION_LABELS: Record<DelegablePermission, string> = {
   "branding.manage": "Gérer le branding",
   "members.invite": "Inviter des membres",
   "members.manage": "Gérer les membres",
+  "support.contact": "Contacter le service client",
 };
 
 export type OrganizationRole = "owner" | "admin" | "seller";

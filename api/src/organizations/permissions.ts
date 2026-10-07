@@ -63,6 +63,11 @@ export const DELEGABLE_PERMISSIONS = Object.freeze([
   'branding.manage',
   'members.invite',
   'members.manage',
+  // 1-16C.1 : écrire au service client depuis l'organisation. Accordée par
+  // défaut au propriétaire et à l'administrateur (toutes les délégables),
+  // jamais au vendeur sans ajout explicite. Aucune migration : les
+  // permissions déjà enregistrées ne sont pas modifiées.
+  'support.contact',
 ] as const);
 
 export type DelegablePermission = (typeof DELEGABLE_PERMISSIONS)[number];

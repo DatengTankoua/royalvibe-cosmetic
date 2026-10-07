@@ -42,6 +42,8 @@ const MIGRATIONS = [
   'create-subscription-payment-reconciliation-indexes.js',
   // 1-16A : index des notifications push (transport simulé de boot-api).
   'create-push-notification-indexes.js',
+  // 1-16C.1 : purge du registre des demandes d'assistance.
+  'create-support-request-indexes.js',
 ];
 const NEXT_BIN = path.join(
   C.WEB_DIR,

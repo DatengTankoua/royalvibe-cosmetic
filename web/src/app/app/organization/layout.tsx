@@ -27,12 +27,19 @@ const TABS = [
   // 1-16A : réglages de CET appareil, tout membre actif (les catégories
   // proposées sont décidées par le serveur selon le rôle et les droits).
   { href: "/app/organization/notifications", label: "Notifications" },
+  // 1-16C.1 : écrire au service client (permission `support.contact`,
+  // propriétaire et administrateur par défaut, vendeur sur ajout explicite).
+  {
+    href: "/app/organization/support",
+    label: "Assistance",
+    permission: "support.contact" as const,
+  },
 ];
 
 // Sous-shell de la section « Organisation » (1-9C) : onglets filtrés par
 // permissions effectives. Le masquage n'est qu'une aide UX — chaque route
 // backend reste gardée indépendamment (`branding.manage`, `members.manage`,
-// `members.invite`).
+// `members.invite`, `support.contact`).
 export default function OrganizationLayout({
   children,
 }: {

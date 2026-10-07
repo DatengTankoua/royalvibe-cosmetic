@@ -20,6 +20,7 @@
     "sales:backfill-product-history": "node dist/migrations/backfill-sale-product-history.js",
     "migrate:subscription-payment-reconciliation-indexes": "node dist/migrations/create-subscription-payment-reconciliation-indexes.js",
     "migrate:push-notification-indexes": "node dist/migrations/create-push-notification-indexes.js",
+    "migrate:support-request-indexes": "node dist/migrations/create-support-request-indexes.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",

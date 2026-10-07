@@ -14,6 +14,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
+import { SKIP_SUPPORT_THROTTLER } from '../../support/support-rate-limiting';
 import type { Response } from 'express';
 import type { Observable } from 'rxjs';
 import { CurrentOrganization } from '../../auth/decorators/current-organization.decorator';
@@ -57,6 +58,7 @@ const OTHER_THROTTLERS = {
   'login-long': true,
   'invitation-create': true,
   [PAYMENT_WEBHOOK_THROTTLER]: true,
+  ...SKIP_SUPPORT_THROTTLER,
 } as const;
 
 const toContext = (

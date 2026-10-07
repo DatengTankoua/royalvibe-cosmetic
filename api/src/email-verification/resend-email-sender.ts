@@ -10,6 +10,16 @@ export const RESEND_TIMEOUT_MS = 10_000;
 
 const ADDRESS_PATTERN = /^[^\s<>@",;]+@[^\s<>@",;]+\.[^\s<>@",;]+$/;
 
+/** 1-16C.1 — Adresse simple (sans nom, sans liste, sans retour à la ligne). */
+export function isValidReplyTo(value: string | undefined): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= 320 &&
+    !/[\r\n]/.test(value) &&
+    ADDRESS_PATTERN.test(value)
+  );
+}
+
 /**
  * `EMAIL_FROM` : `adresse@domaine` ou `Nom <adresse@domaine>`. Aucun retour
  * à la ligne (injection d'en-têtes), aucune liste d'adresses.
@@ -64,6 +74,10 @@ export class ResendEmailSender implements EmailSender {
     if (!this.isConfigured()) {
       throw new EmailDeliveryError('not_configured');
     }
+    // Reply-To invalide : refus AVANT tout appel (jamais d'en-tête injecté).
+    if (email.replyTo !== undefined && !isValidReplyTo(email.replyTo)) {
+      throw new EmailDeliveryError('rejected');
+    }
 
     let response: Response;
     try {
@@ -80,6 +94,7 @@ export class ResendEmailSender implements EmailSender {
           subject: email.subject,
           html: email.html,
           text: email.text,
+          ...(email.replyTo !== undefined ? { reply_to: email.replyTo } : {}),
         }),
         redirect: 'error',
         signal: AbortSignal.timeout(RESEND_TIMEOUT_MS),

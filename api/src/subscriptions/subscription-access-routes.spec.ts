@@ -17,6 +17,7 @@ import { SubscriptionPaymentsController } from './payments/subscription-payments
 import { CamPayWebhookController } from './payments/campay/campay-webhook.controller';
 import { PushController } from '../push/push.controller';
 import { NotificationsController } from '../notifications/notifications.controller';
+import { SupportController } from '../support/support.controller';
 import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
 import { SKIP_ORGANIZATION_CONTEXT_KEY } from '../auth/decorators/skip-organization-context.decorator';
 import {
@@ -50,6 +51,7 @@ const CONTROLLERS = [
   TrashController,
   PushController,
   NotificationsController,
+  SupportController,
 ];
 
 type Category =
@@ -230,6 +232,36 @@ describe('Matrice des routes — contrôle commercial (1-14C.1)', () => {
       'billing.identity',
     );
     expect(Reflect.getMetadata(PERMISSIONS_KEY, handler)).toBeUndefined();
+  });
+
+  it('assistance (1-16C.1) : routes métier, contexte d’organisation, permission support.contact, aucune exception', () => {
+    const support = collectRoutes().filter((r) =>
+      r.route.split(' ')[1].startsWith('/support'),
+    );
+    expect(support).toEqual([
+      {
+        route: 'GET /support/context',
+        category: 'business',
+        skipsOrganizationContext: false,
+      },
+      {
+        route: 'POST /support/requests',
+        category: 'business',
+        skipsOrganizationContext: false,
+      },
+    ]);
+    for (const name of ['context', 'submit']) {
+      const handler = (
+        SupportController.prototype as unknown as Record<string, object>
+      )[name];
+      const meta = (key: string): unknown =>
+        Reflect.getMetadata(key, handler) ??
+        Reflect.getMetadata(key, SupportController);
+      expect(meta(PERMISSIONS_KEY)).toEqual(['support.contact']);
+      expect(meta(OWNER_ONLY_KEY)).toBeUndefined();
+      expect(meta(SUBSCRIPTION_ACCESS_EXEMPTION_KEY)).toBeUndefined();
+      expect(meta(IS_PUBLIC_KEY)).toBeUndefined();
+    }
   });
 
   it('confirmation de vente déjà appliquée : POST /sales seul', () => {

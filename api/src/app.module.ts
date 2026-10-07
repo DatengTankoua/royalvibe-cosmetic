@@ -16,6 +16,7 @@ import { TrashModule } from './trash/trash.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { ImageSecurityModule } from './common/image/image-security.module';
 import { PushModule } from './push/push.module';
+import { SupportModule } from './support/support.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { PushModule } from './push/push.module';
     // 1-16A : notifications Web Push (inactives tant que le démarrage HTTP
     // ne les active pas ; aucun traitement de fond au chargement).
     PushModule,
+    SupportModule,
   ],
   controllers: [AppController],
   providers: [AppService],

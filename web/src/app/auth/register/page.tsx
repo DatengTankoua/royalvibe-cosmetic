@@ -21,6 +21,7 @@ import {
 import { EmailVerificationResend } from "@/components/auth/email-verification-resend";
 import { Wordmark } from "@/components/brand/wordmark";
 import { BackToHome } from "@/components/landing/back-to-home";
+import { AuthLegalLinks } from "@/components/legal/auth-legal-links";
 import Link from "next/link";
 
 export default function RegisterPage() {
@@ -60,6 +61,7 @@ export default function RegisterPage() {
           >
             Se connecter
           </Link>
+          <AuthLegalLinks />
         </div>
       </div>
     );
@@ -221,6 +223,32 @@ export default function RegisterPage() {
             </p>
           )}
 
+          {/* 1-16C : information seulement. Aucune acceptation n'est
+          enregistrée côté serveur (défaut décrit dans le rapport 1-16C). */}
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Avant de créer ton compte, lis les{" "}
+            <Link
+              href="/conditions-utilisation"
+              className="underline underline-offset-2"
+            >
+              conditions d&apos;utilisation
+            </Link>
+            , les{" "}
+            <Link
+              href="/conditions-abonnement"
+              className="underline underline-offset-2"
+            >
+              conditions d&apos;abonnement
+            </Link>{" "}
+            et la{" "}
+            <Link
+              href="/confidentialite"
+              className="underline underline-offset-2"
+            >
+              politique de confidentialité
+            </Link>
+          </p>
+
           <Button type="submit" className="w-full" disabled={loading}>
             {loading ? "Création…" : "Créer mon entreprise"}
           </Button>
@@ -232,6 +260,7 @@ export default function RegisterPage() {
             Se connecter
           </Link>
         </p>
+        <AuthLegalLinks />
       </div>
     </div>
   );

@@ -17,6 +17,7 @@ import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
 import { InvitationCreateThrottlerGuard } from '../common/invitation-rate-limiting';
 import { SKIP_PAYMENT_THROTTLERS } from '../common/subscription-payment-rate-limiting';
+import { SKIP_SUPPORT_THROTTLER } from '../support/support-rate-limiting';
 import { User } from '../users/schemas/user.schema';
 
 /**
@@ -43,6 +44,7 @@ export class OrganizationsController {
     'login-short': true,
     'login-long': true,
     ...SKIP_PAYMENT_THROTTLERS,
+    ...SKIP_SUPPORT_THROTTLER,
   })
   @Post()
   create(

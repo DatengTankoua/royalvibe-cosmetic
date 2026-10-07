@@ -153,7 +153,7 @@ describe('permissions (phase 1-1A)', () => {
   });
 
   it('liste délégable : 14 permissions, aucune opération owner-only', () => {
-    expect(ALL_DELEGABLE_PERMISSIONS).toHaveLength(14);
+    expect(ALL_DELEGABLE_PERMISSIONS).toHaveLength(15);
     for (const op of OWNER_ONLY_OPERATIONS) {
       expect(ALL_DELEGABLE_PERMISSIONS).not.toContain(
         op as (typeof ALL_DELEGABLE_PERMISSIONS)[number],
@@ -188,6 +188,7 @@ describe('permissions (phase 1-1A)', () => {
       'sales.view_all',
       'sales.view_own',
       'stock.adjust',
+      'support.contact',
       'trash.manage',
     ]);
     // Pas de seconde source divergente : identité de référence.
@@ -203,7 +204,7 @@ describe('permissions (phase 1-1A)', () => {
     expect(setOf(DEFAULT_PERMISSIONS_BY_ROLE[OrganizationRole.SELLER])).toEqual(
       new Set(['sales.record', 'sales.view_own']),
     );
-    expect(ALL_DELEGABLE_PERMISSIONS).toHaveLength(14);
+    expect(ALL_DELEGABLE_PERMISSIONS).toHaveLength(15);
     expect([...OWNER_ONLY_OPERATIONS].sort()).toEqual([
       'billing.identity',
       'billing.payment',
