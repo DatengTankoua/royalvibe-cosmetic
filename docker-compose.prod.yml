@@ -55,6 +55,9 @@ services:
       EMAIL_FROM: ${EMAIL_FROM:-}
       # Inscription publique fermée par défaut (seule la valeur exacte `true` l'ouvre).
       PUBLIC_REGISTRATION_ENABLED: ${PUBLIC_REGISTRATION_ENABLED:-false}
+      # 1-16D — fuseau des mois (Analyse, historique exportable, bilan
+      # mensuel) : calendrier du Cameroun. Nom IANA validé au démarrage.
+      TZ: ${TZ:-Africa/Douala}
       # 1-14D.2E — Seule l'adresse FIXE de nginx sur le réseau `edge` est un
       # proxy approuvé (`req.ip` = client vu par nginx). Un accès direct
       # depuis un autre conteneur (web, minio, mongo, réseau `default`) n'est

@@ -200,8 +200,8 @@ export default function LandingPage() {
               <p className="mt-5 text-sm leading-relaxed text-white/80">
                 {registrationEnabled ? (
                   <>
-                    {TRIAL_DAYS} jours d&apos;essai gratuit, sans carte
-                    bancaire. Ensuite, à partir de{" "}
+                    {TRIAL_DAYS} jours d&apos;essai gratuit, aucun paiement
+                    requis. Ensuite, à partir de{" "}
                     <strong className="font-semibold text-white tabular-nums">
                       {formatFcfa(lowestMonthlyEquivalent)}&nbsp;par mois
                     </strong>{" "}

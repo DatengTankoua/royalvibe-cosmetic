@@ -253,7 +253,7 @@ export interface AllowedOperationActions {
   retry: boolean;
   // Abandon explicite (confirmation).
   abandon: boolean;
-  // Conflit d'idempotence : export + retrait explicite, jamais de renvoi.
+  // Conflit d'idempotence : retrait explicite, jamais de renvoi.
   removeCorrupted: boolean;
   // La vente a PU être enregistrée par le serveur (réponse perdue puis
   // échec) : l'abandon doit être signalé comme risqué.
@@ -336,7 +336,7 @@ export function describeOperationError(error?: OutboxLastError): string | null {
     case "IDEMPOTENCY_KEY_REUSED":
     case "IDEMPOTENCY_KEY_CONFLICT":
     case "PARTITION_MISMATCH":
-      return "Incohérence détectée : exportez cette vente et contactez le support.";
+      return "Incohérence détectée : notez cette vente et contactez le support.";
     case "ORGANIZATION_ACCESS_DENIED":
     case "PERMISSION_DENIED":
       return "Accès refusé par le serveur.";
@@ -353,7 +353,7 @@ export function describeOperationError(error?: OutboxLastError): string | null {
     case "auth":
       return "Session expirée ou accès refusé.";
     case "corruption":
-      return "Incohérence détectée : exportez cette vente et contactez le support.";
+      return "Incohérence détectée : notez cette vente et contactez le support.";
     default:
       return "Vente refusée par le serveur.";
   }

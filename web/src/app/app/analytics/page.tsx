@@ -41,6 +41,8 @@ import { fmtXof } from "@/lib/currency";
 import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
 import { SALE_INVALIDATION_EVENTS } from "@/hooks/use-sale-invalidation";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
+import { MonthlyHistoryDownload } from "@/components/analytics/monthly-history-download";
+import { canDownloadMonthlyHistory } from "@/lib/monthly-history";
 
 // 1-15A : toute vente (création, modification, suppression) et tout
 // changement de produit modifient les indicateurs — relecture silencieuse.
@@ -60,6 +62,10 @@ const pct = (n: number) => `${n.toFixed(1)}%`;
 const UNKNOWN = "—";
 const UNKNOWN_COST_HINT = "Coût d'achat inconnu (produits supprimés)";
 const UNNAMED_PRODUCT = "Nom non conservé";
+// 1-16D : avec un mois choisi, gain du mois seul (même règle que
+// l'historique mensuel exportable), jamais les coûts des autres mois.
+const MONTHLY_GAIN_RULE =
+  "Ventes du mois moins le prix d'achat actuel des produits vendus (prix figé à la suppression d'un produit).";
 
 // "2025-03" → "mars 2025"
 function formatMonthLabel(period: string): string {
@@ -218,6 +224,9 @@ export default function AnalyticsPage() {
         )}
       </div>
 
+      {/* 1-16D : historique mensuel exportable (propriétaire, administrateur). */}
+      {canDownloadMonthlyHistory(authContext) && <MonthlyHistoryDownload />}
+
       {loading && <p className="text-sm text-muted-foreground">Chargement…</p>}
       {!loading && error && (
         <div className="flex items-center gap-3">
@@ -248,7 +257,7 @@ export default function AnalyticsPage() {
                 value={fmt(overview.totalRevenue)}
               />
               <StatCard
-                label="Bénéfice net"
+                label={selectedMonth ? "Gain estimé du mois" : "Bénéfice net"}
                 value={
                   overview.netProfit === null
                     ? UNKNOWN
@@ -257,13 +266,17 @@ export default function AnalyticsPage() {
                 sub={
                   overview.netProfit === null
                     ? UNKNOWN_COST_HINT
-                    : overview.netProfit >= 0
-                      ? "✓ Positif"
-                      : "⚠ Négatif"
+                    : selectedMonth
+                      ? MONTHLY_GAIN_RULE
+                      : overview.netProfit >= 0
+                        ? "✓ Positif"
+                        : "⚠ Négatif"
                 }
               />
               <StatCard
-                label="Marge moyenne"
+                label={
+                  selectedMonth ? "Marge estimée du mois" : "Marge moyenne"
+                }
                 value={
                   overview.avgMargin === null
                     ? UNKNOWN

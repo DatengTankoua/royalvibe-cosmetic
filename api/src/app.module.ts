@@ -17,6 +17,7 @@ import { OrganizationsModule } from './organizations/organizations.module';
 import { ImageSecurityModule } from './common/image/image-security.module';
 import { PushModule } from './push/push.module';
 import { SupportModule } from './support/support.module';
+import { ReportsModule } from './reports/reports.module';
 
 @Module({
   imports: [
@@ -46,6 +47,8 @@ import { SupportModule } from './support/support.module';
     // ne les active pas ; aucun traitement de fond au chargement).
     PushModule,
     SupportModule,
+    // 1-16D : historique mensuel exportable (Excel, PDF), lecture seule.
+    ReportsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

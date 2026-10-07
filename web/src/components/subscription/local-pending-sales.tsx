@@ -8,10 +8,9 @@ import {
   type OutboxOperation,
 } from "@/lib/offline-sales-outbox-db";
 import { isUnfinalized } from "@/lib/offline-sales-policy";
-import { ExportButtons } from "@/components/sales/pending-sales-panel";
 
 // 1-14C.2 — Ventes locales NON finalisées de l'identité courante, en
-// CONSULTATION et EXPORT seuls (accès commercial bloqué ou session limitée).
+// CONSULTATION seule (accès commercial bloqué ou session limitée).
 // Identité = contexte SERVEUR (`GET /auth/context`) ; la lecture exige en
 // plus le pointeur d'identité vérifié pour le jeton fourni (aucun
 // identifiant libre, aucune autre partition lue). Aucun envoi, aucune action,
@@ -89,7 +88,6 @@ export function LocalPendingSales({
           </li>
         ))}
       </ul>
-      <ExportButtons operations={operations} />
     </section>
   );
 }

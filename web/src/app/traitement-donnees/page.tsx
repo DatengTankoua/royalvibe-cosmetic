@@ -235,8 +235,9 @@ export default function TraitementDonneesPage() {
               <p>
                 L&apos;application ne propose pas encore d&apos;export complet
                 des données d&apos;un commerce, ni de suppression d&apos;un
-                commerce par son propriétaire. Seules les ventes en attente sur
-                un appareil peuvent être exportées (fichier JSON ou CSV).
+                commerce par son propriétaire. Le propriétaire et
+                l&apos;administrateur peuvent télécharger l&apos;historique des
+                ventes de chaque mois (Excel ou PDF) depuis Analyse.
               </p>
               {/* À COMPLÉTER : à la fin du service, format et délai de
               restitution, puis suppression des données et des sauvegardes. */}

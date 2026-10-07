@@ -185,6 +185,52 @@ export default function GuidePage() {
                 classements des produits et des vendeurs. Un bilan du mois
                 écoulé est aussi produit au début de chaque mois.
               </p>
+              <p>
+                Quand un mois est choisi, la carte devient « Gain estimé du mois
+                » : montant des ventes du mois moins le prix d&apos;achat actuel
+                des produits vendus ce mois-là (prix conservé lors de la
+                suppression d&apos;un produit). Si ce prix est inconnu pour une
+                vente du mois, le gain est affiché « — » plutôt que faux.
+              </p>
+              <h3>Télécharger l&apos;historique d&apos;un mois</h3>
+              <ul>
+                <li>
+                  Le propriétaire et l&apos;administrateur trouvent, en haut de{" "}
+                  <strong>Analyse</strong>, le bloc « Historique mensuel » :
+                  choisissez un mois, puis « Télécharger en Excel » ou «
+                  Télécharger en PDF ».
+                </li>
+                <li>
+                  Le fichier contient un bilan du mois, toutes les ventes (date,
+                  produit, quantité, prix, montant, vendeur, acheteur), un
+                  récapitulatif par produit et par vendeur, et les corrections
+                  et annulations de ventes du mois.
+                </li>
+                <li>
+                  Les chiffres suivent les mêmes règles que l&apos;écran
+                  Analyse. Le nom d&apos;un produit est celui enregistré lors de
+                  la vente, même s&apos;il a été renommé ou supprimé depuis. Une
+                  valeur inconnue est notée « Information indisponible », jamais
+                  zéro.
+                </li>
+                <li>
+                  Les ventes encore en attente de synchronisation sur un
+                  appareil n&apos;y figurent pas : synchronisez-les avant de
+                  télécharger.
+                </li>
+                <li>
+                  Le PDF reproduit les noms à l&apos;identique (accents, œ,
+                  apostrophes comprises). Si un nom contient des caractères
+                  qu&apos;il ne peut pas reproduire (autre alphabet, émoji…), il
+                  est refusé avec un message : téléchargez alors l&apos;Excel,
+                  qui conserve les noms exactement.
+                </li>
+                <li>
+                  Le téléchargement nécessite une connexion Internet. Le fichier
+                  contient des informations sur les acheteurs : conservez-le en
+                  lieu sûr.
+                </li>
+              </ul>
             </>
           ),
         },
@@ -252,8 +298,9 @@ export default function GuidePage() {
                 </li>
                 <li>
                   Un appareil garde au plus 200 ventes en attente, chacune
-                  pendant 14 jours au plus. Exportez-les (fichier JSON ou CSV)
-                  depuis « Ventes en attente » si l&apos;envoi tarde.
+                  pendant 14 jours au plus. Si l&apos;envoi tarde, ouvrez «
+                  Ventes en attente » pour voir la raison et les corriger ou les
+                  relancer.
                 </li>
                 <li>La déconnexion ne supprime pas les ventes en attente.</li>
               </ul>

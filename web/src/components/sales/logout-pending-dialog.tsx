@@ -9,7 +9,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ExportButtons } from "@/components/sales/pending-sales-panel";
 import type { OutboxOperation } from "@/lib/offline-sales-outbox-db";
 
 // 1-11C.3 — Déconnexion volontaire avec des ventes locales non finalisées
@@ -80,7 +79,6 @@ export function LogoutPendingDialog({
                   : "Synchroniser maintenant"}
               </Button>
             )}
-            <ExportButtons operations={operations} />
             <Button
               type="button"
               variant="outline"
@@ -111,10 +109,8 @@ export function LogoutPendingDialog({
           <div className="flex flex-col gap-3">
             <p role="alert" className="text-sm text-destructive">
               Ces ventes seront effacées de cet appareil et ne seront JAMAIS
-              envoyées au serveur. Action irréversible : exporte-les
-              d&apos;abord si nécessaire.
+              envoyées au serveur. Action irréversible.
             </p>
-            <ExportButtons operations={operations} />
             <Button
               type="button"
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"

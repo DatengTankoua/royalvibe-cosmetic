@@ -144,8 +144,8 @@ export function OfflineSalesProvider({
   const { authContext, offlineIdentity } = useOrganizationShell();
   const online = useOnlineStatus();
   // Sans contexte serveur ni identité hors ligne (chargement, ou refus
-  // 401/403 du contexte) : identité vérifiée localement pour CONSULTER et
-  // EXPORTER ses propres ventes. Aucune saisie (capacité absente) et aucun
+  // 401/403 du contexte) : identité vérifiée localement pour CONSULTER ses
+  // propres ventes. Aucune saisie (capacité absente) et aucun
   // envoi (le moteur exige le contexte serveur).
   const [localIdentity, setLocalIdentity] = useState<
     { userId: string; organizationId: string } | null | undefined

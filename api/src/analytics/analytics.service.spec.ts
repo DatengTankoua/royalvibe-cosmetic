@@ -2,6 +2,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { AnalyticsService } from './analytics.service';
+import { processTimeZone } from './month-range';
 import { Sale } from '../sales/schemas/sale.schema';
 import { Product } from '../products/schemas/product.schema';
 import { PurgedStockAdjustment } from '../products/schemas/purged-stock-adjustment.schema';
@@ -106,7 +107,7 @@ describe('AnalyticsService — isolation tenant (1-4D)', () => {
     expectTenantMatch(monthlyPipeline);
   });
 
-  it('tendance mensuelle groupe par occurredAt avec repli createdAt (1-11C.1)', async () => {
+  it('tendance mensuelle groupe par occurredAt avec repli createdAt (1-11C.1), dans le fuseau des bornes (1-16D)', async () => {
     await service.getMonthlyTrend(ORG_A);
     const pipeline = saleModel.aggregate.mock.calls[0][0] as Record<
       string,
@@ -116,9 +117,10 @@ describe('AnalyticsService — isolation tenant (1-4D)', () => {
       _id: unknown;
     };
     const effective = { $ifNull: ['$occurredAt', '$createdAt'] };
+    const timezone = processTimeZone();
     expect(group._id).toEqual({
-      year: { $year: effective },
-      month: { $month: effective },
+      year: { $year: { date: effective, timezone } },
+      month: { $month: { date: effective, timezone } },
     });
   });
 

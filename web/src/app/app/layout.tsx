@@ -522,7 +522,7 @@ export default function AppShellLayout({
 
       // 1-14C.2 — accès commercial BLOQUÉ : aucun appel métier (branding
       // compris), capacité hors ligne retirée, refus mémorisé. Le pointeur
-      // d'identité (contexte serveur) permet la consultation/export locaux.
+      // d'identité (contexte serveur) permet la consultation locale.
       if (!hasApplicationAccess(ctx)) {
         rememberCommercialBlock(identity);
         void clearSalesCapability();
@@ -705,7 +705,7 @@ export default function AppShellLayout({
   // 1-11C.3 : déconnexion volontaire. Worker arrêté, puis recensement des
   // ventes locales non finalisées de TOUTES les organisations de
   // l'utilisateur : aucune → logout normal ; sinon choix explicite
-  // (synchroniser, exporter, conserver, supprimer). Jamais de suppression
+  // (synchroniser, conserver, supprimer). Jamais de suppression
   // par défaut ; lecture impossible → logout sans suppression.
   const [logoutPending, setLogoutPending] = useState<OutboxOperation[] | null>(
     null,
@@ -789,7 +789,7 @@ export default function AppShellLayout({
   const userFullName = fullNameOf(user.name);
 
   // 1-14C.2 — accès commercial bloqué : écran unique, sans socket, sans
-  // moteur de synchronisation ni pages métier. Consultation/export locaux et
+  // moteur de synchronisation ni pages métier. Consultation locale et
   // déconnexion (avec choix explicite si des ventes restent) conservés.
   if (commercialBlock) {
     const blockedIdentity =

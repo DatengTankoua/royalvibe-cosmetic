@@ -47,6 +47,7 @@ Campagne navigateur (stack démarrée en mode simulated) :
 Contrôles d'isolement (.env) :
   isolated selftest               auto-test Jest : .env factices, garde, témoin sans garde
   isolated api-unit|api-e2e [motifs]  suites API (jest) isolées des .env réels
+                                  option --tz=<IANA> (1-16D) : fuseau du processus Jest
   isolated web-build              next build dans la copie isolée (recette arrêtée)
   env-guard-selftest              garde JavaScript (canaris, témoin sans garde)
   web-canary-check [--out=<f>]    vrai next build / next start avec canaris (témoin, garde, copie isolée)
@@ -425,7 +426,11 @@ async function main(argv) {
       );
     }
     case 'isolated':
-      return require('./isolated-checks').main(rest[0], rest.slice(1));
+      return require('./isolated-checks').main(rest[0], [
+        ...rest.slice(1),
+        // 1-16D : seule option transmise (fuseau du processus Jest).
+        ...(typeof flags.tz === 'string' ? [`--tz=${flags.tz}`] : []),
+      ]);
     case 'web-canary-check': {
       const result = await require('./web-canary').webCanaryCheck();
       if (typeof flags.out === 'string')

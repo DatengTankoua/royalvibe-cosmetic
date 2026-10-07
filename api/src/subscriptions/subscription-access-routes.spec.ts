@@ -18,6 +18,7 @@ import { CamPayWebhookController } from './payments/campay/campay-webhook.contro
 import { PushController } from '../push/push.controller';
 import { NotificationsController } from '../notifications/notifications.controller';
 import { SupportController } from '../support/support.controller';
+import { MonthlyHistoryController } from '../reports/monthly-history.controller';
 import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
 import { SKIP_ORGANIZATION_CONTEXT_KEY } from '../auth/decorators/skip-organization-context.decorator';
 import {
@@ -52,6 +53,7 @@ const CONTROLLERS = [
   PushController,
   NotificationsController,
   SupportController,
+  MonthlyHistoryController,
 ];
 
 type Category =
@@ -258,6 +260,39 @@ describe('Matrice des routes — contrôle commercial (1-14C.1)', () => {
         Reflect.getMetadata(key, handler) ??
         Reflect.getMetadata(key, SupportController);
       expect(meta(PERMISSIONS_KEY)).toEqual(['support.contact']);
+      expect(meta(OWNER_ONLY_KEY)).toBeUndefined();
+      expect(meta(SUBSCRIPTION_ACCESS_EXEMPTION_KEY)).toBeUndefined();
+      expect(meta(IS_PUBLIC_KEY)).toBeUndefined();
+    }
+  });
+
+  it('historique mensuel (1-16D) : routes métier, contexte d’organisation, analytics.read + sales.view_all, aucune exception', () => {
+    const reports = collectRoutes().filter((r) =>
+      r.route.split(' ')[1].startsWith('/reports'),
+    );
+    expect(reports).toEqual([
+      {
+        route: 'GET /reports/monthly',
+        category: 'business',
+        skipsOrganizationContext: false,
+      },
+      {
+        route: 'GET /reports/monthly/:month/:format',
+        category: 'business',
+        skipsOrganizationContext: false,
+      },
+    ]);
+    for (const name of ['months', 'download']) {
+      const handler = (
+        MonthlyHistoryController.prototype as unknown as Record<string, object>
+      )[name];
+      const meta = (key: string): unknown =>
+        Reflect.getMetadata(key, handler) ??
+        Reflect.getMetadata(key, MonthlyHistoryController);
+      expect(meta(PERMISSIONS_KEY)).toEqual([
+        'analytics.read',
+        'sales.view_all',
+      ]);
       expect(meta(OWNER_ONLY_KEY)).toBeUndefined();
       expect(meta(SUBSCRIPTION_ACCESS_EXEMPTION_KEY)).toBeUndefined();
       expect(meta(IS_PUBLIC_KEY)).toBeUndefined();

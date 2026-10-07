@@ -231,7 +231,19 @@ S3_ACCESS_KEY=<supabase-access-key>
 S3_SECRET_KEY=<supabase-secret-key>
 S3_BUCKET=<supabase-bucket-name>
 S3_PUBLIC_URL=<supabase-public-url>
+TZ=Africa/Douala
 ```
+
+`TZ` (1-16D) fixe le calendrier des mois : bornes de l'Analyse, de
+l'historique mensuel exportable et du bilan mensuel. Au lancement au
+Cameroun : `Africa/Douala` (UTC+1, sans heure d'été). Sans `TZ`, le fuseau du
+conteneur s'applique (UTC sur `node:22-alpine`). Un nom inconnu bloque le
+démarrage de l'API (sinon Node basculerait silencieusement en UTC) ; le
+fuseau effectif est journalisé au démarrage (« Fuseau des bornes
+mensuelles »). Changer `TZ` ne modifie aucune date enregistrée (toutes en
+UTC) : seul le rattachement d'une vente proche de minuit à un mois change.
+À définir dans Railway **avant** l'ouverture (configuration Railway actuelle
+non consultée par le lot 1-16D).
 
 **Vercel (Web)** :
 ```env

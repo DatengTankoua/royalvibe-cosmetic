@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangleIcon,
-  DownloadIcon,
   RefreshCwIcon,
   ShieldAlertIcon,
 } from "lucide-react";
@@ -28,7 +27,6 @@ import {
   useOfflineSales,
 } from "@/contexts/offline-sales-context";
 import { fmtXof } from "@/lib/currency";
-import { downloadSalesExport } from "@/lib/offline-sales-export";
 import {
   allowedOperationActions,
   describeOperationError,
@@ -52,45 +50,10 @@ const STATUS_VARIANT = {
   abandoned: "outline",
 } as const;
 
-export const EXPORT_WARNING =
-  "Le fichier peut contenir le nom et le contact des acheteurs : conserve-le en lieu sûr. L'export n'efface rien.";
-
-export function ExportButtons({
-  operations,
-}: {
-  operations: readonly OutboxOperation[];
-}) {
-  return (
-    <div className="space-y-1.5">
-      <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => downloadSalesExport(operations, "json")}
-          disabled={operations.length === 0}
-        >
-          <DownloadIcon className="mr-1 h-3.5 w-3.5" aria-hidden />
-          Exporter JSON
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => downloadSalesExport(operations, "csv")}
-          disabled={operations.length === 0}
-        >
-          <DownloadIcon className="mr-1 h-3.5 w-3.5" aria-hidden />
-          Exporter CSV
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">{EXPORT_WARNING}</p>
-    </div>
-  );
-}
-
 // 1-11C.3 — Ventes locales de la partition COURANTE : compteurs, statut,
-// dernière erreur (message générique), actions de résolution et export.
+// dernière erreur (message générique) et actions de résolution.
+// 1-16D : l'export local JSON/CSV est retiré ; l'historique des ventes
+// synchronisées se télécharge depuis Analyses.
 // Aucune erreur brute, aucun token ni empreinte affichés.
 export function PendingSalesPanel() {
   const { status, operations, blocked, online, syncNow, act } =
@@ -167,7 +130,7 @@ export function PendingSalesPanel() {
               ? "Envoi suspendu : l'abonnement de ce commerce n'est pas actif. Les ventes restent sur cet appareil et repartiront après le renouvellement."
               : blocked.reason === "access_denied"
                 ? "Envoi suspendu : le serveur a refusé l'accès (session, droits ou organisation). Reconnecte-toi ou contacte un administrateur ; les ventes restent sur cet appareil."
-                : "Envoi suspendu : une incohérence a été détectée. Exporte les ventes et contacte le support avant de retirer l'opération concernée."}
+                : "Envoi suspendu : une incohérence a été détectée. Note les ventes concernées et contacte le support avant de retirer l'opération."}
           </p>
         </div>
       )}
@@ -184,7 +147,6 @@ export function PendingSalesPanel() {
             Synchroniser maintenant
           </Button>
         )}
-        {unfinalized.length > 0 && <ExportButtons operations={unfinalized} />}
       </div>
       {!online && counts.pending > 0 && (
         <p className="text-xs text-muted-foreground">
@@ -281,13 +243,12 @@ export function PendingSalesPanel() {
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirm && allowedOperationActions(confirm.op).mayBeRecorded
-                ? "Attention : le serveur a peut-être déjà enregistré cette vente. Exporte-la et vérifie la liste des ventes avant de l'abandonner. "
+                ? "Attention : le serveur a peut-être déjà enregistré cette vente. Vérifie la liste des ventes avant de l'abandonner. "
                 : "Cette vente ne sera jamais envoyée au serveur. "}
-              Elle ne sera plus proposée à l&apos;envoi (aucune suppression
-              silencieuse : exporte-la si besoin).
+              Elle ne sera plus proposée à l&apos;envoi et restera visible sur
+              cet appareil (aucune suppression silencieuse).
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {confirm && <ExportButtons operations={[confirm.op]} />}
           <AlertDialogFooter>
             <AlertDialogCancel>Annuler</AlertDialogCancel>
             <AlertDialogAction
@@ -432,7 +393,7 @@ function OperationItem({
 }
 
 // Shell sans organisation active (accès révoqué) : les ventes locales
-// restent consultables et exportables avant déconnexion. Rien si la file
+// restent consultables avant déconnexion. Rien si la file
 // est vide.
 export function PendingSalesIfAny() {
   const { unfinalizedCount } = useOfflineSales();

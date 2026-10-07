@@ -7,6 +7,7 @@ import {
   PurgedStockAdjustment,
   PurgedStockAdjustmentDocument,
 } from '../products/schemas/purged-stock-adjustment.schema';
+import { processTimeZone, saleMonthMatch } from './month-range';
 
 /**
  * 1-11C.1 — date métier d'une vente : `occurredAt` (heure réelle, possiblement
@@ -65,33 +66,19 @@ export class AnalyticsService {
       (s, p) => s + p.purchasePrice * p.initialQuantity,
       0,
     );
-    const revenue = salesAgg[0]?.totalRevenue ?? 0;
+    const revenue: number = salesAgg[0]?.totalRevenue ?? 0;
     const unitsSold = salesAgg[0]?.totalUnitsSold ?? 0;
     const transactions = salesAgg[0]?.totalTransactions ?? 0;
 
-    // Weighted avg cost of goods sold
-    // 1-15D : les unités vendues de produits supprimés définitivement gardent
-    // le coût figé à la purge (même valeur qu'avant la suppression). Si l'un
-    // de ces coûts est inconnu (purge antérieure, non rattrapée), le bénéfice
-    // est INCONNU (`null`), jamais calculé avec un coût nul.
-    const totalCOGS =
-      products.reduce((s, p) => {
-        const sold = p.initialQuantity - p.remainingQuantity;
-        return s + p.purchasePrice * sold;
-      }, 0) +
-      purged.cost +
-      stockAdjustment;
-    const profitKnown = purged.unknownCostUnits === 0;
+    const { netProfit, avgMargin } = month
+      ? await this.monthlyEstimatedProfit(organizationId, month, revenue)
+      : this.allPeriodsProfit(products, purged, stockAdjustment, revenue);
 
     return {
       totalInvested,
       totalRevenue: revenue,
-      netProfit: profitKnown ? revenue - totalCOGS : null,
-      avgMargin: profitKnown
-        ? revenue > 0
-          ? ((revenue - totalCOGS) / revenue) * 100
-          : 0
-        : null,
+      netProfit,
+      avgMargin,
       unitsSold,
       totalTransactions: transactions,
       productsCount: products.length,
@@ -101,6 +88,69 @@ export class AnalyticsService {
           p.remainingQuantity / p.initialQuantity <= 0.2,
       ).length,
       outOfStockCount: products.filter((p) => p.remainingQuantity === 0).length,
+    };
+  }
+
+  /**
+   * Vue globale (sans filtre de mois) : règle existante, inchangée.
+   * Coût des ventes = prix d'achat × (stock initial − restant) des produits
+   * présents ; 1-15D : + coût figé des ventes de produits supprimés + écarts
+   * figés à la purge. Un coût de produit supprimé inconnu rend le bénéfice
+   * INCONNU (`null`), jamais calculé avec un coût nul.
+   */
+  private allPeriodsProfit(
+    products: ReadonlyArray<{
+      purchasePrice: number;
+      initialQuantity: number;
+      remainingQuantity: number;
+    }>,
+    purged: { cost: number; unknownCostUnits: number },
+    stockAdjustment: number,
+    revenue: number,
+  ): { netProfit: number | null; avgMargin: number | null } {
+    const totalCOGS =
+      products.reduce((s, p) => {
+        const sold = p.initialQuantity - p.remainingQuantity;
+        return s + p.purchasePrice * sold;
+      }, 0) +
+      purged.cost +
+      stockAdjustment;
+    if (purged.unknownCostUnits !== 0) {
+      return { netProfit: null, avgMargin: null };
+    }
+    return {
+      netProfit: revenue - totalCOGS,
+      avgMargin: revenue > 0 ? ((revenue - totalCOGS) / revenue) * 100 : 0,
+    };
+  }
+
+  /**
+   * 1-16D — gain estimé d'UN mois : somme des gains du classement par
+   * produit de ce mois (`getProductsRanking`), soit pour chaque produit le
+   * montant des ventes du mois moins `prix d'achat actuel × quantité vendue
+   * du mois` (coût figé à la purge pour un produit supprimé). Les coûts des
+   * autres mois n'interviennent plus (avant : coût de toutes les périodes
+   * soustrait au montant du mois). Un coût inconnu PARMI LES VENTES DU MOIS
+   * rend le gain inconnu (`null`). Même valeur que l'historique mensuel
+   * exportable. Les écarts de stock figés à la purge (1-15D) ne sont pas
+   * datés : ils restent dans la seule vue globale.
+   */
+  private async monthlyEstimatedProfit(
+    organizationId: string,
+    month: string,
+    revenue: number,
+  ): Promise<{ netProfit: number | null; avgMargin: number | null }> {
+    const ranking = (await this.getProductsRanking(
+      organizationId,
+      month,
+    )) as Array<{ netProfit: number | null }>;
+    if (ranking.some((row) => row.netProfit === null)) {
+      return { netProfit: null, avgMargin: null };
+    }
+    const gain = ranking.reduce((s, row) => s + row.netProfit!, 0);
+    return {
+      netProfit: gain,
+      avgMargin: revenue > 0 ? (gain / revenue) * 100 : 0,
     };
   }
 
@@ -330,13 +380,17 @@ export class AnalyticsService {
   }
 
   async getMonthlyTrend(organizationId: string) {
+    const timezone = processTimeZone();
     return this.saleModel.aggregate([
       { $match: { organizationId: new Types.ObjectId(organizationId) } },
       {
         $group: {
           _id: {
-            year: { $year: SALE_EFFECTIVE_DATE },
-            month: { $month: SALE_EFFECTIVE_DATE },
+            // 1-16D : même fuseau que les bornes de `monthMatch` (fuseau du
+            // processus API) ; auparavant UTC, d'où un mois de la courbe et
+            // de la liste des mois différent des filtres hors UTC.
+            year: { $year: { date: SALE_EFFECTIVE_DATE, timezone } },
+            month: { $month: { date: SALE_EFFECTIVE_DATE, timezone } },
           },
           totalRevenue: { $sum: { $multiply: ['$salePrice', '$quantity'] } },
           totalUnitsSold: { $sum: '$quantity' },
@@ -370,11 +424,9 @@ export class AnalyticsService {
 
   // 1-11C.1 : période sur `occurredAt` ; les ventes antérieures (sans
   // `occurredAt`, `null` couvre aussi « absent ») retombent sur `createdAt`.
+  // 1-16D : logique déplacée telle quelle dans `month-range.ts`, partagée
+  // avec l'historique mensuel exportable.
   private monthMatch(month: string): Record<string, unknown> {
-    const [year, m] = month.split('-').map(Number);
-    const range = { $gte: new Date(year, m - 1, 1), $lt: new Date(year, m, 1) };
-    return {
-      $or: [{ occurredAt: range }, { occurredAt: null, createdAt: range }],
-    };
+    return saleMonthMatch(month);
   }
 }

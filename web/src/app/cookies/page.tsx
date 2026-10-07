@@ -183,8 +183,8 @@ export default function CookiesPage() {
               />
               <p>
                 Les ventes en attente ne sont <strong>pas</strong> effacées à la
-                déconnexion, pour ne pas perdre une vente. Elles peuvent être
-                exportées depuis la page des ventes en attente.
+                déconnexion, pour ne pas perdre une vente. Elles restent
+                consultables depuis la page des ventes en attente.
               </p>
             </>
           ),
@@ -268,8 +268,7 @@ export default function CookiesPage() {
               <li>
                 Dans les réglages du navigateur, effacer les données du site{" "}
                 <span translate="no">{SITE.domain}</span> supprime tout, y
-                compris les ventes en attente : exportez-les ou attendez leur
-                envoi avant.
+                compris les ventes en attente : attendez leur envoi avant.
               </li>
               <li>
                 Pour arrêter les notifications d&apos;un appareil, voir le{" "}

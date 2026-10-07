@@ -226,7 +226,11 @@ async function selftest() {
 
 // ─── Suites API ─────────────────────────────────────────────────────────────
 
-async function apiJest(label, args, { allowTestOwnedEnv = false } = {}) {
+async function apiJest(
+  label,
+  args,
+  { allowTestOwnedEnv = false, timeZone = null } = {},
+) {
   for (const prefix of TEST_OWNED_ENV_PREFIXES) {
     if (path.resolve(prefix).startsWith(path.resolve(C.REPO))) {
       throw new Error('Exception de garde refusée : préfixe sous le dépôt');
@@ -236,21 +240,23 @@ async function apiJest(label, args, { allowTestOwnedEnv = false } = {}) {
   const started = Date.now();
   const code = await run(process.execPath, [JEST_BIN, ...args], {
     cwd: C.API_DIR,
-    env: isolatedEnv(
-      log.file,
-      allowTestOwnedEnv
+    env: isolatedEnv(log.file, {
+      ...(allowTestOwnedEnv
         ? {
             RECIPE_ENV_GUARD_ALLOW_PREFIXES: TEST_OWNED_ENV_PREFIXES.join(
               path.delimiter,
             ),
           }
-        : {},
-    ),
+        : {}),
+      // 1-16D : fuseau explicite (`--tz=`), seule variable ajoutée.
+      ...(timeZone ? { TZ: timeZone } : {}),
+    }),
   });
   const entries = readLog(log.file);
   const report = {
     label,
     exit: code,
+    ...(timeZone ? { timeZone } : {}),
     seconds: Math.round((Date.now() - started) / 1000),
     guardedProcesses: new Set(entries.map((e) => e.pid)).size,
     blockedAttempts: summarize(entries),
@@ -303,6 +309,29 @@ async function webBuild() {
 }
 
 /** 1-15D — motifs de chemins de tests : caractères de chemin uniquement. */
+/**
+ * 1-16D — `--tz=<nom IANA>` : fuseau du processus Jest, fixé AU LANCEMENT
+ * (le `process.env` d'un test Jest est une copie : l'affecter ne change pas
+ * l'heure locale). Nom validé ; aucune autre variable n'est ajoutée.
+ */
+function splitTimeZone(args) {
+  const rest = [];
+  let timeZone = null;
+  for (const a of args) {
+    const m = /^--tz=(.+)$/.exec(a);
+    if (!m) {
+      rest.push(a);
+      continue;
+    }
+    if (!/^[A-Za-z_]+(\/[A-Za-z0-9_+-]+)*$/.test(m[1])) {
+      throw new Error(`Fuseau refusé : ${m[1]}`);
+    }
+    new Intl.DateTimeFormat('en-US', { timeZone: m[1] }); // RangeError si inconnu
+    timeZone = m[1];
+  }
+  return { rest, timeZone };
+}
+
 function testPatterns(patterns) {
   for (const p of patterns) {
     if (!/^[\w./-]+$/.test(p)) throw new Error(`Motif de test refusé : ${p}`);
@@ -310,7 +339,8 @@ function testPatterns(patterns) {
   return patterns;
 }
 
-async function main(what, patterns = []) {
+async function main(what, args = []) {
+  const { rest: patterns, timeZone } = splitTimeZone(args);
   switch (what) {
     case 'selftest': {
       const r = await selftest();
@@ -318,7 +348,9 @@ async function main(what, patterns = []) {
       return r.pass ? 0 : 1;
     }
     case 'api-unit': {
-      const r = await apiJest('api-unit', testPatterns(patterns));
+      const r = await apiJest('api-unit', testPatterns(patterns), {
+        timeZone,
+      });
       process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
       return r.exit;
     }
@@ -331,7 +363,7 @@ async function main(what, patterns = []) {
           '--maxWorkers=1',
           ...testPatterns(patterns),
         ],
-        { allowTestOwnedEnv: true },
+        { allowTestOwnedEnv: true, timeZone },
       );
       process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
       return r.exit;

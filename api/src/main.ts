@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import {
@@ -15,8 +15,14 @@ import type { ExpressSettings } from './common/trust-proxy';
 import { API_APPLICATION_OPTIONS } from './common/application-options';
 import { resolveWebPushConfig } from './push/push-config';
 import { startNotifications } from './push/push-bootstrap';
+import { configureProcessTimeZone } from './analytics/month-range';
 
 async function bootstrap() {
+  // 1-16D : fuseau des mois (Analyse, historique exportable, bilan
+  // mensuel), validé et appliqué AVANT toute création de date. Lancement
+  // au Cameroun : TZ=Africa/Douala (README, variables de production).
+  const timeZone = configureProcessTimeZone();
+  new Logger('Bootstrap').log(`Fuseau des bornes mensuelles : ${timeZone}`);
   // CORS HTTP fermé (phase 0B.4) : la config est parsée UNE FOIS au
   // démarrage via le parser strict de 0B.3 — aucune `?? true`, aucun
   // wildcard. En production, `parseCORSOrigin` lève OriginConfigError si

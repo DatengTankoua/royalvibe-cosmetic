@@ -35,7 +35,7 @@ const REFUSAL_MESSAGES: Record<
   identity: "Session non vérifiée sur cet appareil : reconnecte-toi.",
   invalid: "Données de vente invalides.",
   limit:
-    "Limite de 200 ventes en attente atteinte : synchronise ou exporte avant d'en saisir d'autres.",
+    "Limite de 200 ventes en attente atteinte : synchronise-les avant d'en saisir d'autres.",
   unavailable: "Stockage local indisponible : vente non enregistrée.",
   "not-replaceable": "Cette vente ne peut plus être corrigée.",
 };

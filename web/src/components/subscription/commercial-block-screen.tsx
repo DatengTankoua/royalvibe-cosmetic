@@ -9,7 +9,7 @@ import { LocalPendingSales } from "./local-pending-sales";
 // 1-14C.2 — Écran unique de blocage commercial (session applicative
 // bloquée, session limitée, ou blocage connu hors ligne). Un seul message
 // principal par situation, aucun terme technique. Aucun appel métier : seuls
-// la lecture d'abonnement (propriétaire) et la consultation/export locaux.
+// la lecture d'abonnement (propriétaire) et la consultation locale.
 
 export function blockTitle(access: ApiAccessView | null): string {
   switch (access?.subscriptionState) {

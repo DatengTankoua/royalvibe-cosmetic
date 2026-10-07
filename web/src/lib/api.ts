@@ -108,6 +108,7 @@ export interface AnalyticsOverview {
   totalInvested: number;
   totalRevenue: number;
   // 1-15D : `null` si le coût d'achat de produits supprimés est inconnu.
+  // 1-16D : avec `month`, gain estimé du seul mois (classement par produit).
   netProfit: number | null;
   avgMargin: number | null;
   unitsSold: number;

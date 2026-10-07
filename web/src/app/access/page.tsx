@@ -88,7 +88,7 @@ export default function SubscriptionAccessPage() {
         setContext(ctx);
         setLoadState("ready");
         // Identité VÉRIFIÉE par le serveur avec ce jeton : rend lisibles
-        // (consultation/export) les seules ventes locales de cette identité.
+        // (consultation) les seules ventes locales de cette identité.
         void writeIdentityPointer({
           userId: ctx.userId,
           organizationId: ctx.organizationId,
