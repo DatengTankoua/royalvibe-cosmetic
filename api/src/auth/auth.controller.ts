@@ -7,6 +7,7 @@ import {
   Header,
   HttpCode,
   Post,
+  Put,
   UseGuards,
 } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
@@ -22,6 +23,8 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { SwitchOrganizationDto } from './dto/switch-organization.dto';
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
+import { UpdateLocaleDto } from './dto/update-locale.dto';
+import { UsersService } from '../users/users.service';
 import { Public } from './decorators/public.decorator';
 import { SkipOrganizationContext } from './decorators/skip-organization-context.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
@@ -79,6 +82,7 @@ export class AuthController {
     private organizationsService: OrganizationsService,
     private emailVerificationService: EmailVerificationService,
     private passwordResetService: PasswordResetService,
+    private usersService: UsersService,
   ) {}
 
   // Rate limiting (0B.6) : MÊME garde/fenêtres que /auth/login, sans
@@ -257,7 +261,27 @@ export class AuthController {
       email: user.email,
       role: user.role,
       organizationId: user.organizationId,
+      // 1-16G : langue des e-mails et notifications (`null` : jamais choisie,
+      // envois en français).
+      locale: user.locale ?? null,
     };
+  }
+
+  // 1-16G : préférence de langue du compte (e-mails, notifications push).
+  // Identité seule (`sub` du JWT, jamais du corps) ; aucune organisation,
+  // aucun droit ni état commercial requis : une session limitée peut aussi
+  // l'enregistrer. Seul `User.locale` est modifié.
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @AllowInactiveSubscription('identity')
+  @SkipOrganizationContext()
+  @Put('me/locale')
+  async updateLocale(
+    @CurrentUser() user: AuthenticatedPrincipal,
+    @Body() dto: UpdateLocaleDto,
+  ) {
+    await this.usersService.setLocale(user._id, dto.locale);
+    return { locale: dto.locale };
   }
 
   // 1-9C — source unique et fiable des droits de l'organisation COURANTE

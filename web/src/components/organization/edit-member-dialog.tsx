@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useMessage } from "@/i18n/use-message";
 import {
   Dialog,
   DialogContent,
@@ -13,7 +15,6 @@ import { Label } from "@/components/ui/label";
 import { PermissionCheckboxes } from "@/components/organization/permission-checkboxes";
 import {
   ASSIGNABLE_MEMBER_ROLES,
-  ROLE_LABELS,
   roleGrantsAllPermissions,
   supplementaryOnly,
   type DelegablePermission,
@@ -31,11 +32,6 @@ interface EditMemberDialogProps {
 }
 
 const STATUS_OPTIONS = ["active", "suspended", "revoked"] as const;
-const STATUS_LABELS: Record<(typeof STATUS_OPTIONS)[number], string> = {
-  active: "Active",
-  suspended: "Suspendue",
-  revoked: "Révoquée",
-};
 
 export function EditMemberDialog({
   member,
@@ -43,6 +39,7 @@ export function EditMemberDialog({
   onClose,
   onUpdated,
 }: EditMemberDialogProps) {
+  const { t } = useT("organization");
   const [role, setRole] = useState<(typeof ASSIGNABLE_MEMBER_ROLES)[number]>(
     member.role === "owner" ? "admin" : member.role,
   );
@@ -57,7 +54,7 @@ export function EditMemberDialog({
     member.status,
   );
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useMessage("organization");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,7 +68,7 @@ export function EditMemberDialog({
         status,
       });
       onUpdated(updated);
-      toast.success("Membre mis à jour");
+      toast.success(t("members.updated"));
       onClose();
     } catch (err) {
       setError(describeOrganizationError(err));
@@ -84,11 +81,13 @@ export function EditMemberDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Modifier {member.user.name}</DialogTitle>
+          <DialogTitle>
+            {t("members.editTitle", { name: member.user.name })}
+          </DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
           <div className="space-y-2">
-            <Label htmlFor="member-role">Rôle</Label>
+            <Label htmlFor="member-role">{t("invitations.role")}</Label>
             <select
               id="member-role"
               value={role}
@@ -101,13 +100,13 @@ export function EditMemberDialog({
             >
               {ASSIGNABLE_MEMBER_ROLES.map((r) => (
                 <option key={r} value={r}>
-                  {ROLE_LABELS[r]}
+                  {t(`roles.${r}`)}
                 </option>
               ))}
             </select>
           </div>
           <div className="space-y-2">
-            <Label>Permissions supplémentaires</Label>
+            <Label>{t("permissionsField.label")}</Label>
             <PermissionCheckboxes
               value={permissions}
               onChange={setPermissions}
@@ -117,7 +116,7 @@ export function EditMemberDialog({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="member-status">Statut</Label>
+            <Label htmlFor="member-status">{t("members.status")}</Label>
             <select
               id="member-status"
               value={status}
@@ -128,7 +127,7 @@ export function EditMemberDialog({
             >
               {STATUS_OPTIONS.map((s) => (
                 <option key={s} value={s}>
-                  {STATUS_LABELS[s]}
+                  {t(`memberStatus.${s}`)}
                 </option>
               ))}
             </select>
@@ -139,7 +138,7 @@ export function EditMemberDialog({
             </p>
           )}
           <Button type="submit" className="w-full" disabled={saving}>
-            {saving ? "Enregistrement…" : "Enregistrer"}
+            {saving ? t("saving") : t("actions.save")}
           </Button>
         </form>
       </DialogContent>

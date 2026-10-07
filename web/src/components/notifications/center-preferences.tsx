@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
 import { getApiErrorMessage } from "@/lib/api";
 import {
-  CATEGORY_LABELS,
+  CATEGORY_KEYS,
   CenterPreferences,
   fetchCenterPreferences,
   updateCenterPreferences,
@@ -15,6 +16,7 @@ import type { PushPreferences } from "@/lib/push-notifications";
 // Une catégorie désactivée n'est plus créée et ses notifications existantes
 // sont masquées. Seules les catégories autorisées au rôle sont proposées.
 export function CenterPreferencesSection() {
+  const { t } = useT("notifications");
   const [prefs, setPrefs] = useState<CenterPreferences | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -43,27 +45,22 @@ export function CenterPreferencesSection() {
   return (
     <section className="max-w-md space-y-3">
       <div>
-        <h2 className="text-lg font-semibold">Dans l&apos;application</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Notifications visibles sous la cloche, sur tous vos appareils, même
-          sans notifications push.
-        </p>
+        <h2 className="text-lg font-semibold">{t("center.title")}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">{t("center.text")}</p>
       </div>
       {failed ? (
         <p className="text-sm text-muted-foreground">
-          Préférences indisponibles pour le moment.
+          {t("center.unavailable")}
         </p>
       ) : !prefs ? (
-        <p className="text-sm text-muted-foreground">Chargement…</p>
+        <p className="text-sm text-muted-foreground">{t("loading")}</p>
       ) : prefs.available.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          Aucune notification n&apos;est proposée pour votre rôle.
-        </p>
+        <p className="text-sm text-muted-foreground">{t("noneForRole")}</p>
       ) : (
         <fieldset className="space-y-3" disabled={busy}>
-          <legend className="sr-only">Catégories affichées</legend>
+          <legend className="sr-only">{t("center.legend")}</legend>
           {prefs.available.map((category) => {
-            const { key, label, help } = CATEGORY_LABELS[category];
+            const key = CATEGORY_KEYS[category];
             return (
               <label key={category} className="flex items-start gap-2 text-sm">
                 <input
@@ -73,9 +70,9 @@ export function CenterPreferencesSection() {
                   onChange={(e) => void toggle(key, e.target.checked)}
                 />
                 <span>
-                  {label}
+                  {t(`categories.${key}.label`)}
                   <span className="block text-xs text-muted-foreground">
-                    {help}
+                    {t(`categories.${key}.help`)}
                   </span>
                 </span>
               </label>

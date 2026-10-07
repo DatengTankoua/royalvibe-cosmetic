@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { BellIcon } from "lucide-react";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
+import { useLocale } from "@/i18n/locale-provider";
 import { getToken } from "@/lib/auth";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
 import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
@@ -16,11 +19,6 @@ import {
 
 const RECENT = 5;
 
-const timeFormat = new Intl.DateTimeFormat("fr-FR", {
-  dateStyle: "short",
-  timeStyle: "short",
-});
-
 // Cloche du centre de notifications (1-16A.1), dans l'en-tête juste avant le
 // nom de l'utilisateur.
 // - Compteur des non lues relu par l'API ; actualisé par le signal privé
@@ -31,6 +29,9 @@ const timeFormat = new Intl.DateTimeFormat("fr-FR", {
 // - Ouvrir le panneau NE marque RIEN comme lu : seule l'ouverture d'une
 //   notification (page de détail) ou « Tout marquer comme lu » le font.
 export function NotificationBell() {
+  const { t } = useT("notifications");
+  const format = useFormat();
+  const { locale } = useLocale();
   const [count, setCount] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
   const [recent, setRecent] = useState<AppNotification[] | null>(null);
@@ -78,6 +79,9 @@ export function NotificationBell() {
   );
   useSocketSignals([NOTIFICATIONS_CHANGED], request);
 
+  // 1-16G : textes génériques des notifications rendus par l'API dans la
+  // langue de la requête : relus (lecture seule) après un changement de
+  // langue si le panneau est ouvert. Rien n'est marqué comme lu.
   useEffect(() => {
     if (!open) return;
     void loadRecent();
@@ -96,15 +100,15 @@ export function NotificationBell() {
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("pointerdown", onPointer);
     };
-  }, [open, loadRecent]);
+  }, [open, loadRecent, locale]);
 
   const unread = count ?? 0;
   const label =
     unread === 0
-      ? "Notifications, aucune non lue"
-      : `Notifications, ${unread > 99 ? "plus de 99" : unread} non ${
-          unread > 1 ? "lues" : "lue"
-        }`;
+      ? t("bell.noneUnread")
+      : unread > 99
+        ? t("bell.moreThan99")
+        : t("bell.unread", { count: unread });
 
   return (
     <div ref={rootRef} className="relative">
@@ -134,17 +138,17 @@ export function NotificationBell() {
         <div
           id="notification-bell-panel"
           role="dialog"
-          aria-label="Notifications récentes"
+          aria-label={t("bell.recent")}
           className="absolute right-0 z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-md border bg-background p-2 shadow-lg"
         >
-          <p className="px-2 py-1 text-sm font-semibold">Notifications</p>
+          <p className="px-2 py-1 text-sm font-semibold">{t("title")}</p>
           {recent === null ? (
             <p className="px-2 py-3 text-sm text-muted-foreground">
-              Chargement…
+              {t("loading")}
             </p>
           ) : recent.length === 0 ? (
             <p className="px-2 py-3 text-sm text-muted-foreground">
-              Aucune notification.
+              {t("empty")}
             </p>
           ) : (
             <ul className="max-h-80 overflow-y-auto">
@@ -166,9 +170,14 @@ export function NotificationBell() {
                       <span className={n.readAt ? "" : "font-medium"}>
                         {n.body}
                       </span>
-                      {!n.readAt && <span className="sr-only"> (non lue)</span>}
+                      {!n.readAt && (
+                        <span className="sr-only"> {t("unreadMark")}</span>
+                      )}
                       <span className="block text-xs text-muted-foreground">
-                        {timeFormat.format(new Date(n.createdAt))}
+                        {format.dateWith(n.createdAt, {
+                          dateStyle: "short",
+                          timeStyle: "short",
+                        })}
                       </span>
                     </span>
                   </Link>
@@ -182,7 +191,7 @@ export function NotificationBell() {
             onClick={() => setOpen(false)}
             className="mt-1 block rounded-md px-2 py-2 text-center text-sm font-medium text-(--tenant-accent-ink) hover:bg-muted"
           >
-            Voir toutes les notifications
+            {t("bell.seeAll")}
           </Link>
         </div>
       )}

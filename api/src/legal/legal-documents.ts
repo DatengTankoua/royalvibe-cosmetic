@@ -25,7 +25,11 @@ export const TERMS_OF_USE = 'conditions-utilisation';
 export const SUBSCRIPTION_TERMS = 'conditions-abonnement';
 export const PRIVACY_NOTICE = 'confidentialite';
 
-/** Langue proposée par défaut (seule publiée à ce jour). */
+/**
+ * Langue proposée par défaut. 1-16G : l'anglais est publié pour les versions
+ * en vigueur (archives `<version>.en.txt`) ; une version archivée en
+ * français seulement n'est jamais traduite après coup.
+ */
 export const LEGAL_DEFAULT_LOCALE = 'fr';
 
 export enum LegalAcceptanceContext {

@@ -1,7 +1,7 @@
 "use client";
 
+import { useT } from "next-i18next/client";
 import {
-  PERMISSION_LABELS,
   SUPPLEMENTARY_PERMISSIONS,
   type DelegablePermission,
 } from "@/lib/organization-permissions";
@@ -28,6 +28,7 @@ export function PermissionCheckboxes({
   disabled,
   allGranted = false,
 }: PermissionCheckboxesProps) {
+  const { t } = useT("organization");
   const options = SUPPLEMENTARY_PERMISSIONS.filter((p) =>
     assignable.includes(p),
   );
@@ -43,7 +44,7 @@ export function PermissionCheckboxes({
   if (options.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
-        Aucune permission supplémentaire disponible.
+        {t("permissionsField.none")}
       </p>
     );
   }
@@ -52,7 +53,7 @@ export function PermissionCheckboxes({
     <div className="space-y-2">
       {allGranted && (
         <p className="text-xs text-muted-foreground">
-          Un administrateur dispose de toutes les permissions.
+          {t("permissionsField.adminAll")}
         </p>
       )}
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -65,7 +66,7 @@ export function PermissionCheckboxes({
               disabled={disabled || allGranted}
               className="h-4 w-4 rounded border-input"
             />
-            {PERMISSION_LABELS[permission]}
+            {t(`permissions.${permission}`)}
           </label>
         ))}
       </div>

@@ -1,7 +1,12 @@
 "use client";
 
+import type { TFunction } from "i18next";
+import { useT } from "next-i18next/client";
 import type { ApiSubscription, ApiSubscriptionPeriod } from "@/lib/api";
-import { termLabel } from "@/lib/subscription-offers";
+import { knownTerm } from "@/lib/subscription-offers";
+import { dateFormat } from "@/i18n/format";
+import { useLocale } from "@/i18n/locale-provider";
+import type { Locale } from "@/i18n/settings";
 
 // 1-14C.2 — Lecture de l'abonnement du commerce (propriétaire réel).
 // Toutes les valeurs viennent de la réponse serveur. Le temps restant est
@@ -10,52 +15,68 @@ import { termLabel } from "@/lib/subscription-offers";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export function formatDateTime(iso: string): string {
+type SubscriptionT = TFunction<"subscription">;
+
+export function formatDateTime(
+  iso: string,
+  locale: Locale,
+  t: SubscriptionT,
+): string {
   const date = new Date(iso);
-  return `${date.toLocaleDateString("fr-FR", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  })} à ${date.toLocaleTimeString("fr-FR", {
-    hour: "2-digit",
-    minute: "2-digit",
-  })}`;
+  return t("overview.dateAt", {
+    date: dateFormat(locale, {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }).format(date),
+    time: dateFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(
+      date,
+    ),
+  });
 }
 
-export function subscriptionStatusLabel(subscription: {
-  state: ApiSubscription["state"];
-  currentPeriod?: ApiSubscriptionPeriod | null;
-}): string {
+export function subscriptionStatusLabel(
+  subscription: {
+    state: ApiSubscription["state"];
+    currentPeriod?: ApiSubscriptionPeriod | null;
+  },
+  t: SubscriptionT,
+): string {
   switch (subscription.state) {
     case "active":
       return subscription.currentPeriod?.kind === "trial"
-        ? "Essai gratuit en cours"
-        : "Abonnement actif";
+        ? t("overview.state.trial")
+        : t("overview.state.active");
     case "expired":
-      return "Abonnement expiré";
+      return t("overview.state.expired");
     case "scheduled":
-      return "Période à venir";
+      return t("overview.state.scheduled");
     default:
-      return "Aucun abonnement";
+      return t("overview.state.none");
   }
 }
 
-function periodLabel(period: ApiSubscriptionPeriod): string {
-  return period.kind === "trial"
-    ? "Essai gratuit"
-    : `Abonnement ${termLabel(period.term)}`;
+function periodLabel(period: ApiSubscriptionPeriod, t: SubscriptionT): string {
+  if (period.kind === "trial") return t("overview.trial");
+  const term = knownTerm(period.term);
+  return t("overview.subscriptionTerm", {
+    term: term ? t(`offers.term.${term}`) : "—",
+  });
 }
 
 /** Temps restant arrondi au jour supérieur, à partir de l'heure SERVEUR. */
 export function remainingLabel(
   coverageEndsAt: string | null,
   serverNow: string | null,
+  t: SubscriptionT,
 ): string | null {
   if (!coverageEndsAt || !serverNow) return null;
   const ms = new Date(coverageEndsAt).getTime() - new Date(serverNow).getTime();
   if (!Number.isFinite(ms) || ms <= 0) return null;
   const days = Math.ceil(ms / DAY_MS);
-  return days <= 1 ? "moins d'un jour" : `${days} jours`;
+  return days <= 1
+    ? t("overview.lessThanDay")
+    : t("overview.days", { count: days });
 }
 
 export function SubscriptionOverview({
@@ -66,29 +87,38 @@ export function SubscriptionOverview({
   /** Heure serveur de la dernière vérification (`access.checkedAt`). */
   serverNow: string | null;
 }) {
+  const { t } = useT("subscription");
+  const { locale } = useLocale();
+  const at = (iso: string) => formatDateTime(iso, locale, t);
   const remaining =
     subscription.state === "active"
-      ? remainingLabel(subscription.coverageEndsAt, serverNow)
+      ? remainingLabel(subscription.coverageEndsAt, serverNow, t)
       : null;
   return (
     <div className="space-y-5">
       <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="rounded-lg border p-3">
-          <dt className="text-xs text-muted-foreground">État</dt>
+          <dt className="text-xs text-muted-foreground">
+            {t("overview.status")}
+          </dt>
           <dd className="mt-1 font-semibold" data-testid="subscription-status">
-            {subscriptionStatusLabel(subscription)}
+            {subscriptionStatusLabel(subscription, t)}
           </dd>
         </div>
         {subscription.currentPeriod && (
           <div className="rounded-lg border p-3">
-            <dt className="text-xs text-muted-foreground">Période en cours</dt>
+            <dt className="text-xs text-muted-foreground">
+              {t("overview.currentPeriod")}
+            </dt>
             <dd className="mt-1 text-sm">
               <span className="font-medium">
-                {periodLabel(subscription.currentPeriod)}
+                {periodLabel(subscription.currentPeriod, t)}
               </span>
               <span className="block text-muted-foreground">
-                du {formatDateTime(subscription.currentPeriod.startsAt)} au{" "}
-                {formatDateTime(subscription.currentPeriod.endsAt)}
+                {t("overview.fromTo", {
+                  from: at(subscription.currentPeriod.startsAt),
+                  to: at(subscription.currentPeriod.endsAt),
+                })}
               </span>
             </dd>
           </div>
@@ -97,14 +127,14 @@ export function SubscriptionOverview({
           <div className="rounded-lg border p-3">
             <dt className="text-xs text-muted-foreground">
               {subscription.state === "expired"
-                ? "Accès terminé le"
-                : "Accès couvert jusqu'au"}
+                ? t("overview.accessEnded")
+                : t("overview.accessUntil")}
             </dt>
             <dd className="mt-1 text-sm" data-testid="subscription-coverage">
-              {formatDateTime(subscription.coverageEndsAt)}
+              {at(subscription.coverageEndsAt)}
               {remaining && (
                 <span className="block text-muted-foreground">
-                  Temps restant : {remaining}
+                  {t("overview.remaining", { remaining })}
                 </span>
               )}
             </dd>
@@ -112,9 +142,13 @@ export function SubscriptionOverview({
         )}
         {subscription.nextPeriodStartsAt && (
           <div className="rounded-lg border p-3">
-            <dt className="text-xs text-muted-foreground">Prochaine période</dt>
+            <dt className="text-xs text-muted-foreground">
+              {t("overview.nextPeriod")}
+            </dt>
             <dd className="mt-1 text-sm">
-              à partir du {formatDateTime(subscription.nextPeriodStartsAt)}
+              {t("overview.startingOn", {
+                date: at(subscription.nextPeriodStartsAt),
+              })}
             </dd>
           </div>
         )}
@@ -125,10 +159,12 @@ export function SubscriptionOverview({
         className="space-y-2"
       >
         <h3 id="subscription-history-title" className="text-sm font-semibold">
-          Historique des périodes
+          {t("overview.historyTitle")}
         </h3>
         {subscription.periods.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Aucune période.</p>
+          <p className="text-sm text-muted-foreground">
+            {t("overview.historyEmpty")}
+          </p>
         ) : (
           <ul
             className="divide-y rounded-lg border"
@@ -139,19 +175,16 @@ export function SubscriptionOverview({
                 key={`${period.startsAt}-${period.endsAt}-${period.kind}`}
                 className="flex flex-col gap-0.5 px-3 py-2 text-sm sm:flex-row sm:items-center sm:justify-between"
               >
-                <span className="font-medium">{periodLabel(period)}</span>
+                <span className="font-medium">{periodLabel(period, t)}</span>
                 <span className="text-muted-foreground">
-                  {formatDateTime(period.startsAt)} →{" "}
-                  {formatDateTime(period.endsAt)}
+                  {at(period.startsAt)} → {at(period.endsAt)}
                 </span>
               </li>
             ))}
           </ul>
         )}
         <p className="text-xs text-muted-foreground">
-          Historique des périodes d&apos;accès, sans montant : les paiements
-          figurent dans l&apos;historique des paiements ; les factures seront
-          disponibles ultérieurement.
+          {t("overview.historyNote")}
         </p>
       </section>
     </div>

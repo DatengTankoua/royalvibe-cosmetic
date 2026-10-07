@@ -2,6 +2,9 @@
 
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
+import { useMessage } from "@/i18n/use-message";
 import { CheckIcon, CopyIcon, PlusIcon } from "lucide-react";
 import {
   Dialog,
@@ -16,7 +19,6 @@ import { PermissionCheckboxes } from "@/components/organization/permission-check
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
 import {
   INVITABLE_ROLES,
-  ROLE_LABELS,
   roleGrantsAllPermissions,
   type DelegablePermission,
 } from "@/lib/organization-permissions";
@@ -33,13 +35,6 @@ interface CreateInvitationDialogProps {
 
 type CopyState = "idle" | "copied" | "manual";
 
-function formatExpiry(iso: string): string {
-  return new Date(iso).toLocaleString("fr-FR", {
-    dateStyle: "long",
-    timeStyle: "short",
-  });
-}
-
 // 1-12G : aucun email envoyé — le créateur copie le lien et le transmet
 // lui-même. Le lien (jeton brut inclus) n'est renvoyé qu'UNE SEULE fois par
 // la réponse de création : uniquement en mémoire (état React), jamais
@@ -48,13 +43,17 @@ function formatExpiry(iso: string): string {
 export function CreateInvitationDialog({
   onCreated,
 }: CreateInvitationDialogProps) {
+  const { t } = useT("organization");
+  const format = useFormat();
+  const formatExpiry = (iso: string) =>
+    format.dateWith(iso, { dateStyle: "long", timeStyle: "short" });
   const { authContext } = useOrganizationShell();
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<(typeof INVITABLE_ROLES)[number]>("seller");
   const [permissions, setPermissions] = useState<DelegablePermission[]>([]);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useMessage("organization");
   const [created, setCreated] = useState<CreatedInvitation | null>(null);
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const submitting = useRef(false);
@@ -86,7 +85,7 @@ export function CreateInvitationDialog({
       });
       onCreated(result.invitation);
       setCreated(result);
-      toast.success("Invitation créée");
+      toast.success(t("invitations.created"));
     } catch (err) {
       setError(describeOrganizationError(err));
     } finally {
@@ -117,7 +116,7 @@ export function CreateInvitationDialog({
     <>
       <Button size="sm" onClick={() => setOpen(true)}>
         <PlusIcon className="mr-1 h-4 w-4" />
-        Inviter un membre
+        {t("invitations.invite")}
       </Button>
       <Dialog
         open={open}
@@ -129,18 +128,17 @@ export function CreateInvitationDialog({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {created ? "Invitation créée" : "Nouvelle invitation"}
+              {created ? t("invitations.created") : t("invitations.newTitle")}
             </DialogTitle>
           </DialogHeader>
 
           {created ? (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">
-                Copie ce lien et transmets-le à {created.invitation.email}. Il
-                n&apos;est affiché qu&apos;une seule fois.
+                {t("invitations.copyHint", { email: created.invitation.email })}
               </p>
               <div className="space-y-2">
-                <Label htmlFor="invite-link">Lien d&apos;invitation</Label>
+                <Label htmlFor="invite-link">{t("invitations.link")}</Label>
                 <div className="flex items-center gap-2">
                   <Input
                     id="invite-link"
@@ -162,7 +160,7 @@ export function CreateInvitationDialog({
                     ) : (
                       <CopyIcon className="mr-1 h-3.5 w-3.5" />
                     )}
-                    Copier le lien
+                    {t("invitations.copy")}
                   </Button>
                 </div>
                 <p
@@ -174,13 +172,14 @@ export function CreateInvitationDialog({
                       : "text-sm text-muted-foreground"
                   }
                 >
-                  {copyState === "copied" && "Lien copié"}
-                  {copyState === "manual" &&
-                    "Copie automatique impossible : le lien est sélectionné, copie-le manuellement."}
+                  {copyState === "copied" && t("invitations.copied")}
+                  {copyState === "manual" && t("invitations.copyManual")}
                 </p>
               </div>
               <p className="text-xs text-muted-foreground">
-                Expire le {formatExpiry(created.invitation.expiresAt)}.
+                {t("invitations.expiresAt", {
+                  date: formatExpiry(created.invitation.expiresAt),
+                })}
               </p>
               <Button
                 type="button"
@@ -190,13 +189,13 @@ export function CreateInvitationDialog({
                   reset();
                 }}
               >
-                Fermer
+                {t("actions.close")}
               </Button>
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4 mt-2">
               <div className="space-y-2">
-                <Label htmlFor="invite-email">Email</Label>
+                <Label htmlFor="invite-email">{t("invitations.email")}</Label>
                 <Input
                   id="invite-email"
                   type="email"
@@ -206,7 +205,7 @@ export function CreateInvitationDialog({
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="invite-role">Rôle</Label>
+                <Label htmlFor="invite-role">{t("invitations.role")}</Label>
                 <select
                   id="invite-role"
                   value={role}
@@ -217,13 +216,13 @@ export function CreateInvitationDialog({
                 >
                   {INVITABLE_ROLES.map((r) => (
                     <option key={r} value={r}>
-                      {ROLE_LABELS[r]}
+                      {t(`roles.${r}`)}
                     </option>
                   ))}
                 </select>
               </div>
               <div className="space-y-2">
-                <Label>Permissions supplémentaires</Label>
+                <Label>{t("permissionsField.label")}</Label>
                 <PermissionCheckboxes
                   value={permissions}
                   onChange={setPermissions}
@@ -238,7 +237,7 @@ export function CreateInvitationDialog({
                 </p>
               )}
               <Button type="submit" className="w-full" disabled={saving}>
-                {saving ? "Création…" : "Créer l'invitation"}
+                {saving ? t("creating") : t("invitations.submit")}
               </Button>
             </form>
           )}

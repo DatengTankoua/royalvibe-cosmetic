@@ -280,6 +280,7 @@ export class LegalAcceptanceService {
     userId: string,
     organizationId: string,
     role: OrganizationRole,
+    preferredLocale: string = LEGAL_DEFAULT_LOCALE,
   ): Promise<LegalAcceptanceStatus> {
     const pending: LegalDocumentRef[] = [];
     const ids = [TERMS_OF_USE];
@@ -295,19 +296,23 @@ export class LegalAcceptanceService {
       });
       if (!accepted) pending.push({ id, version });
     }
+    const notices =
+      pending.length > 0
+        ? [
+            {
+              id: PRIVACY_NOTICE,
+              version: this.currentVersionOrUnavailable(PRIVACY_NOTICE),
+            },
+          ]
+        : [];
     return {
       promptEnabled: isLegalAcceptancePromptEnabled(),
-      locale: LEGAL_DEFAULT_LOCALE,
+      locale: this.availableLocale(
+        [...pending, ...notices].map((r) => r.id),
+        preferredLocale,
+      ),
       pending,
-      notices:
-        pending.length > 0
-          ? [
-              {
-                id: PRIVACY_NOTICE,
-                version: this.currentVersionOrUnavailable(PRIVACY_NOTICE),
-              },
-            ]
-          : [],
+      notices,
     };
   }
 
@@ -361,6 +366,19 @@ export class LegalAcceptanceService {
       await session.endSession();
     }
     return { status: 'recorded', acceptedAt };
+  }
+
+  /** 1-16G : langue demandée si TOUS ces textes y sont archivés. */
+  private availableLocale(ids: string[], preferred: string): string {
+    if (preferred === LEGAL_DEFAULT_LOCALE) return LEGAL_DEFAULT_LOCALE;
+    try {
+      return ids.every((id) => this.archive.current(id, preferred) !== null)
+        ? preferred
+        : LEGAL_DEFAULT_LOCALE;
+    } catch (err) {
+      if (err instanceof LegalArchiveError) return LEGAL_DEFAULT_LOCALE;
+      throw err;
+    }
   }
 
   private currentVersionOrUnavailable(id: string): string {

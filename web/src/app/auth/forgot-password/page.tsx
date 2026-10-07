@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { TFunction } from "i18next";
+import { useT } from "next-i18next/client";
+import { useMessage } from "@/i18n/use-message";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,34 +18,32 @@ import {
 /** Même délai que le cooldown serveur (60 s entre deux envois). */
 const COOLDOWN_SECONDS = 60;
 
-const NEUTRAL_MESSAGE =
-  "Si un compte correspond à cette adresse, vous recevrez un lien pour réinitialiser votre mot de passe.";
-
-function errorMessage(err: unknown): string {
-  if (isNetworkError(err)) {
-    return "Impossible de joindre le serveur. Vérifiez votre connexion puis réessayez.";
-  }
-  switch (getApiErrorCode(err)) {
-    case "PASSWORD_RESET_RATE_LIMITED":
-    case "AUTH_RATE_LIMITED":
-      return "Trop de demandes. Réessayez plus tard.";
-    case "EMAIL_DELIVERY_UNAVAILABLE":
-      return "L'envoi d'emails est momentanément indisponible. Réessayez plus tard.";
-    default:
-      return "Vérifiez l'adresse email saisie puis réessayez.";
-  }
+function errorMessage(err: unknown) {
+  return (t: TFunction<"auth">) => {
+    if (isNetworkError(err)) return t("forgot.errors.network");
+    switch (getApiErrorCode(err)) {
+      case "PASSWORD_RESET_RATE_LIMITED":
+      case "AUTH_RATE_LIMITED":
+        return t("resend.errors.rateLimited");
+      case "EMAIL_DELIVERY_UNAVAILABLE":
+        return t("resend.errors.deliveryUnavailable");
+      default:
+        return t("forgot.errors.generic");
+    }
+  };
 }
 
 // 1-13B : demande de réinitialisation — réponse neutre identique pour tout
 // compte, garde synchrone contre le double clic, délai local de 60 s, aucun
 // nouvel essai automatique. L'adresse n'est jamais persistée.
 export default function ForgotPasswordPage() {
+  const { t } = useT("auth");
   const sending = useRef(false);
   const [email, setEmail] = useState("");
   const [pending, setPending] = useState(false);
   const [remaining, setRemaining] = useState(0);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState(false);
+  const [error, setError] = useMessage("auth");
 
   useEffect(() => {
     if (remaining <= 0) return;
@@ -55,16 +56,16 @@ export default function ForgotPasswordPage() {
     if (sending.current || remaining > 0) return;
     const address = email.trim();
     if (!address) {
-      setError("Saisissez votre adresse email.");
+      setError((tr) => tr("forgot.emailRequired"));
       return;
     }
     sending.current = true;
     setPending(true);
-    setNotice(null);
+    setNotice(false);
     setError(null);
     try {
       await requestPasswordReset(address);
-      setNotice(NEUTRAL_MESSAGE);
+      setNotice(true);
       setRemaining(COOLDOWN_SECONDS);
     } catch (err: unknown) {
       setError(errorMessage(err));
@@ -87,17 +88,16 @@ export default function ForgotPasswordPage() {
         <div className="space-y-3 text-center">
           <Wordmark className="mx-auto" size="large" />
           <div>
-            <h1 className="text-lg font-semibold">Mot de passe oublié</h1>
+            <h1 className="text-lg font-semibold">{t("forgot.title")}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Indiquez votre adresse email : nous vous enverrons un lien pour
-              choisir un nouveau mot de passe.
+              {t("forgot.text")}
             </p>
           </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="email">{t("fields.email")}</Label>
             <Input
               id="email"
               type="email"
@@ -111,7 +111,7 @@ export default function ForgotPasswordPage() {
 
           {notice && (
             <p role="status" className="text-sm text-muted-foreground">
-              {notice}
+              {t("forgot.neutral")}
             </p>
           )}
           {error && (
@@ -126,16 +126,16 @@ export default function ForgotPasswordPage() {
             disabled={pending || remaining > 0}
           >
             {pending
-              ? "Envoi…"
+              ? t("resend.sending")
               : remaining > 0
-                ? `Envoyer le lien (${remaining} s)`
-                : "Envoyer le lien"}
+                ? t("forgot.cooldown", { seconds: remaining })
+                : t("forgot.submit")}
           </Button>
         </form>
 
         <p className="text-center text-sm text-muted-foreground">
           <Link href="/auth/login" className="underline">
-            Retour à la connexion
+            {t("forgot.backToLogin")}
           </Link>
         </p>
       </div>

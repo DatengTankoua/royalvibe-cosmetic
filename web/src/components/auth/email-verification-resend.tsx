@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { TFunction } from "i18next";
+import { useT } from "next-i18next/client";
+import { useMessage } from "@/i18n/use-message";
 import { Button } from "@/components/ui/button";
 import {
   getApiErrorCode,
@@ -11,22 +14,19 @@ import {
 /** Même délai que le cooldown serveur (60 s entre deux envois). */
 export const EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS = 60;
 
-const NEUTRAL_MESSAGE =
-  "Si un compte non vérifié correspond à cette adresse, un nouveau lien de confirmation vient d'être envoyé.";
-
-function errorMessage(err: unknown): string {
-  if (isNetworkError(err)) {
-    return "Impossible de joindre le serveur. Vérifiez votre connexion.";
-  }
-  switch (getApiErrorCode(err)) {
-    case "EMAIL_VERIFICATION_RATE_LIMITED":
-    case "AUTH_RATE_LIMITED":
-      return "Trop de demandes. Réessayez plus tard.";
-    case "EMAIL_DELIVERY_UNAVAILABLE":
-      return "L'envoi d'emails est momentanément indisponible. Réessayez plus tard.";
-    default:
-      return "La demande n'a pas pu aboutir. Réessayez plus tard.";
-  }
+function errorMessage(err: unknown) {
+  return (t: TFunction<"auth">) => {
+    if (isNetworkError(err)) return t("resend.errors.network");
+    switch (getApiErrorCode(err)) {
+      case "EMAIL_VERIFICATION_RATE_LIMITED":
+      case "AUTH_RATE_LIMITED":
+        return t("resend.errors.rateLimited");
+      case "EMAIL_DELIVERY_UNAVAILABLE":
+        return t("resend.errors.deliveryUnavailable");
+      default:
+        return t("resend.errors.generic");
+    }
+  };
 }
 
 interface EmailVerificationResendProps {
@@ -46,8 +46,9 @@ export function EmailVerificationResend({
   const [remaining, setRemaining] = useState(
     initialCooldown ? EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS : 0,
   );
-  const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { t } = useT("auth");
+  const [notice, setNotice] = useState(false);
+  const [error, setError] = useMessage("auth");
 
   useEffect(() => {
     if (remaining <= 0) return;
@@ -59,11 +60,11 @@ export function EmailVerificationResend({
     if (sending.current || remaining > 0 || !email) return;
     sending.current = true;
     setPending(true);
-    setNotice(null);
+    setNotice(false);
     setError(null);
     try {
       await requestEmailVerification(email);
-      setNotice(NEUTRAL_MESSAGE);
+      setNotice(true);
       setRemaining(EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS);
     } catch (err: unknown) {
       setError(errorMessage(err));
@@ -86,14 +87,14 @@ export function EmailVerificationResend({
         onClick={() => void resend()}
       >
         {pending
-          ? "Envoi…"
+          ? t("resend.sending")
           : remaining > 0
-            ? `Renvoyer l'email (${remaining} s)`
-            : "Renvoyer l'email de confirmation"}
+            ? t("resend.cooldown", { seconds: remaining })
+            : t("resend.button")}
       </Button>
       {notice && (
         <p role="status" className="text-sm text-muted-foreground">
-          {notice}
+          {t("resend.neutral")}
         </p>
       )}
       {error && (

@@ -52,6 +52,7 @@ import * as bcrypt from 'bcryptjs';
 import { LegalAcceptanceService } from '../legal/legal-acceptance.service';
 import type { ResolvedLegalSubmission } from '../legal/legal-acceptance.service';
 import { LegalAcceptanceContext } from '../legal/legal-documents';
+import { isAppLocale } from '../common/i18n/locale';
 
 // Session transactionnelle Mongoose (`mongodb.ClientSession`) : même
 // convention que `products.service.ts`/`audit.service.ts`.
@@ -606,6 +607,8 @@ export class OrganizationsService {
               email: invitation.email,
               password: hashed,
               role: UserRole.SELLER,
+              // 1-16G : langue des conditions acceptées.
+              ...(isAppLocale(legal.locale) ? { locale: legal.locale } : {}),
             },
             session,
           );

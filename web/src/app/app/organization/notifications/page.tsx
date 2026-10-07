@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
 import { Button } from "@/components/ui/button";
 import { getApiErrorMessage } from "@/lib/api";
-import { CATEGORY_LABELS } from "@/lib/notifications";
+import { CATEGORY_KEYS } from "@/lib/notifications";
 import { CenterPreferencesSection } from "@/components/notifications/center-preferences";
 import {
   PushConfig,
@@ -37,6 +38,7 @@ type LoadState =
 // « Activer les notifications ». Les messages restent génériques sur l'écran
 // verrouillé ; le détail s'affiche dans l'application, selon les droits.
 function PushSettings() {
+  const { t } = useT("notifications");
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [busy, setBusy] = useState(false);
 
@@ -65,13 +67,11 @@ function PushSettings() {
   }, [load]);
 
   if (state.status === "loading") {
-    return <p className="text-sm text-muted-foreground">Chargement…</p>;
+    return <p className="text-sm text-muted-foreground">{t("loading")}</p>;
   }
   if (state.status === "error") {
     return (
-      <p className="text-sm text-muted-foreground">
-        Réglages des notifications indisponibles pour le moment.
-      </p>
+      <p className="text-sm text-muted-foreground">{t("push.unavailable")}</p>
     );
   }
 
@@ -82,11 +82,11 @@ function PushSettings() {
     setBusy(true);
     try {
       await enablePushNotifications(config.publicKey);
-      toast.success("Notifications activées sur cet appareil.");
+      toast.success(t("push.enabled"));
     } catch (error) {
       toast.error(
         error instanceof PushPermissionDeniedError
-          ? "Notifications refusées par le navigateur."
+          ? t("push.denied")
           : getApiErrorMessage(error),
       );
     } finally {
@@ -99,7 +99,7 @@ function PushSettings() {
     setBusy(true);
     try {
       await disablePushNotifications();
-      toast.success("Notifications désactivées sur cet appareil.");
+      toast.success(t("push.disabled"));
     } catch (error) {
       toast.error(getApiErrorMessage(error));
     } finally {
@@ -133,31 +133,22 @@ function PushSettings() {
 
   let notice: string | null = null;
   if (!config.enabled) {
-    notice = "Les notifications ne sont pas disponibles sur ce service.";
+    notice = t("push.notices.disabled");
   } else if (support === "unsupported") {
-    notice = "Ce navigateur ne prend pas en charge les notifications push.";
+    notice = t("push.notices.unsupported");
   } else if (support === "ios-install-required") {
-    notice =
-      "Sur iPhone et iPad, les notifications ne sont proposées qu'à l'application ajoutée à l'écran d'accueil.";
+    notice = t("push.notices.iosInstall");
   } else if (config.categories.length === 0) {
-    notice = "Aucune notification n'est proposée pour votre rôle.";
+    notice = t("noneForRole");
   } else if (permission === "denied") {
-    notice =
-      "Les notifications sont bloquées pour ce site. Autorisez-les dans les réglages du navigateur, puis revenez ici.";
+    notice = t("push.notices.blocked");
   }
 
   return (
     <div className="max-w-md space-y-5">
       <div>
-        <h2 className="text-lg font-semibold">
-          Notifications push sur cet appareil
-        </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Recevez sur cet appareil les alertes importantes, même quand
-          l&apos;application est fermée. Les messages restent volontairement
-          généraux (aucun montant ni nom de produit sur l&apos;écran verrouillé)
-          ; touchez la notification pour voir le détail.
-        </p>
+        <h2 className="text-lg font-semibold">{t("push.title")}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">{t("push.text")}</p>
       </div>
 
       {notice && (
@@ -171,16 +162,16 @@ function PushSettings() {
 
       {!notice && !device.registered && (
         <Button onClick={() => void enable()} disabled={busy}>
-          {busy ? "Activation…" : "Activer les notifications"}
+          {busy ? t("push.enabling") : t("push.enable")}
         </Button>
       )}
 
       {device.registered && device.preferences && (
         <div className="space-y-4">
           <fieldset className="space-y-3" disabled={busy}>
-            <legend className="text-sm font-medium">Me prévenir pour</legend>
+            <legend className="text-sm font-medium">{t("push.legend")}</legend>
             {config.categories.map((category) => {
-              const { key, label, help } = CATEGORY_LABELS[category];
+              const key = CATEGORY_KEYS[category];
               return (
                 <label
                   key={category}
@@ -193,9 +184,9 @@ function PushSettings() {
                     onChange={(e) => void toggle(key, e.target.checked)}
                   />
                   <span>
-                    {label}
+                    {t(`categories.${key}.label`)}
                     <span className="block text-xs text-muted-foreground">
-                      {help}
+                      {t(`categories.${key}.help`)}
                     </span>
                   </span>
                 </label>
@@ -207,20 +198,15 @@ function PushSettings() {
             onClick={() => void disable()}
             disabled={busy}
           >
-            Désactiver les notifications
+            {t("push.disable")}
           </Button>
         </div>
       )}
 
       {config.enabled && support !== "supported" && (
         <div className="space-y-1 text-sm text-muted-foreground">
-          <p className="font-medium text-foreground">iPhone et iPad</p>
-          <p>
-            Ouvrez Stock Master dans Safari, touchez Partager puis « Sur
-            l&apos;écran d&apos;accueil ». Lancez ensuite l&apos;application
-            depuis son icône et revenez sur cette page pour activer les
-            notifications (iOS / iPadOS 16.4 ou plus récent).
-          </p>
+          <p className="font-medium text-foreground">{t("push.iosTitle")}</p>
+          <p>{t("push.iosHelp")}</p>
         </div>
       )}
     </div>

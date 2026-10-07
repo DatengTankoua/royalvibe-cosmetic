@@ -4,8 +4,11 @@ import {
   Get,
   HttpCode,
   Post,
+  Req,
   UseInterceptors,
 } from '@nestjs/common';
+import type { Request } from 'express';
+import { localeFromRequest } from '../common/i18n/locale';
 import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthenticatedPrincipal } from '../auth/strategies/jwt.strategy';
@@ -34,11 +37,16 @@ export class LegalController {
   status(
     @CurrentUser() user: AuthenticatedPrincipal,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+    @Req() request: Request,
   ) {
+    // 1-16G : langue proposée = celle de la requête si les textes en
+    // vigueur y sont archivés, sinon français. Information seulement : la
+    // langue réellement acceptée est revérifiée à la confirmation.
     return this.legal.status(
       user._id.toString(),
       organizationContext.organizationId,
       organizationContext.role,
+      localeFromRequest(request),
     );
   }
 

@@ -1,11 +1,19 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useT } from "next-i18next/client";
+import { useMessage } from "@/i18n/use-message";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Wordmark } from "@/components/brand/wordmark";
 import { NewPasswordFields } from "@/components/auth/new-password-fields";
-import { validateNewPassword } from "@/lib/password-policy";
+import {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  validateNewPassword,
+} from "@/lib/password-policy";
+
+const PASSWORD_LIMITS = { min: PASSWORD_MIN_LENGTH, max: PASSWORD_MAX_LENGTH };
 import {
   confirmPasswordReset,
   getApiErrorCode,
@@ -15,24 +23,18 @@ import {
 
 type Step = "loading" | "form" | "success" | "invalid";
 
-const MISSING_TOKEN_MESSAGE =
-  "Lien de réinitialisation incomplet. Ouvrez à nouveau le lien reçu par email, en entier.";
-const INVALID_MESSAGE =
-  "Ce lien de réinitialisation est invalide ou a expiré. Demandez un nouveau lien.";
-const NETWORK_MESSAGE =
-  "Impossible de joindre le serveur. Réessayez. Si la modification a pu être enregistrée, une tentative de connexion avec votre nouveau mot de passe permet de le vérifier.";
-
 export default function ResetPasswordPage() {
   // 1-13B : même modèle que /auth/verify-email — rendu initial identique
   // serveur/navigateur (« loading »), token lu après montage, retiré de
   // l'URL, gardé en mémoire (ref) seulement. Aucune requête au simple
   // chargement. La session éventuellement ouverte n'est ni lue ni modifiée.
+  const { t } = useT("auth");
   const tokenRef = useRef<string | null>(null);
   const started = useRef(false);
   const submitting = useRef(false);
   const [step, setStep] = useState<Step>("loading");
-  const [message, setMessage] = useState<string | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [message, setMessage] = useMessage("auth");
+  const [formError, setFormError] = useMessage("auth");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [loading, setLoading] = useState(false);
@@ -45,12 +47,12 @@ export default function ResetPasswordPage() {
       window.history.replaceState(null, "", window.location.pathname);
     }
     if (!tokenRef.current) {
-      setMessage(MISSING_TOKEN_MESSAGE);
+      setMessage((tr) => tr("reset.missingToken"));
       setStep("invalid");
       return;
     }
     setStep("form");
-  }, []);
+  }, [setMessage]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,7 +62,7 @@ export default function ResetPasswordPage() {
     // confirmation diffère ; seul `password` part à l'API, jamais trimé.
     const passwordError = validateNewPassword(password, confirmation);
     if (passwordError) {
-      setFormError(passwordError);
+      setFormError((tr) => tr(passwordError, PASSWORD_LIMITS));
       return;
     }
     submitting.current = true;
@@ -75,12 +77,12 @@ export default function ResetPasswordPage() {
     } catch (err: unknown) {
       if (isNetworkError(err)) {
         // Nouvel essai uniquement sur action de l'utilisateur.
-        setFormError(NETWORK_MESSAGE);
+        setFormError((tr) => tr("reset.network"));
       } else if (getApiErrorCode(err) === "PASSWORD_RESET_INVALID_OR_EXPIRED") {
         tokenRef.current = null;
         setPassword("");
         setConfirmation("");
-        setMessage(INVALID_MESSAGE);
+        setMessage((tr) => tr("reset.invalid"));
         setStep("invalid");
       } else {
         setFormError(getApiErrorMessage(err));
@@ -98,7 +100,7 @@ export default function ResetPasswordPage() {
 
         {step === "loading" && (
           <p role="status" className="text-sm text-muted-foreground">
-            Chargement…
+            {t("loading")}
           </p>
         )}
 
@@ -109,10 +111,8 @@ export default function ResetPasswordPage() {
             noValidate
           >
             <div className="space-y-1 text-center">
-              <h1 className="text-lg font-semibold">Nouveau mot de passe</h1>
-              <p className="text-sm text-muted-foreground">
-                Choisissez votre nouveau mot de passe.
-              </p>
+              <h1 className="text-lg font-semibold">{t("reset.title")}</h1>
+              <p className="text-sm text-muted-foreground">{t("reset.text")}</p>
             </div>
             <NewPasswordFields
               idPrefix="reset-"
@@ -133,7 +133,7 @@ export default function ResetPasswordPage() {
               </p>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Enregistrement…" : "Enregistrer le mot de passe"}
+              {loading ? t("reset.submitting") : t("reset.submit")}
             </Button>
           </form>
         )}
@@ -141,14 +141,13 @@ export default function ResetPasswordPage() {
         {step === "success" && (
           <div className="space-y-4">
             <p role="status" className="text-sm font-medium">
-              Votre mot de passe a été modifié. Connectez-vous avec votre
-              nouveau mot de passe.
+              {t("reset.success")}
             </p>
             <Link
               href="/auth/login"
               className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
             >
-              Se connecter
+              {t("login.submit")}
             </Link>
           </div>
         )}
@@ -162,7 +161,7 @@ export default function ResetPasswordPage() {
               href="/auth/forgot-password"
               className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
             >
-              Demander un nouveau lien
+              {t("reset.newLink")}
             </Link>
           </div>
         )}

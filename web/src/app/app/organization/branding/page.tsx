@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useMessage } from "@/i18n/use-message";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,15 +14,8 @@ import {
   removeOrganizationLogo,
   updateOrganizationBranding,
 } from "@/lib/api";
-import {
-  ORGANIZATION_NAME_HINT,
-  ORGANIZATION_NAME_MAX_LENGTH,
-} from "@/lib/name-limits";
-import {
-  LOGO_ACCEPT,
-  LOGO_HELP_TEXT,
-  LOGO_MAX_BYTES,
-} from "@/lib/logo-upload-policy";
+import { ORGANIZATION_NAME_MAX_LENGTH } from "@/lib/name-limits";
+import { LOGO_ACCEPT, LOGO_MAX_BYTES } from "@/lib/logo-upload-policy";
 
 // /app/organization/branding (1-9C) : lecture pour tout membre actif,
 // édition réservée à `branding.manage`. Champs interdits (slug/currency/
@@ -29,6 +24,8 @@ import {
 export default function OrganizationBrandingPage() {
   // 1-15C : après une modification, seule l'organisation est relue (le
   // contexte, l'outbox et le socket ne sont pas concernés).
+  const { t } = useT("organization");
+  const { t: tc } = useT("common");
   const { organization, authContext, refreshOrganization } =
     useOrganizationShell();
   const canManage =
@@ -40,7 +37,7 @@ export default function OrganizationBrandingPage() {
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [removingLogo, setRemovingLogo] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useMessage("organization");
 
   // Réhydrate le formulaire quand l'organisation chargée change (initial
   // chargement, après sa propre modification ou celle d'un collègue,
@@ -65,7 +62,7 @@ export default function OrganizationBrandingPage() {
   if (!organization) {
     return (
       <p className="text-sm text-muted-foreground">
-        Organisation actuelle indisponible.
+        {tc("shell.organizationUnavailable")}
       </p>
     );
   }
@@ -84,7 +81,7 @@ export default function OrganizationBrandingPage() {
       });
       setLogo(null);
       refreshOrganization();
-      toast.success("Branding mis à jour");
+      toast.success(t("branding.updated"));
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -99,7 +96,7 @@ export default function OrganizationBrandingPage() {
     try {
       await removeOrganizationLogo();
       refreshOrganization();
-      toast.success("Logo supprimé");
+      toast.success(t("branding.logoRemoved"));
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -119,20 +116,22 @@ export default function OrganizationBrandingPage() {
           {previewSrc ? (
             <Image
               src={previewSrc}
-              alt="Logo de l'organisation"
+              alt={t("branding.logoAlt")}
               width={64}
               height={64}
               className="h-full w-full object-cover"
               unoptimized
             />
           ) : (
-            <span className="text-xs text-muted-foreground">Aucun logo</span>
+            <span className="text-xs text-muted-foreground">
+              {t("branding.noLogo")}
+            </span>
           )}
         </div>
         <span
           className="h-8 w-8 shrink-0 rounded-full border"
           style={{ backgroundColor: brandColor }}
-          aria-label={`Couleur ${brandColor}`}
+          aria-label={t("branding.colorLabel", { color: brandColor })}
         />
         {canManage && organization.logoUrl && (
           <Button
@@ -142,7 +141,7 @@ export default function OrganizationBrandingPage() {
             disabled={removingLogo}
             onClick={() => void handleRemoveLogo()}
           >
-            {removingLogo ? "Suppression…" : "Supprimer le logo"}
+            {removingLogo ? t("deleting") : t("branding.removeLogo")}
           </Button>
         )}
       </div>
@@ -156,7 +155,7 @@ export default function OrganizationBrandingPage() {
       {canManage ? (
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="org-name">Nom de l&apos;organisation</Label>
+            <Label htmlFor="org-name">{t("branding.name")}</Label>
             <Input
               id="org-name"
               value={name}
@@ -168,11 +167,11 @@ export default function OrganizationBrandingPage() {
               required
             />
             <p id="org-name-hint" className="text-xs text-muted-foreground">
-              {ORGANIZATION_NAME_HINT}
+              {tc("fields.maxLength", { count: ORGANIZATION_NAME_MAX_LENGTH })}
             </p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="org-color">Couleur de marque</Label>
+            <Label htmlFor="org-color">{t("branding.color")}</Label>
             <Input
               id="org-color"
               type="color"
@@ -182,7 +181,7 @@ export default function OrganizationBrandingPage() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="org-logo">Logo (optionnel)</Label>
+            <Label htmlFor="org-logo">{t("branding.logo")}</Label>
             <Input
               id="org-logo"
               type="file"
@@ -193,7 +192,7 @@ export default function OrganizationBrandingPage() {
                 // Pré-contrôle de confort (le backend valide contenu, format
                 // réel et dimensions) : évite un envoi manifestement refusé.
                 if (file && file.size > LOGO_MAX_BYTES) {
-                  setError("Le logo ne doit pas dépasser 2 Mo.");
+                  setError((tr) => tr("branding.logoTooLarge"));
                   e.target.value = "";
                   setLogo(null);
                   return;
@@ -203,16 +202,16 @@ export default function OrganizationBrandingPage() {
               }}
             />
             <p id="org-logo-hint" className="text-xs text-muted-foreground">
-              {LOGO_HELP_TEXT}
+              {t("branding.logoHelp")}
             </p>
           </div>
           <Button type="submit" disabled={saving}>
-            {saving ? "Enregistrement…" : "Enregistrer"}
+            {saving ? t("saving") : t("actions.save")}
           </Button>
         </form>
       ) : (
         <p className="text-sm text-muted-foreground">
-          Voir le branding et la couleur de marque de l&apos;organisation.
+          {t("branding.readOnly")}
         </p>
       )}
     </div>

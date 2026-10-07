@@ -139,6 +139,8 @@ describe('Matrice des routes — contrôle commercial (1-14C.1)', () => {
         // 1-16A : retrait de l'appareil de l'utilisateur courant (déconnexion
         // d'une session limitée ou d'une organisation expirée).
         'POST /notifications/push/subscription/remove',
+        // 1-16G : langue du compte (e-mails, push), session limitée admise.
+        'PUT /auth/me/locale',
       ].sort((a, b) => a.localeCompare(b)),
     );
   });
@@ -338,6 +340,7 @@ describe('Matrice des routes — contrôle commercial (1-14C.1)', () => {
     expect(skipping.map((r) => r.route)).toEqual([
       'GET /auth/organizations',
       'POST /auth/switch-organization',
+      'PUT /auth/me/locale',
     ]);
     for (const route of skipping) expect(route.category).toBe('identity');
   });

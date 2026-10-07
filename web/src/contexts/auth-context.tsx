@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import axios from "axios";
+import { useLocale } from "@/i18n/locale-provider";
 import {
   getToken,
   setToken,
@@ -22,6 +23,7 @@ import {
   authLogin,
   completeSubscriptionAccess,
   fetchMe,
+  updateAccountLocale,
   getApiErrorCode,
   getApiErrorMessage,
   readSubscriptionInactive,
@@ -275,6 +277,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return "unavailable";
       }
     }, [endRestrictedSession, markInstalled]);
+
+  // 1-16G — langue du compte : envoyée une fois par session ouverte, puis à
+  // chaque choix « Français / English ». Jeton applicatif ou limité de
+  // CETTE session ; échec silencieux (hors connexion : au prochain envoi).
+  // Aucune autre requête, aucune relance de vente ni de paiement.
+  const { locale } = useLocale();
+  const sentRef = useRef<string | null>(null);
+  useEffect(() => {
+    const token = user ? getToken() : restrictedToken;
+    if (!token) return;
+    const key = `${token}:${locale}`;
+    if (sentRef.current === key) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    sentRef.current = key;
+    updateAccountLocale(locale, token).catch(() => {
+      sentRef.current = null;
+    });
+  }, [user, restrictedToken, sessionVersion, locale]);
 
   return (
     <AuthContext.Provider

@@ -4,5 +4,4 @@
 export const ORGANIZATION_NAME_MAX_LENGTH = 20;
 export const USER_NAME_MAX_LENGTH = 20;
 
-export const ORGANIZATION_NAME_HINT = `${ORGANIZATION_NAME_MAX_LENGTH} caractères maximum.`;
-export const USER_NAME_HINT = `${USER_NAME_MAX_LENGTH} caractères maximum.`;
+// 1-16G : aide « N caractères maximum » dans `common` (`fields.maxLength`).

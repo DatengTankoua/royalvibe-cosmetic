@@ -1,17 +1,24 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useT } from "next-i18next/client";
+import { useLocale } from "@/i18n/locale-provider";
+import { useMessage } from "@/i18n/use-message";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NewPasswordFields } from "@/components/auth/new-password-fields";
 import {
-  ORGANIZATION_NAME_HINT,
   ORGANIZATION_NAME_MAX_LENGTH,
-  USER_NAME_HINT,
   USER_NAME_MAX_LENGTH,
 } from "@/lib/name-limits";
-import { validateNewPassword } from "@/lib/password-policy";
+import {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  validateNewPassword,
+} from "@/lib/password-policy";
+
+const PASSWORD_LIMITS = { min: PASSWORD_MIN_LENGTH, max: PASSWORD_MAX_LENGTH };
 import {
   authRegister,
   getApiErrorCode,
@@ -25,11 +32,14 @@ import { AuthLegalLinks } from "@/components/legal/auth-legal-links";
 import { TermsAcceptanceField } from "@/components/legal/terms-acceptance-field";
 import {
   buildLegalAcceptance,
-  legalAcceptanceErrorMessage,
+  legalAcceptanceErrorKey,
 } from "@/lib/legal/acceptance";
 import Link from "next/link";
 
 export default function RegisterPage() {
+  const { t } = useT("auth");
+  const { t: tc } = useT("common");
+  const { locale } = useLocale();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -37,9 +47,10 @@ export default function RegisterPage() {
   const [organizationName, setOrganizationName] = useState("");
   // 1-16C.2 : case NON cochée par défaut ; jamais pré-remplie.
   const [termsAccepted, setTermsAccepted] = useState(false);
-  const [termsError, setTermsError] = useState<string | null>(null);
+  const [termsError, setTermsError] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useMessage("auth");
+  const { t: tl } = useT("legal");
   // 1-13A : compte créé (adresse enregistrée + résultat de l'envoi du lien).
   const [done, setDone] = useState<{
     email: string;
@@ -58,16 +69,15 @@ export default function RegisterPage() {
         <div className="w-full max-w-sm space-y-4 text-center">
           <BackToHome />
           <Wordmark className="mx-auto" size="large" />
-          <h1 className="text-xl font-bold">Inscription désactivée</h1>
+          <h1 className="text-xl font-bold">{t("register.closedTitle")}</h1>
           <p className="text-sm text-muted-foreground">
-            L&apos;inscription en ligne est momentanément indisponible. Si tu as
-            déjà un compte, connecte-toi.
+            {t("register.closedText")}
           </p>
           <Link
             href="/auth/login"
             className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
           >
-            Se connecter
+            {t("login.submit")}
           </Link>
           <AuthLegalLinks />
         </div>
@@ -81,21 +91,18 @@ export default function RegisterPage() {
         <div className="w-full max-w-sm space-y-4 text-center">
           <BackToHome />
           <Wordmark className="mx-auto" size="large" />
-          <h1 className="text-xl font-bold">Compte créé</h1>
+          <h1 className="text-xl font-bold">{t("register.doneTitle")}</h1>
           <p className="text-sm text-muted-foreground">
-            Ton entreprise et ton compte propriétaire ont été créés.
+            {t("register.doneText")}
           </p>
-          <p className="text-sm font-medium">
-            Confirmez votre adresse email pour accéder à votre compte.
-          </p>
+          <p className="text-sm font-medium">{t("verify.confirmToAccess")}</p>
           {done.delivery === "failed" ? (
             <p role="alert" className="text-sm text-destructive">
-              L&apos;email de confirmation n&apos;a pas pu être envoyé. Ton
-              compte est bien créé : demande un nouvel envoi ci-dessous.
+              {t("register.deliveryFailed")}
             </p>
           ) : (
             <p className="text-sm text-muted-foreground">
-              Un lien de confirmation a été envoyé à {done.email}.
+              {t("verify.linkSent", { email: done.email })}
             </p>
           )}
           <EmailVerificationResend
@@ -106,7 +113,7 @@ export default function RegisterPage() {
             href="/auth/login"
             className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
           >
-            Se connecter
+            {t("login.submit")}
           </Link>
         </div>
       </div>
@@ -120,17 +127,17 @@ export default function RegisterPage() {
     // ou si la confirmation diffère ; seul `password` part à l'API.
     const passwordError = validateNewPassword(password, confirmation);
     if (passwordError) {
-      setError(passwordError);
+      setError((tr) => tr(passwordError, PASSWORD_LIMITS));
       return;
     }
     // 1-16C.2 : aucune requête sans la case cochée (le serveur refuse aussi).
     if (!termsAccepted) {
       setError(null);
-      setTermsError(legalAcceptanceErrorMessage("LEGAL_ACCEPTANCE_REQUIRED"));
+      setTermsError(true);
       document.getElementById("register-terms")?.focus();
       return;
     }
-    setTermsError(null);
+    setTermsError(false);
     submitting.current = true;
     setLoading(true);
     setError(null);
@@ -140,7 +147,8 @@ export default function RegisterPage() {
         email,
         password,
         organizationName,
-        legalAcceptance: buildLegalAcceptance("owner_registration"),
+        // 1-16G : langue des documents affichés (celle de l'interface).
+        legalAcceptance: buildLegalAcceptance("owner_registration", locale),
       });
       setPassword("");
       setConfirmation("");
@@ -150,10 +158,13 @@ export default function RegisterPage() {
       });
     } catch (err: unknown) {
       const code = getApiErrorCode(err);
+      const legalKey = legalAcceptanceErrorKey(code);
       setError(
         code === "REGISTRATION_DISABLED"
-          ? "L'inscription est actuellement désactivée."
-          : (legalAcceptanceErrorMessage(code) ?? getApiErrorMessage(err)),
+          ? (tr) => tr("register.disabled")
+          : legalKey
+            ? () => tl(legalKey)
+            : getApiErrorMessage(err),
       );
     } finally {
       submitting.current = false;
@@ -168,16 +179,16 @@ export default function RegisterPage() {
         <div className="space-y-3 text-center">
           <Wordmark className="mx-auto" size="large" />
           <div>
-            <h1 className="text-lg font-semibold">Créer ton entreprise</h1>
+            <h1 className="text-lg font-semibold">{t("register.title")}</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Ceci crée ton entreprise et ton compte propriétaire.
+              {t("register.subtitle")}
             </p>
           </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <div className="space-y-2">
-            <Label htmlFor="name">Nom</Label>
+            <Label htmlFor="name">{t("fields.name")}</Label>
             <Input
               id="name"
               value={name}
@@ -188,11 +199,13 @@ export default function RegisterPage() {
               aria-describedby="name-hint"
             />
             <p id="name-hint" className="text-xs text-muted-foreground">
-              {USER_NAME_HINT}
+              {tc("fields.maxLength", { count: USER_NAME_MAX_LENGTH })}
             </p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="organizationName">Nom de l&apos;entreprise</Label>
+            <Label htmlFor="organizationName">
+              {t("fields.organizationName")}
+            </Label>
             <Input
               id="organizationName"
               value={organizationName}
@@ -206,11 +219,11 @@ export default function RegisterPage() {
               id="organizationName-hint"
               className="text-xs text-muted-foreground"
             >
-              {ORGANIZATION_NAME_HINT}
+              {tc("fields.maxLength", { count: ORGANIZATION_NAME_MAX_LENGTH })}
             </p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="email">{t("fields.email")}</Label>
             <Input
               id="email"
               type="email"
@@ -249,10 +262,10 @@ export default function RegisterPage() {
             checked={termsAccepted}
             onCheckedChange={(value) => {
               setTermsAccepted(value);
-              if (value) setTermsError(null);
+              if (value) setTermsError(false);
             }}
             disabled={loading}
-            invalid={termsError !== null}
+            invalid={termsError}
             errorId={termsError ? "register-terms-error" : undefined}
           />
           {termsError && (
@@ -261,19 +274,19 @@ export default function RegisterPage() {
               role="alert"
               className="text-sm text-destructive"
             >
-              {termsError}
+              {tl("acceptance.errors.required")}
             </p>
           )}
 
           <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? "Création…" : "Créer mon entreprise"}
+            {loading ? t("register.submitting") : t("register.submit")}
           </Button>
         </form>
 
         <p className="text-center text-sm text-muted-foreground">
-          Déjà un compte ?{" "}
+          {t("register.haveAccount")}{" "}
           <Link href="/auth/login" className="underline">
-            Se connecter
+            {t("login.submit")}
           </Link>
         </p>
         <AuthLegalLinks />

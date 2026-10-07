@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -28,7 +30,6 @@ import {
   getApiErrorMessage,
   type ApiSale,
 } from "@/lib/api";
-import { fmtXof } from "@/lib/currency";
 
 interface EditSaleDialogProps {
   sale: ApiSale | null;
@@ -45,6 +46,8 @@ export function EditSaleDialog({
   onUpdated,
   onDeleted,
 }: EditSaleDialogProps) {
+  const { t } = useT("sales");
+  const format = useFormat();
   const [quantity, setQuantity] = useState("");
   const [salePrice, setSalePrice] = useState("");
   const [loading, setLoading] = useState(false);
@@ -67,7 +70,7 @@ export function EditSaleDialog({
         quantity: parseInt(quantity, 10),
         salePrice: parseFloat(salePrice),
       });
-      toast.success("Vente mise à jour");
+      toast.success(t("edit.updated"));
       onOpenChange(false);
       onUpdated();
     } catch (err) {
@@ -82,7 +85,7 @@ export function EditSaleDialog({
     setDeleteLoading(true);
     try {
       await deleteSale(sale._id);
-      toast.success("Vente supprimée");
+      toast.success(t("edit.deleted"));
       setDeleteOpen(false);
       onOpenChange(false);
       onDeleted();
@@ -102,13 +105,13 @@ export function EditSaleDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Modifier la vente</DialogTitle>
+            <DialogTitle>{t("edit.title")}</DialogTitle>
           </DialogHeader>
           {sale && (
             <form onSubmit={handleSubmit} className="space-y-4 mt-2">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="es-qty">Quantité</Label>
+                  <Label htmlFor="es-qty">{t("form.quantity")}</Label>
                   <Input
                     id="es-qty"
                     type="number"
@@ -119,7 +122,7 @@ export function EditSaleDialog({
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="es-price">Prix de vente (FCFA)</Label>
+                  <Label htmlFor="es-price">{t("edit.price")}</Label>
                   <Input
                     id="es-price"
                     type="number"
@@ -131,7 +134,7 @@ export function EditSaleDialog({
                   />
                   {total > 0 && (
                     <p className="text-xs text-muted-foreground">
-                      Total : {fmtXof(total)}
+                      {t("form.total", { amount: format.fcfa(total) })}
                     </p>
                   )}
                 </div>
@@ -145,7 +148,7 @@ export function EditSaleDialog({
                   onClick={() => setDeleteOpen(true)}
                 >
                   <Trash2Icon className="mr-1 h-4 w-4" />
-                  Supprimer
+                  {t("actions.delete")}
                 </Button>
                 <div className="flex gap-2">
                   <Button
@@ -153,10 +156,10 @@ export function EditSaleDialog({
                     variant="outline"
                     onClick={() => onOpenChange(false)}
                   >
-                    Annuler
+                    {t("actions.cancel")}
                   </Button>
                   <Button type="submit" disabled={loading}>
-                    {loading ? "Enregistrement…" : "Enregistrer"}
+                    {loading ? t("form.saving") : t("actions.save")}
                   </Button>
                 </div>
               </div>
@@ -168,20 +171,19 @@ export function EditSaleDialog({
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Supprimer cette vente ?</AlertDialogTitle>
+            <AlertDialogTitle>{t("edit.deleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Le stock sera restauré automatiquement. Cette action est
-              irréversible.
+              {t("edit.deleteText")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={handleDelete}
               disabled={deleteLoading}
             >
-              {deleteLoading ? "Suppression…" : "Supprimer"}
+              {deleteLoading ? t("edit.deleting") : t("actions.delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

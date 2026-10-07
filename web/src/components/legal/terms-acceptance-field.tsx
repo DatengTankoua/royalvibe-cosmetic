@@ -1,8 +1,12 @@
+"use client";
+
 import { Fragment } from "react";
+import { useT } from "next-i18next/client";
 import {
   legalDocumentsFor,
   type LegalAcceptanceContext,
 } from "@/lib/legal/acceptance";
+import { rich } from "@/i18n/rich";
 
 // 1-16C.2 — Case d'acceptation des conditions, JAMAIS cochée d'avance.
 // - La case ne couvre que les documents à ACCEPTER du parcours ; la
@@ -11,11 +15,8 @@ import {
 // - Les liens s'ouvrent dans un nouvel onglet : la saisie en cours n'est pas
 //   perdue.
 // - Aucune autorisation facultative ni permission de notification ici.
+// 1-16G : documents liés dans la langue de l'interface (même cookie).
 const linkClass = "font-medium underline underline-offset-2";
-
-function lowerFirst(text: string): string {
-  return text.charAt(0).toLowerCase() + text.slice(1);
-}
 
 export function TermsAcceptanceField({
   context,
@@ -34,6 +35,7 @@ export function TermsAcceptanceField({
   invalid?: boolean;
   errorId?: string;
 }) {
+  const { t } = useT("legal");
   const { documents, notices } = legalDocumentsFor(context);
   return (
     <div className="space-y-2">
@@ -50,24 +52,29 @@ export function TermsAcceptanceField({
           className="mt-0.5 size-5 shrink-0 accent-primary"
         />
         <label htmlFor={id} className="text-sm leading-relaxed">
-          J&apos;ai lu et j&apos;accepte{" "}
+          {t("acceptance.prefix")}{" "}
           {documents.map((doc, index) => (
             <Fragment key={doc.id}>
-              {index > 0 && (index === documents.length - 1 ? " et " : ", ")}
-              les{" "}
+              {index > 0 &&
+                (index === documents.length - 1
+                  ? t("acceptance.and")
+                  : t("acceptance.comma"))}
+              {t("acceptance.article")}{" "}
               <a
                 href={doc.href}
                 target="_blank"
                 rel="noopener"
                 className={linkClass}
               >
-                {lowerFirst(doc.title)}
-                <span className="sr-only"> (nouvel onglet)</span>
+                {t(`documents.${doc.id}.inSentence`)}
+                <span className="sr-only"> {t("acceptance.newTab")}</span>
               </a>
             </Fragment>
           ))}{" "}
-          (version{documents.length > 1 ? "s" : ""}{" "}
-          {documents.map((d) => d.version).join(" et ")}).
+          {t("acceptance.versions", {
+            count: documents.length,
+            versions: documents.map((d) => d.version).join(t("acceptance.and")),
+          })}
         </label>
       </div>
       {notices.map((doc) => (
@@ -75,18 +82,19 @@ export function TermsAcceptanceField({
           key={doc.id}
           className="text-xs leading-relaxed text-muted-foreground"
         >
-          Pour savoir quelles données sont traitées et pourquoi, consulte la{" "}
-          <a
-            href={doc.href}
-            target="_blank"
-            rel="noopener"
-            className={linkClass}
-          >
-            {lowerFirst(doc.title)}
-            <span className="sr-only"> (nouvel onglet)</span>
-          </a>{" "}
-          (version {doc.version}). Elle t&apos;informe : la lire ne vaut pas
-          accord.
+          {rich(t("acceptance.notice", { version: doc.version }), {
+            doc: () => (
+              <a
+                href={doc.href}
+                target="_blank"
+                rel="noopener"
+                className={linkClass}
+              >
+                {t(`documents.${doc.id}.inSentence`)}
+                <span className="sr-only"> {t("acceptance.newTab")}</span>
+              </a>
+            ),
+          })}
         </p>
       ))}
     </div>

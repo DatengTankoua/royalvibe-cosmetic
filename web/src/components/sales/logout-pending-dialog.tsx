@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useT } from "next-i18next/client";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -33,7 +34,8 @@ export function LogoutPendingDialog({
 }) {
   const [step, setStep] = useState<"choose" | "confirm-delete">("choose");
   const [busy, setBusy] = useState<null | "sync" | "keep" | "delete">(null);
-  const [error, setError] = useState<string | null>(null);
+  const { t } = useT("sales");
+  const [error, setError] = useState(false);
   const organizations = new Set(operations.map((op) => op.organizationId));
 
   const run = async (
@@ -42,7 +44,7 @@ export function LogoutPendingDialog({
   ) => {
     if (busy) return;
     setBusy(kind);
-    setError(null);
+    setError(false);
     try {
       await fn();
     } finally {
@@ -54,15 +56,14 @@ export function LogoutPendingDialog({
     <Dialog open onOpenChange={(v) => !v && !busy && onCancel()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Ventes non synchronisées</DialogTitle>
+          <DialogTitle>{t("logout.title")}</DialogTitle>
           <DialogDescription>
-            {operations.length} vente{operations.length > 1 ? "s" : ""}{" "}
-            enregistrée{operations.length > 1 ? "s" : ""} sur cet appareil{" "}
             {organizations.size > 1
-              ? `(${organizations.size} organisations) `
-              : ""}
-            n&apos;{operations.length > 1 ? "ont" : "a"} pas encore été
-            confirmée{operations.length > 1 ? "s" : ""} par le serveur.
+              ? t("logout.descriptionOrganizations", {
+                  count: operations.length,
+                  organizations: organizations.size,
+                })
+              : t("logout.description", { count: operations.length })}
           </DialogDescription>
         </DialogHeader>
 
@@ -74,9 +75,7 @@ export function LogoutPendingDialog({
                 disabled={busy !== null}
                 onClick={() => void run("sync", onSyncNow)}
               >
-                {busy === "sync"
-                  ? "Synchronisation… (10 s max)"
-                  : "Synchroniser maintenant"}
+                {busy === "sync" ? t("logout.syncing") : t("syncNow")}
               </Button>
             )}
             <Button
@@ -85,7 +84,7 @@ export function LogoutPendingDialog({
               disabled={busy !== null}
               onClick={() => void run("keep", onKeepAndLogout)}
             >
-              Se déconnecter et conserver sur cet appareil
+              {t("logout.keep")}
             </Button>
             <Button
               type="button"
@@ -94,7 +93,7 @@ export function LogoutPendingDialog({
               disabled={busy !== null}
               onClick={() => setStep("confirm-delete")}
             >
-              Supprimer définitivement…
+              {t("logout.delete")}
             </Button>
             <Button
               type="button"
@@ -102,14 +101,13 @@ export function LogoutPendingDialog({
               disabled={busy !== null}
               onClick={onCancel}
             >
-              Annuler
+              {t("actions.cancel")}
             </Button>
           </div>
         ) : (
           <div className="flex flex-col gap-3">
             <p role="alert" className="text-sm text-destructive">
-              Ces ventes seront effacées de cet appareil et ne seront JAMAIS
-              envoyées au serveur. Action irréversible.
+              {t("logout.deleteWarning")}
             </p>
             <Button
               type="button"
@@ -118,14 +116,12 @@ export function LogoutPendingDialog({
               onClick={() =>
                 void run("delete", async () => {
                   if (!(await onDeleteAndLogout())) {
-                    setError(
-                      "Suppression impossible : rien n'a été effacé. Réessaie ou conserve les ventes.",
-                    );
+                    setError(true);
                   }
                 })
               }
             >
-              Supprimer définitivement et se déconnecter
+              {t("logout.deleteConfirm")}
             </Button>
             <Button
               type="button"
@@ -133,13 +129,13 @@ export function LogoutPendingDialog({
               disabled={busy !== null}
               onClick={() => setStep("choose")}
             >
-              Retour
+              {t("actions.back")}
             </Button>
           </div>
         )}
         {error && (
           <p role="alert" className="text-sm text-destructive">
-            {error}
+            {t("logout.deleteFailed")}
           </p>
         )}
       </DialogContent>

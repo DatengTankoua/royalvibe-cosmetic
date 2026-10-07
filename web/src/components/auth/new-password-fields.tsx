@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
+import { useT } from "next-i18next/client";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  PASSWORD_HINT,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
 } from "@/lib/password-policy";
@@ -34,6 +34,7 @@ export function NewPasswordFields({
   errorId,
   disabled,
 }: NewPasswordFieldsProps) {
+  const { t } = useT("auth");
   const [visible, setVisible] = useState(false);
   const passwordId = `${idPrefix}password`;
   const confirmId = `${idPrefix}password-confirm`;
@@ -43,7 +44,7 @@ export function NewPasswordFields({
   return (
     <>
       <div className="space-y-2">
-        <Label htmlFor={passwordId}>Mot de passe</Label>
+        <Label htmlFor={passwordId}>{t("password.label")}</Label>
         <div className="relative">
           <Input
             id={passwordId}
@@ -62,9 +63,7 @@ export function NewPasswordFields({
             type="button"
             onClick={() => setVisible((v) => !v)}
             aria-label={
-              visible
-                ? "Masquer les mots de passe"
-                : "Afficher les mots de passe"
+              visible ? t("password.hideBoth") : t("password.showBoth")
             }
             aria-pressed={visible}
             aria-controls={`${passwordId} ${confirmId}`}
@@ -78,11 +77,14 @@ export function NewPasswordFields({
           </button>
         </div>
         <p id={hintId} className="text-xs text-muted-foreground">
-          {PASSWORD_HINT}
+          {t("password.hint", {
+            min: PASSWORD_MIN_LENGTH,
+            max: PASSWORD_MAX_LENGTH,
+          })}
         </p>
       </div>
       <div className="space-y-2">
-        <Label htmlFor={confirmId}>Confirmer le mot de passe</Label>
+        <Label htmlFor={confirmId}>{t("password.confirm")}</Label>
         <Input
           id={confirmId}
           type={type}

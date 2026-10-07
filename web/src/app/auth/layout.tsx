@@ -1,3 +1,4 @@
+import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 
 // 1-16F — Parcours de connexion, inscription, invitation, mot de passe et
@@ -11,7 +12,9 @@ export default function AuthLayout({
 }) {
   return (
     <div className="flex flex-1 flex-col">
-      <div className="flex justify-end px-3 pt-3">
+      {/* 1-16G : langue puis thème. */}
+      <div className="flex justify-end gap-1 px-3 pt-3">
+        <LanguageSwitcher />
         <ThemeToggle />
       </div>
       {children}

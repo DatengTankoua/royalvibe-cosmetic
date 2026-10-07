@@ -39,7 +39,10 @@ import {
 } from '../src/email-verification/email-sender';
 import { ResendEmailSender } from '../src/email-verification/resend-email-sender';
 import { PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE } from '../src/auth/auth.controller';
-import { PASSWORD_CHANGED_SUBJECT } from '../src/password-reset/password-reset-email';
+import {
+  PASSWORD_CHANGED_SUBJECT,
+  PASSWORD_CHANGED_SUBJECT_EN,
+} from '../src/password-reset/password-reset-email';
 import {
   RecordingEmailSender,
   verificationTokenFrom,
@@ -390,6 +393,49 @@ describe('Mot de passe oublié et réinitialisation (e2e 1-13B)', () => {
       expect(bodies[0]).toEqual(bodies[1]);
       await settle();
       expect(recorder.sentTo('nobody-13b@reset.test')).toHaveLength(0);
+    });
+  });
+
+  describe('2 bis (1-16G). Langue du destinataire', () => {
+    it('compte en anglais : e-mails en anglais ; compte ancien sans préférence : français, même si la demande vient d’un navigateur anglais', async () => {
+      const english = 'owner-en-16g@reset.test';
+      const owner = await verifiedOwner(english, 'Boutique EN');
+      const put = await http()
+        .put('/auth/me/locale')
+        .set(auth(owner.token))
+        .send({ locale: 'en' });
+      expect(put.status).toBe(200);
+      await resetPassword(english);
+      const resetMail = resetMailsTo(english).at(-1)!;
+      expect(resetMail.subject).toBe('Reset your password – Stock Master');
+      expect(resetMail.html).toContain('<html lang="en">');
+      await waitFor(() =>
+        recorder
+          .sentTo(english)
+          .some((m) => m.subject === PASSWORD_CHANGED_SUBJECT_EN),
+      );
+      expect(
+        recorder
+          .sentTo(english)
+          .some((m) => m.subject === PASSWORD_CHANGED_SUBJECT),
+      ).toBe(false);
+
+      // Compte créé avant 1-16G : aucune préférence enregistrée.
+      const legacy = 'owner-legacy-16g@reset.test';
+      await verifiedOwner(legacy, 'Boutique ancienne');
+      await userModel
+        .updateOne({ email: legacy }, { $unset: { locale: 1 } })
+        .exec();
+      const count = resetMailsTo(legacy).length;
+      const res = await http()
+        .post('/auth/password-reset/request')
+        .set('Accept-Language', 'en')
+        .send({ email: legacy });
+      expect(res.status).toBe(202);
+      await nextResetToken(legacy, count + 1);
+      expect(resetMailsTo(legacy).at(-1)!.subject).toBe(
+        'Réinitialisation de votre mot de passe – Stock Master',
+      );
     });
   });
 

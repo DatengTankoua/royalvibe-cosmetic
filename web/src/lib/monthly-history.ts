@@ -1,4 +1,6 @@
 import axios from "axios";
+import type { TFunction } from "i18next";
+import { currentLocale } from "@/i18n/client-t";
 import { apiClient, isCommercialRefusalCode } from "@/lib/api";
 import type { ApiAuthContext } from "@/lib/api";
 
@@ -37,9 +39,11 @@ export async function downloadMonthlyHistory(
   format: MonthlyHistoryFormat,
   filenamePrefix: string,
 ): Promise<void> {
+  // 1-16G : libellés du fichier dans la langue de l'interface (mêmes
+  // ventes, mêmes chiffres, mêmes noms ; devise et fuseau inchangés).
   const { data } = await apiClient.get<Blob>(
     `/reports/monthly/${month}/${format}`,
-    { responseType: "blob" },
+    { responseType: "blob", params: { lang: currentLocale() } },
   );
   const url = URL.createObjectURL(data);
   const link = document.createElement("a");
@@ -53,15 +57,23 @@ export async function downloadMonthlyHistory(
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-/** Message compréhensible pour un échec (le corps d'erreur est un Blob). */
+type AnalyticsT = TFunction<"analytics">;
+/** Clé traduite au rendu, ou message déjà traduit par l'API. */
+export type MonthlyHistoryMessage = string | ((t: AnalyticsT) => string);
+
+/**
+ * Message compréhensible pour un échec (le corps d'erreur est un Blob).
+ * 1-16G : traduit dans la langue courante ; un message propre au serveur
+ * (caractères PDF, limitation) arrive déjà dans la langue de la requête.
+ */
 export async function describeMonthlyHistoryError(
   error: unknown,
-): Promise<string> {
+): Promise<MonthlyHistoryMessage> {
   if (!axios.isAxiosError(error)) {
-    return "Le fichier n'a pas pu être préparé. Réessayez.";
+    return (t) => t("monthly.errors.generic");
   }
   if (!error.response) {
-    return "Impossible de joindre le serveur. Vérifiez votre connexion puis réessayez.";
+    return (t) => t("monthly.errors.network");
   }
   let code: unknown;
   let serverMessage: unknown;
@@ -75,32 +87,34 @@ export async function describeMonthlyHistoryError(
   }
   const status = error.response.status;
   if (isCommercialRefusalCode(code)) {
-    return "L'abonnement de ce commerce n'est pas actif : le téléchargement est indisponible.";
+    return (t) => t("monthly.errors.subscription");
   }
   if (status === 403) {
-    return "Votre rôle ou vos droits actuels ne permettent pas de télécharger cet historique.";
+    return (t) => t("monthly.errors.forbidden");
   }
-  if (code === "REPORT_MONTH_INVALID") return "Ce mois n'est pas disponible.";
+  if (code === "REPORT_MONTH_INVALID") {
+    return (t) => t("monthly.errors.monthInvalid");
+  }
   // 1-16D : PDF refusé plutôt qu'altéré ; le message du serveur cite les
   // caractères concernés et propose l'Excel, qui les conserve exactement.
   if (code === "REPORT_PDF_UNSUPPORTED_CHARACTERS") {
     return typeof serverMessage === "string"
       ? serverMessage
-      : "Certains noms ne peuvent pas être reproduits fidèlement en PDF. Téléchargez la version Excel.";
+      : (t) => t("monthly.errors.pdfCharacters");
   }
   if (code === "REPORT_RATE_LIMITED") {
     return typeof serverMessage === "string"
       ? serverMessage
-      : "Trop de téléchargements d'historique en peu de temps. Réessayez plus tard.";
+      : (t) => t("monthly.errors.rateLimited");
   }
   if (code === "REPORT_GENERATION_BUSY") {
-    return "D'autres rapports sont en cours de préparation. Réessayez dans quelques secondes.";
+    return (t) => t("monthly.errors.busy");
   }
   if (code === "REPORT_DATA_CHANGED") {
-    return "Des ventes ont changé pendant la préparation. Réessayez dans un instant.";
+    return (t) => t("monthly.errors.dataChanged");
   }
   if (status >= 500) {
-    return "Le serveur n'a pas pu préparer le fichier. Réessayez dans quelques instants.";
+    return (t) => t("monthly.errors.server");
   }
-  return "Le fichier n'a pas pu être préparé. Réessayez.";
+  return (t) => t("monthly.errors.generic");
 }

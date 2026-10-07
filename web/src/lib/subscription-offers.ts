@@ -8,16 +8,17 @@
 export type SubscriptionTerm =
   "monthly" | "quarterly" | "semiannual" | "annual";
 
+// 1-16G : libellés (« 1 mois », « 2 mois offerts »…) dans le namespace
+// `subscription` (`offers.term.*`, `offers.highlight.*`), jamais ici.
 export interface SubscriptionOffer {
   term: SubscriptionTerm;
   months: number;
-  label: string;
   /** Montant TOTAL à payer pour la durée choisie (XAF). */
   totalXaf: number;
   /** Économie par rapport à `months` paiements mensuels (XAF). */
   savingXaf: number;
-  /** Mention complémentaire validée (ex. « 2 mois offerts »). */
-  highlight?: string;
+  /** Mention complémentaire validée : économie ou « 2 mois offerts ». */
+  highlight?: "saving" | "freeMonths";
 }
 
 /** Prix mensuel de référence (XAF). */
@@ -30,33 +31,29 @@ export const SUBSCRIPTION_OFFERS: readonly SubscriptionOffer[] = [
   {
     term: "monthly",
     months: 1,
-    label: "1 mois",
     totalXaf: 3000,
     savingXaf: 0,
   },
   {
     term: "quarterly",
     months: 3,
-    label: "3 mois",
     totalXaf: 8500,
     savingXaf: 500,
-    highlight: "500 FCFA d'économie",
+    highlight: "saving",
   },
   {
     term: "semiannual",
     months: 6,
-    label: "6 mois",
     totalXaf: 16000,
     savingXaf: 2000,
-    highlight: "2000 FCFA d'économie",
+    highlight: "saving",
   },
   {
     term: "annual",
     months: 12,
-    label: "12 mois",
     totalXaf: 30000,
     savingXaf: 6000,
-    highlight: "2 mois offerts",
+    highlight: "freeMonths",
   },
 ];
 
@@ -65,15 +62,17 @@ export function monthlyEquivalentXaf(offer: SubscriptionOffer): number {
   return Math.round(offer.totalXaf / offer.months);
 }
 
-/** Libellé d'une durée connue du serveur (`term`), sinon générique. */
-export function termLabel(term: string | null | undefined): string {
-  return SUBSCRIPTION_OFFERS.find((offer) => offer.term === term)?.label ?? "—";
+/** Durée connue du serveur, sinon `null` (libellé générique « — »). */
+export function knownTerm(
+  term: string | null | undefined,
+): SubscriptionTerm | null {
+  return SUBSCRIPTION_OFFERS.find((offer) => offer.term === term)?.term ?? null;
 }
 
-/** Montant XAF formaté « 30 000 FCFA » (espace insécable fine, fr-FR). */
-export function formatFcfa(amount: number): string {
-  return `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 0 }).format(amount)} FCFA`;
-}
+// Chemin relatif : ce module est aussi chargé par un test de l'API
+// (`subscription-pricing.spec.ts`), sans l'alias `@/`.
+/** Montant XAF formaté « 30 000 FCFA » (fr) ou « 30,000 FCFA » (en). */
+export { formatFcfa } from "../i18n/format";
 
 // Cohérence vérifiée au chargement du module : toute modification de tarif
 // incohérente (économie mal calculée) échoue au build/prérendu.

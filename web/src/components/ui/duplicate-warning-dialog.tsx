@@ -1,6 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useT } from "next-i18next/client";
+import { rich } from "@/i18n/rich";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -30,10 +32,10 @@ export function DuplicateWarningDialog({
   item,
   onClose,
 }: DuplicateWarningDialogProps) {
+  const { t } = useT("catalog");
   const router = useRouter();
 
   const inTrash = !!item?.deletedAt;
-  const label = type === "section" ? "catalogue" : "produit";
 
   const link = inTrash
     ? "/app/trash"
@@ -50,20 +52,26 @@ export function DuplicateWarningDialog({
     <AlertDialog open={!!item} onOpenChange={(o) => !o && onClose()}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>
-            {type === "section"
-              ? "Catalogue déjà existant"
-              : "Produit déjà existant"}
-          </AlertDialogTitle>
+          <AlertDialogTitle>{t(`duplicate.${type}.title`)}</AlertDialogTitle>
           <AlertDialogDescription>
-            Un {label} nommé <strong>« {item?.name} »</strong> existe déjà
-            {inTrash ? " dans la corbeille" : ""}.
+            {/* Nom saisi par l'utilisateur : inséré à part, jamais dans le
+                gabarit interprété. */}
+            {rich(
+              t(
+                inTrash
+                  ? `duplicate.${type}.existsInTrash`
+                  : `duplicate.${type}.exists`,
+              ),
+              { name: () => <strong>« {item?.name} »</strong> },
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={onClose}>Fermer</AlertDialogCancel>
+          <AlertDialogCancel onClick={onClose}>
+            {t("actions.close")}
+          </AlertDialogCancel>
           <AlertDialogAction onClick={handleView}>
-            {inTrash ? "Voir la corbeille" : `Voir le ${label}`}
+            {inTrash ? t("duplicate.viewTrash") : t(`duplicate.${type}.view`)}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

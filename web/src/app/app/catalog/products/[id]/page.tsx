@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
+import type { TFunction } from "i18next";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
 import {
   ArrowLeftIcon,
   TrendingUpIcon,
@@ -27,77 +30,99 @@ import {
   useOfflineSales,
 } from "@/contexts/offline-sales-context";
 import { hasPermission } from "@/lib/organization-permissions";
-import { fmtXof } from "@/lib/currency";
 import { productInfoItems } from "@/lib/product-info";
 import { useSaleInvalidation } from "@/hooks/use-sale-invalidation";
 import { useLiveRefresh } from "@/hooks/use-live-refresh";
 import { useSocket } from "@/contexts/socket-context";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
 
-const fmt = fmtXof;
+// 1-16G : libellés d'historique dans `catalog` (`audit.*`) ; une action
+// inconnue reste affichée par son code (comportement inchangé).
+const AUDIT_ACTIONS = [
+  "created",
+  "sold",
+  "price_changed",
+  "stock_changed",
+  "name_changed",
+  "section_changed",
+  "deleted",
+  "sale_updated",
+  "sale_cancelled",
+] as const;
 
-const AUDIT_LABELS: Record<string, string> = {
-  created: "Produit ajouté",
-  sold: "Vente",
-  price_changed: "Prix modifié",
-  stock_changed: "Stock ajouté",
-  name_changed: "Nom modifié",
-  section_changed: "Section changée",
-  deleted: "Produit supprimé",
-  sale_updated: "Vente modifiée",
-  sale_cancelled: "Vente annulée",
-};
+function auditLabel(action: string, t: TFunction<"catalog">): string {
+  return (AUDIT_ACTIONS as readonly string[]).includes(action)
+    ? t(`audit.${action as (typeof AUDIT_ACTIONS)[number]}`)
+    : action;
+}
 
 function ProfitIndicator({ profit }: { profit: number }) {
+  const { t } = useT("catalog");
   if (profit > 0)
     return (
       <span className="flex items-center gap-1 text-green-700 dark:text-green-400 font-semibold">
-        <TrendingUpIcon className="h-4 w-4" /> Rentable
+        <TrendingUpIcon className="h-4 w-4" /> {t("profit.positive")}
       </span>
     );
   if (profit < 0)
     return (
       <span className="flex items-center gap-1 text-red-600 dark:text-red-400 font-semibold">
-        <TrendingDownIcon className="h-4 w-4" /> À perte
+        <TrendingDownIcon className="h-4 w-4" /> {t("profit.negative")}
       </span>
     );
   return (
     <span className="flex items-center gap-1 text-muted-foreground font-semibold">
-      <MinusIcon className="h-4 w-4" /> À l&apos;équilibre
+      <MinusIcon className="h-4 w-4" /> {t("profit.even")}
     </span>
   );
 }
 
 function AuditEntry({ log }: { log: ApiAuditLog }) {
+  const { t } = useT("catalog");
+  const format = useFormat();
+  const fmt = format.fcfa;
   return (
     <div className="flex gap-3 text-sm border-l-2 border-muted pl-3 py-1">
       <div className="flex-1">
-        <p className="font-medium">{AUDIT_LABELS[log.action] ?? log.action}</p>
+        <p className="font-medium">{auditLabel(log.action, t)}</p>
         <p className="text-xs text-muted-foreground">
-          par {log.actorId?.name ?? "—"} ·{" "}
-          {new Date(log.createdAt).toLocaleString("fr-FR")}
+          {t("audit.by", { name: log.actorId?.name ?? "—" })} ·{" "}
+          {format.dateTime(log.createdAt)}
         </p>
         {log.action === "sold" && log.details && (
           <p className="text-xs mt-0.5">
-            {String(log.details.quantity)} unité(s) à{" "}
-            {fmt(Number(log.details.salePrice))}
+            {t("audit.unitsAt", {
+              count: Number(log.details.quantity),
+              price: fmt(Number(log.details.salePrice)),
+            })}
             {log.details.buyerName ? ` — ${String(log.details.buyerName)}` : ""}
           </p>
         )}
         {log.action === "sale_cancelled" && log.details && (
           <p className="text-xs mt-0.5">
-            {String(log.details.quantity)} unité(s) à{" "}
-            {fmt(Number(log.details.salePrice))} annulée(s)
+            {t("audit.unitsCancelled", {
+              count: Number(log.details.quantity),
+              price: fmt(Number(log.details.salePrice)),
+            })}
           </p>
         )}
         {log.action === "sale_updated" && log.details && (
           <p className="text-xs mt-0.5">
             {log.details.quantity
-              ? `Qté : ${(log.details.quantity as { from: number; to: number }).from} → ${(log.details.quantity as { from: number; to: number }).to}`
+              ? t("audit.quantityChange", {
+                  from: (log.details.quantity as { from: number; to: number })
+                    .from,
+                  to: (log.details.quantity as { from: number; to: number }).to,
+                })
               : ""}
             {log.details.quantity && log.details.salePrice ? " · " : ""}
             {log.details.salePrice
-              ? `Prix : ${fmt(Number((log.details.salePrice as { from: number }).from))} → ${fmt(Number((log.details.salePrice as { to: number }).to))}`
+              ? t("audit.priceChange", {
+                  from: fmt(
+                    Number((log.details.salePrice as { from: number }).from),
+                  ),
+                  to: fmt(Number((log.details.salePrice as { to: number }).to)),
+                })
               : ""}
           </p>
         )}
@@ -112,6 +137,9 @@ function AuditEntry({ log }: { log: ApiAuditLog }) {
 // liste des ventes/l'historique d'audit rendus sont déjà scopés par le
 // backend (findOne), aucun filtrage supplémentaire côté client.
 export default function ProductDetailPage() {
+  const { t } = useT("catalog");
+  const format = useFormat();
+  const fmt = format.fcfa;
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const { authContext } = useOrganizationShell();
@@ -247,21 +275,21 @@ export default function ProductDetailPage() {
           className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-sm hover:bg-muted transition-colors"
         >
           <ArrowLeftIcon className="h-4 w-4" />
-          Retour
+          {t("actions.back")}
         </button>
       </div>
 
       {isLoading && (
-        <p className="text-sm text-muted-foreground">Chargement…</p>
+        <p className="text-sm text-muted-foreground">{t("loading")}</p>
       )}
       {!isLoading && removal === "trashed" && (
         <p role="status" className="text-sm text-muted-foreground">
-          Ce produit a été placé dans la corbeille.
+          {t("product.trashedNotice")}
         </p>
       )}
       {removal === "purged" && (
         <p role="status" className="text-sm text-muted-foreground">
-          Ce produit a été supprimé définitivement.
+          {t("product.purgedNotice")}
         </p>
       )}
       {!isLoading && error && (
@@ -271,7 +299,7 @@ export default function ProductDetailPage() {
             onClick={() => void load()}
             className="text-sm text-primary underline underline-offset-2 hover:no-underline"
           >
-            Réessayer
+            {t("actions.retry")}
           </button>
         </div>
       )}
@@ -301,11 +329,7 @@ export default function ProductDetailPage() {
                         : "destructive"
                   }
                 >
-                  {detail.status === "in_stock"
-                    ? "En stock"
-                    : detail.status === "low_stock"
-                      ? "Stock faible"
-                      : "Épuisé"}
+                  {t(`status.${detail.status}`)}
                 </Badge>
               </div>
               {detail.actualProfit !== undefined && (
@@ -327,9 +351,12 @@ export default function ProductDetailPage() {
           {/* Metrics grid — 1-12H : champs projetés par l'API selon les
               permissions effectives, jamais complétés ici. */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {productInfoItems(detail, indicative, {
-              showServerStock: true,
-            }).map((m) => (
+            {productInfoItems(
+              detail,
+              indicative,
+              { t, fcfa: fmt },
+              { showServerStock: true },
+            ).map((m) => (
               <Card key={m.key}>
                 <CardContent className="pt-4 pb-3">
                   <p className="text-xs text-muted-foreground">{m.label}</p>
@@ -353,7 +380,9 @@ export default function ProductDetailPage() {
           {detail.sales.length > 0 && (
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Ventes récentes</CardTitle>
+                <CardTitle className="text-base">
+                  {t("product.recentSales")}
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="divide-y text-sm">
@@ -369,7 +398,7 @@ export default function ProductDetailPage() {
                             : "—"}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {new Date(s.createdAt).toLocaleString("fr-FR")}
+                          {format.dateTime(s.createdAt)}
                           {s.buyerName ? ` → ${s.buyerName}` : ""}
                         </p>
                       </div>
@@ -386,7 +415,8 @@ export default function ProductDetailPage() {
                           <button
                             onClick={() => setEditSale(s as ApiSale)}
                             className="mt-0.5 rounded p-1 hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                            title="Modifier"
+                            title={t("product.edit")}
+                            aria-label={t("product.edit")}
                           >
                             <PencilIcon className="h-3.5 w-3.5" />
                           </button>
@@ -402,12 +432,14 @@ export default function ProductDetailPage() {
           {/* Audit trail */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Historique complet</CardTitle>
+              <CardTitle className="text-base">
+                {t("product.history")}
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
               {(detail.auditLogs as ApiAuditLog[]).length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  Aucun historique
+                  {t("product.noHistory")}
                 </p>
               ) : (
                 (detail.auditLogs as ApiAuditLog[]).map((log) => (

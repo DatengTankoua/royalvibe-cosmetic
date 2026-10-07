@@ -1,5 +1,6 @@
 import { apiClient } from "../api";
 import { legalDocumentById, type PublicDocument } from "./site-identity";
+import type { Locale } from "@/i18n/settings";
 
 // 1-16C.2 — Acceptation versionnée des conditions. Miroir de
 // `api/src/legal/legal-documents.ts` : le navigateur indique seulement CE
@@ -8,11 +9,12 @@ import { legalDocumentById, type PublicDocument } from "./site-identity";
 // les empreintes enregistrées : rien de ce qui part d'ici n'est une preuve.
 
 /**
- * Langue des textes présentés. Seul le français est publié ; une version
- * anglaise s'ajoutera ici quand elle existera ET sera archivée côté API
- * (le serveur refuse une langue sans texte archivé).
+ * 1-16G — Langue des textes présentés : celle de l'interface au moment de
+ * l'envoi (les liens de la case ouvrent les documents dans cette langue).
+ * Chaque langue publiée est archivée côté API ; le serveur refuse une
+ * langue sans texte archivé (`LEGAL_LOCALE_UNAVAILABLE`).
  */
-export const LEGAL_LOCALE = "fr";
+export const LEGAL_LOCALES: readonly Locale[] = ["fr", "en"];
 
 export type LegalAcceptanceContext =
   "owner_registration" | "invitation_account";
@@ -73,11 +75,12 @@ export function legalDocumentsFor(context: LegalAcceptanceContext): {
 /** Charge utile envoyée UNIQUEMENT quand la case a été cochée. */
 export function buildLegalAcceptance(
   context: LegalAcceptanceContext,
+  locale: Locale,
 ): LegalAcceptancePayload {
   const r = REQUIREMENTS[context];
   return {
     accepted: true,
-    locale: LEGAL_LOCALE,
+    locale,
     documents: refs(r.documents),
     notices: refs(r.notices),
   };
@@ -89,18 +92,29 @@ export const LEGAL_LOCALE_UNAVAILABLE = "LEGAL_LOCALE_UNAVAILABLE";
 export const LEGAL_DOCUMENTS_INVALID = "LEGAL_DOCUMENTS_INVALID";
 export const LEGAL_ARCHIVE_UNAVAILABLE = "LEGAL_ARCHIVE_UNAVAILABLE";
 
-/** Message lisible pour un refus lié à l'acceptation ; `null` sinon. */
-export function legalAcceptanceErrorMessage(code: unknown): string | null {
+export type LegalAcceptanceErrorKey =
+  | "acceptance.errors.required"
+  | "acceptance.errors.outdated"
+  | "acceptance.errors.mismatch"
+  | "acceptance.errors.archive";
+
+/**
+ * Clé (namespace `legal`) du message d'un refus lié à l'acceptation ;
+ * `null` sinon. 1-16G : traduite à l'affichage.
+ */
+export function legalAcceptanceErrorKey(
+  code: unknown,
+): LegalAcceptanceErrorKey | null {
   switch (code) {
     case LEGAL_ACCEPTANCE_REQUIRED:
-      return "Coche la case pour accepter les conditions avant de continuer.";
+      return "acceptance.errors.required";
     case LEGAL_VERSION_OUTDATED:
-      return "Les conditions ont été mises à jour. Recharge la page pour lire la nouvelle version, puis recommence.";
+      return "acceptance.errors.outdated";
     case LEGAL_LOCALE_UNAVAILABLE:
     case LEGAL_DOCUMENTS_INVALID:
-      return "Les conditions affichées ne correspondent pas aux textes en vigueur. Recharge la page, puis recommence.";
+      return "acceptance.errors.mismatch";
     case LEGAL_ARCHIVE_UNAVAILABLE:
-      return "L'enregistrement de ton acceptation est momentanément indisponible. Réessaie dans quelques instants.";
+      return "acceptance.errors.archive";
     default:
       return null;
   }
@@ -137,10 +151,11 @@ export function matchesDisplayedVersions(
 
 export async function confirmLegalAcceptance(
   status: LegalAcceptanceStatus,
+  locale: Locale,
 ): Promise<{ status: "recorded" | "already-accepted" }> {
   const payload: LegalAcceptancePayload = {
     accepted: true,
-    locale: LEGAL_LOCALE,
+    locale,
     documents: status.pending.map((r) => ({
       id: r.id,
       version: displayed(r.id).version,

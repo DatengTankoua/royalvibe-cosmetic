@@ -2,9 +2,9 @@
 
 import { Menu } from "@base-ui/react/menu";
 import { CheckIcon, MonitorIcon, MoonIcon, SunIcon } from "lucide-react";
+import { useT } from "next-i18next/client";
 import { useThemePreference } from "@/components/theme/use-theme";
 import {
-  THEME_LABELS,
   THEME_PREFERENCES,
   parseThemePreference,
   type ThemePreference,
@@ -22,12 +22,13 @@ const ICONS: Record<ThemePreference, typeof SunIcon> = {
 // soleil/lune suit le thème affiché via CSS (`dark:`), donc identique au
 // rendu serveur : aucune différence d'hydratation.
 export function ThemeToggle({ className }: { className?: string }) {
+  const { t } = useT("common");
   const { preference, setPreference } = useThemePreference();
   return (
     <Menu.Root modal={false}>
       <Menu.Trigger
-        aria-label={`Thème d'affichage : ${THEME_LABELS[preference]}`}
-        title="Thème d'affichage"
+        aria-label={t("theme.trigger", { theme: t(`theme.${preference}`) })}
+        title={t("theme.title")}
         data-testid="theme-toggle"
         className={
           className ??
@@ -45,7 +46,7 @@ export function ThemeToggle({ className }: { className?: string }) {
           >
             <Menu.Group>
               <Menu.GroupLabel className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                Thème d&apos;affichage
+                {t("theme.title")}
               </Menu.GroupLabel>
               <Menu.RadioGroup
                 value={preference}
@@ -63,7 +64,7 @@ export function ThemeToggle({ className }: { className?: string }) {
                       className="flex min-h-10 cursor-default items-center gap-2 rounded-md px-2 outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-checked:font-medium"
                     >
                       <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                      <span className="flex-1">{THEME_LABELS[option]}</span>
+                      <span className="flex-1">{t(`theme.${option}`)}</span>
                       <Menu.RadioItemIndicator className="inline-flex">
                         <CheckIcon className="h-4 w-4" aria-hidden="true" />
                       </Menu.RadioItemIndicator>

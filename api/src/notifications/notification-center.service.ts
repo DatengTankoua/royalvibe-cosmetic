@@ -32,6 +32,7 @@ import {
 import { PUSH_CLOCK } from '../push/push-runtime';
 import type { PushClock } from '../push/push-runtime';
 import { NOTIFICATION_TITLE, notificationBody } from '../push/push-messages';
+import type { AppLocale } from '../common/i18n/locale';
 import type { PushJob } from '../push/schemas/push-job.schema';
 import { Product, ProductDocument } from '../products/schemas/product.schema';
 import { Sale, SaleDocument } from '../sales/schemas/sale.schema';
@@ -47,6 +48,8 @@ import { SubscriptionPeriodKind } from '../subscriptions/subscription-terms';
 export interface NotificationReaderContext extends CategoryAccessContext {
   userId: string;
   organizationId: string;
+  /** 1-16G : langue de la requête du lecteur (textes génériques). */
+  locale?: AppLocale;
 }
 
 export interface NotificationView {
@@ -102,12 +105,15 @@ function link(n: NotificationRecord): string {
   }
 }
 
-function toView(n: NotificationRecord): NotificationView {
+function toView(
+  n: NotificationRecord,
+  locale: AppLocale = 'fr',
+): NotificationView {
   return {
     id: n._id.toHexString(),
     category: n.category,
     title: NOTIFICATION_TITLE,
-    body: notificationBody(n.category, n.periodKind),
+    body: notificationBody(n.category, n.periodKind, locale),
     link: link(n),
     createdAt: n.eventAt,
     readAt: n.readAt,
@@ -255,7 +261,7 @@ export class NotificationCenterService {
       .limit(limit + 1)
       .lean<NotificationRecord[]>()
       .exec();
-    const items = rows.slice(0, limit).map(toView);
+    const items = rows.slice(0, limit).map((n) => toView(n, context.locale));
     return {
       items,
       nextCursor: rows.length > limit ? items[items.length - 1].id : null,
@@ -320,6 +326,7 @@ export class NotificationCenterService {
         .findById(notification._id)
         .lean<NotificationRecord>()
         .exec()) ?? notification,
+      context.locale,
     );
   }
 

@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
+import { useT } from "next-i18next/client";
+import { useMessage } from "@/i18n/use-message";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,13 +17,14 @@ import { BackToHome } from "@/components/landing/back-to-home";
 import Link from "next/link";
 
 export default function LoginPage() {
+  const { t } = useT("auth");
   const { login } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useMessage("auth");
   // 1-13A : identifiants corrects mais adresse non vérifiée — aucune session
   // créée ; l'adresse saisie sert uniquement au renvoi du lien.
   const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
@@ -34,13 +37,13 @@ export default function LoginPage() {
     process.env.NEXT_PUBLIC_REGISTRATION_ENABLED === "true";
   // 1-14C.2 : retour d'une session limitée expirée (message seul, aucune
   // donnée lue dans l'URL au-delà de ce marqueur).
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState(false);
   useEffect(() => {
     if (
       new URLSearchParams(window.location.search).get("session") ===
       "limitee-expiree"
     ) {
-      setNotice("Votre accès temporaire a expiré. Reconnectez-vous.");
+      setNotice(true);
     }
   }, []);
 
@@ -65,7 +68,10 @@ export default function LoginPage() {
         setUnverifiedEmail(email.trim());
         return;
       }
-      setError(err instanceof Error ? err.message : "Erreur de connexion");
+      // Message de l'API déjà dans la langue de la requête.
+      setError(
+        err instanceof Error ? err.message : (tr) => tr("login.errors.generic"),
+      );
     } finally {
       setLoading(false);
     }
@@ -90,7 +96,7 @@ export default function LoginPage() {
           <div className="space-y-3 text-center">
             <Wordmark className="mx-auto" size="large" />
             <p className="text-sm text-muted-foreground">
-              Choisis l&apos;organisation à laquelle te connecter
+              {t("login.chooseOrganization")}
             </p>
           </div>
 
@@ -119,7 +125,7 @@ export default function LoginPage() {
             onClick={handleBack}
             className="w-full text-center text-sm text-muted-foreground underline underline-offset-2"
           >
-            Retour
+            {t("login.back")}
           </button>
         </div>
       </div>
@@ -132,20 +138,18 @@ export default function LoginPage() {
         <BackToHome />
         <div className="space-y-3 text-center">
           <Wordmark className="mx-auto" size="large" />
-          <p className="text-sm text-muted-foreground">
-            Connexion à ton espace de gestion
-          </p>
+          <p className="text-sm text-muted-foreground">{t("login.subtitle")}</p>
         </div>
 
         {notice && !error && (
           <p role="status" className="text-center text-sm">
-            {notice}
+            {t("login.limitedExpired")}
           </p>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="email">{t("fields.email")}</Label>
             <Input
               id="email"
               type="email"
@@ -157,7 +161,7 @@ export default function LoginPage() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="password">Mot de passe</Label>
+            <Label htmlFor="password">{t("password.label")}</Label>
             <div className="relative">
               <Input
                 id="password"
@@ -173,9 +177,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => setShowPassword((v) => !v)}
                 aria-label={
-                  showPassword
-                    ? "Masquer le mot de passe"
-                    : "Afficher le mot de passe"
+                  showPassword ? t("password.hide") : t("password.show")
                 }
                 aria-pressed={showPassword}
                 className="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-muted-foreground hover:text-foreground"
@@ -194,7 +196,7 @@ export default function LoginPage() {
               href="/auth/forgot-password"
               className="text-sm text-muted-foreground underline underline-offset-2"
             >
-              Mot de passe oublié ?
+              {t("login.forgot")}
             </Link>
           </div>
 
@@ -209,7 +211,7 @@ export default function LoginPage() {
           )}
 
           <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? "Connexion…" : "Se connecter"}
+            {loading ? t("login.submitting") : t("login.submit")}
           </Button>
         </form>
 
@@ -218,20 +220,17 @@ export default function LoginPage() {
             role="alert"
             className="space-y-3 rounded-md border px-4 py-3 text-sm"
           >
-            <p className="font-medium">Adresse email non confirmée</p>
-            <p className="text-muted-foreground">
-              Confirmez votre adresse email pour accéder à votre compte. Ouvrez
-              le lien reçu par email, ou demandez-en un nouveau.
-            </p>
+            <p className="font-medium">{t("login.unverifiedTitle")}</p>
+            <p className="text-muted-foreground">{t("login.unverifiedText")}</p>
             <EmailVerificationResend email={unverifiedEmail} />
           </div>
         )}
 
         {registrationEnabled && (
           <p className="text-center text-sm text-muted-foreground">
-            Pas encore de compte ?{" "}
+            {t("login.noAccount")}{" "}
             <Link href="/auth/register" className="underline">
-              S&apos;inscrire
+              {t("login.signUp")}
             </Link>
           </p>
         )}

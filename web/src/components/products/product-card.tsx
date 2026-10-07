@@ -1,6 +1,9 @@
 "use client";
 
 import { Fragment, useState } from "react";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
+import { rich } from "@/i18n/rich";
 import Link from "next/link";
 import Image from "next/image";
 import {
@@ -27,22 +30,11 @@ import { useIndicativeStock } from "@/contexts/offline-sales-context";
 import type { ApiProduct } from "@/lib/api";
 import { productInfoItems, type ProductInfoKey } from "@/lib/product-info";
 
+// 1-16G : libellés dans `catalog` (`status.*`).
 const STATUS_CONFIG = {
-  in_stock: {
-    label: "En stock",
-    icon: BadgeCheckIcon,
-    variant: "default" as const,
-  },
-  low_stock: {
-    label: "Stock faible",
-    icon: AlertTriangleIcon,
-    variant: "secondary" as const,
-  },
-  out_of_stock: {
-    label: "Épuisé",
-    icon: XCircleIcon,
-    variant: "destructive" as const,
-  },
+  in_stock: { icon: BadgeCheckIcon, variant: "default" as const },
+  low_stock: { icon: AlertTriangleIcon, variant: "secondary" as const },
+  out_of_stock: { icon: XCircleIcon, variant: "destructive" as const },
 };
 
 // 1-12H : sous-ensemble compact de la fiche, même source de calcul ; seuls
@@ -76,7 +68,10 @@ export function ProductCard({
   onDelete,
   onEdit,
 }: ProductCardProps) {
-  const cfg = STATUS_CONFIG[product.status] ?? STATUS_CONFIG.in_stock;
+  const { t } = useT("catalog");
+  const { fcfa } = useFormat();
+  const status = STATUS_CONFIG[product.status] ? product.status : "in_stock";
+  const cfg = STATUS_CONFIG[status];
   const StatusIcon = cfg.icon;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmEdit, setConfirmEdit] = useState(false);
@@ -119,14 +114,14 @@ export function ProductCard({
             </CardTitle>
             <Badge variant={cfg.variant} className="shrink-0 text-xs">
               <StatusIcon className="mr-1 h-3 w-3" />
-              {cfg.label}
+              {t(`status.${status}`)}
             </Badge>
           </div>
         </CardHeader>
 
         <CardContent className="space-y-2 text-sm">
           <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
-            {productInfoItems(product, indicative)
+            {productInfoItems(product, indicative, { t, fcfa })
               .filter((item) => CARD_KEYS.includes(item.key))
               .map((item) => (
                 <Fragment key={item.key}>
@@ -156,7 +151,7 @@ export function ProductCard({
                   onClick={() => setConfirmEdit(true)}
                 >
                   <PencilIcon className="h-3 w-3 mr-1" />
-                  Modifier
+                  {t("product.edit")}
                 </Button>
               )}
               {canDelete && (
@@ -165,6 +160,7 @@ export function ProductCard({
                   size="sm"
                   className="text-destructive hover:text-destructive"
                   onClick={() => setConfirmDelete(true)}
+                  aria-label={t("product.trashAction")}
                 >
                   <Trash2Icon className="h-4 w-4" />
                 </Button>
@@ -178,22 +174,20 @@ export function ProductCard({
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              Placer ce produit dans la corbeille ?
-            </AlertDialogTitle>
+            <AlertDialogTitle>{t("product.trashTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Tu es sur le point de placer <strong>{product.name}</strong> dans
-              la corbeille. Tu peux restaurer ou supprimer définitivement ce
-              produit depuis la corbeille.
+              {rich(t("product.trashText"), {
+                name: () => <strong>{product.name}</strong>,
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => onDelete(product._id)}
             >
-              Placer dans la corbeille
+              {t("product.trashAction")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -203,21 +197,22 @@ export function ProductCard({
       <AlertDialog open={confirmEdit} onOpenChange={setConfirmEdit}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Modifier ce produit ?</AlertDialogTitle>
+            <AlertDialogTitle>{t("product.editTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Tu vas modifier <strong>{product.name}</strong>. Les changements
-              de prix affecteront les calculs de bénéfice futurs.
+              {rich(t("product.editText"), {
+                name: () => <strong>{product.name}</strong>,
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
                 setConfirmEdit(false);
                 onEdit(product);
               }}
             >
-              Continuer
+              {t("actions.continue")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

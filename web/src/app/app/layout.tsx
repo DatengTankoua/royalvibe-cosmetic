@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -31,6 +32,8 @@ import { OnlineStatusIndicator } from "@/components/layout/online-status-indicat
 import { CurrencyConverter } from "@/components/currency/currency-converter";
 import { NotificationBell } from "@/components/notifications/notification-bell";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
+import { LanguageSwitcher } from "@/components/i18n/language-switcher";
+import { useMessage } from "@/i18n/use-message";
 import { EngagementPrompt } from "@/components/notifications/engagement-prompt";
 import { LegalAcceptancePrompt } from "@/components/legal/legal-acceptance-prompt";
 import {
@@ -74,11 +77,7 @@ import {
   type TenantBrandSnapshot,
 } from "@/lib/offline-tenant-brand-db";
 import { computeTenantAccent, tenantAccentStyle } from "@/lib/tenant-brand";
-import {
-  ORGANIZATION_NAME_FALLBACK,
-  firstNameOf,
-  fullNameOf,
-} from "@/lib/display-names";
+import { firstNameOf, fullNameOf } from "@/lib/display-names";
 import { useOfflineSalesSync } from "@/hooks/use-offline-sales-sync";
 import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
@@ -100,9 +99,19 @@ import {
   type SelectableOrganization,
 } from "@/lib/api";
 
+// 1-16G : libellés dans `common` (`shell.nav.*`).
+type ShellNavKey =
+  | "home"
+  | "catalog"
+  | "sales"
+  | "analytics"
+  | "trash"
+  | "organization"
+  | "help";
+
 interface ShellNavItem {
   href: string;
-  label: string;
+  key: ShellNavKey;
   icon: typeof StoreIcon;
 }
 
@@ -111,16 +120,16 @@ interface ShellNavItem {
 // sécurité backend reste l'autorité finale sur chaque route.
 function visibleNavItems(authContext: ApiAuthContext | null): ShellNavItem[] {
   const items: Array<ShellNavItem & { visible: boolean }> = [
-    { href: "/app", label: "Accueil", icon: StoreIcon, visible: true },
+    { href: "/app", key: "home", icon: StoreIcon, visible: true },
     {
       href: "/app/catalog",
-      label: "Catalogue",
+      key: "catalog",
       icon: LayoutGridIcon,
       visible: true,
     },
     {
       href: "/app/sales",
-      label: "Ventes",
+      key: "sales",
       icon: ShoppingBagIcon,
       visible:
         hasPermission(authContext, "sales.view_own") ||
@@ -129,25 +138,25 @@ function visibleNavItems(authContext: ApiAuthContext | null): ShellNavItem[] {
     },
     {
       href: "/app/analytics",
-      label: "Analyse",
+      key: "analytics",
       icon: BarChart3Icon,
       visible: hasPermission(authContext, "analytics.read"),
     },
     {
       href: "/app/trash",
-      label: "Corbeille",
+      key: "trash",
       icon: Trash2Icon,
       visible: hasPermission(authContext, "trash.manage"),
     },
     {
       href: "/app/organization",
-      label: "Organisation",
+      key: "organization",
       icon: Building2Icon,
       visible: true,
     },
     // 1-16C : guide public (hors shell, sans données). Hors ligne, il est
     // désactivé comme les autres pages par `ShellNavLink`.
-    { href: "/guide", label: "Aide", icon: CircleHelpIcon, visible: true },
+    { href: "/guide", key: "help", icon: CircleHelpIcon, visible: true },
   ];
   return items.filter((i) => i.visible);
 }
@@ -190,9 +199,6 @@ function authorizationKey(ctx: ApiAuthContext): string {
 // Correctif 1-11C.3 : seule route /app servie hors ligne par le service
 // worker (document d'app shell précaché).
 const OFFLINE_AVAILABLE_HREF = "/app/catalog";
-const OFFLINE_UNAVAILABLE_LABEL = "Indisponible hors connexion";
-const OFFLINE_MAIN_MESSAGE =
-  "Vous êtes hors connexion. Vous pouvez consulter les données enregistrées sur cet appareil et saisir des ventes qui seront envoyées au retour de la connexion.";
 
 /**
  * Lien de navigation du shell. En ligne : `Link` sans prefetch (aucune
@@ -216,6 +222,7 @@ function ShellNavLink({
   onClick?: () => void;
   children: React.ReactNode;
 }) {
+  const { t } = useT("common");
   if (!offline) {
     return (
       <Link
@@ -239,11 +246,11 @@ function ShellNavLink({
     <span
       role="link"
       aria-disabled="true"
-      title={OFFLINE_UNAVAILABLE_LABEL}
+      title={t("shell.offlineUnavailable")}
       className={`${className} ${disabledClassName}`}
     >
       {children}
-      <span className="sr-only"> — {OFFLINE_UNAVAILABLE_LABEL}</span>
+      <span className="sr-only"> — {t("shell.offlineUnavailable")}</span>
     </span>
   );
 }
@@ -262,6 +269,8 @@ export default function AppShellLayout({
 }) {
   const { user, isLoading, sessionVersion, logout, restrictedToken } =
     useAuth();
+  const { t } = useT("common");
+  const { t: ts } = useT("subscription");
   const router = useRouter();
   const pathname = usePathname();
   const [organization, setOrganization] =
@@ -288,8 +297,8 @@ export default function AppShellLayout({
   const [loadingOrg, setLoadingOrg] = useState(true);
   // Indépendantes : l'échec de l'une ne doit jamais écraser le résultat
   // valide de l'autre (branding vs liste des organisations).
-  const [brandingError, setBrandingError] = useState<string | null>(null);
-  const [listError, setListError] = useState<string | null>(null);
+  const [brandingError, setBrandingError] = useMessage("common");
+  const [listError, setListError] = useMessage("common");
   // Liste réellement reçue : « aucune organisation active » ne se déduit
   // jamais d'une liste non chargée (ex. hors ligne).
   const [listLoaded, setListLoaded] = useState(false);
@@ -313,7 +322,7 @@ export default function AppShellLayout({
   // montées qu'après — jamais sur une session dont l'accès est inconnu.
   const [contextReady, setContextReady] = useState(false);
   const [verifying, setVerifying] = useState(false);
-  const [verifyMessage, setVerifyMessage] = useState<string | null>(null);
+  const [verifyMessage, setVerifyMessage] = useMessage("subscription");
   const [managerReloadKey, setManagerReloadKey] = useState(0);
   // 1-15A : refus serveur du contexte (membership suspendue ou révoquée,
   // organisation suspendue, jeton refusé) — les pages métier sont retirées
@@ -577,7 +586,7 @@ export default function AppShellLayout({
         // message hors ligne unique du shell suffit) ; seul un refus serveur
         // est signalé.
         if (!isNetworkError(currentResult.reason)) {
-          setBrandingError("Organisation actuelle indisponible.");
+          setBrandingError((tr) => tr("shell.organizationUnavailable"));
         }
       }
       if (listResult.status === "fulfilled") {
@@ -628,7 +637,7 @@ export default function AppShellLayout({
     return () => {
       cancelled = true;
     };
-  }, [user, sessionVersion, refreshTick]);
+  }, [user, sessionVersion, refreshTick, setBrandingError, setListError]);
 
   // 1-14C.2 — « Vérifier mon abonnement » (session applicative bloquée) :
   // relecture du contexte serveur, AUCUN changement de token. L'accès ne
@@ -652,17 +661,17 @@ export default function AppShellLayout({
         access: ctx.access ?? null,
         identity: { userId: ctx.userId, organizationId: ctx.organizationId },
       });
-      setVerifyMessage("L'abonnement n'est toujours pas actif.");
+      setVerifyMessage((tr) => tr("verify.stillInactive"));
     } catch (err) {
-      setVerifyMessage(
+      setVerifyMessage((tr) =>
         isNetworkError(err)
-          ? "Vérification impossible hors connexion."
-          : "Vérification momentanément indisponible.",
+          ? tr("verify.offline")
+          : tr("manager.checkUnavailable"),
       );
     } finally {
       setVerifying(false);
     }
-  }, []);
+  }, [setVerifyMessage]);
 
   // 1-15C : relecture SEULE de l'organisation courante (nom, couleur, logo)
   // pour la session et l'organisation en cours : aucune relecture du
@@ -736,9 +745,7 @@ export default function AppShellLayout({
         const pending = await readUserUnfinalizedOperations(user._id);
         if (pending === null) {
           await finishLogout();
-          toast.warning(
-            "Ventes locales non vérifiées : elles restent conservées sur cet appareil.",
-          );
+          toast.warning(t("shell.logout.unverified"));
           return;
         }
         if (pending.length === 0) {
@@ -765,13 +772,11 @@ export default function AppShellLayout({
     const remaining = await readUserUnfinalizedOperations(user._id);
     if (remaining !== null && remaining.length === 0) {
       await finishLogout();
-      toast.success("Ventes synchronisées.");
+      toast.success(t("shell.logout.synced"));
       return;
     }
     if (remaining !== null) setLogoutPending(remaining);
-    toast.info(
-      "Certaines ventes restent en attente (autre organisation, conflit ou réseau).",
-    );
+    toast.info(t("shell.logout.stillPending"));
   };
 
   if (isLoading || !user) return null;
@@ -822,10 +827,12 @@ export default function AppShellLayout({
             >
               <TenantLogo name={blockedName} logoUrl={null} />
               <span className="truncate text-sm font-semibold sm:text-base">
-                {blockedName ?? ORGANIZATION_NAME_FALLBACK}
+                {blockedName ?? t("shell.myShop")}
               </span>
             </div>
             <OnlineStatusIndicator />
+            {/* 1-16G : langue puis thème. */}
+            <LanguageSwitcher />
             <ThemeToggle />
           </div>
         </header>
@@ -914,14 +921,14 @@ export default function AppShellLayout({
                     {brandLoading ? (
                       <span
                         className="h-4 w-28 max-w-full animate-pulse rounded bg-muted"
-                        aria-label="Chargement"
+                        aria-label={t("shell.loading")}
                       />
                     ) : (
                       <span
                         className="truncate text-sm font-semibold sm:text-base"
                         data-testid="tenant-name"
                       >
-                        {organizationName ?? ORGANIZATION_NAME_FALLBACK}
+                        {organizationName ?? t("shell.myShop")}
                       </span>
                     )}
                     <span
@@ -939,13 +946,16 @@ export default function AppShellLayout({
                   <button
                     type="button"
                     onClick={() => setConverterOpen(true)}
-                    title="Convertisseur EUR ↔ CFA"
+                    title={t("shell.converter")}
+                    aria-label={t("shell.converter")}
                     className="hidden rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground sm:inline-flex"
                   >
                     <ArrowLeftRightIcon className="h-4 w-4" />
                   </button>
                   {/* 1-16F : thème clair/sombre, avant la cloche (qui reste
-                      immédiatement avant le nom). */}
+                      immédiatement avant le nom). 1-16G : langue juste
+                      avant le thème. */}
+                  <LanguageSwitcher />
                   <ThemeToggle />
                   {/* 1-16A.1 : cloche du centre, juste avant le nom ; session
                       applicative avec contexte courant uniquement. */}
@@ -962,7 +972,7 @@ export default function AppShellLayout({
                     title={userFullName ?? undefined}
                     data-testid="user-first-name"
                   >
-                    {firstNameOf(user.name)}
+                    {firstNameOf(user.name) ?? t("shell.myAccount")}
                     {userFullName &&
                       userFullName !== firstNameOf(user.name) && (
                         <span className="sr-only"> ({userFullName})</span>
@@ -971,7 +981,7 @@ export default function AppShellLayout({
                   <button
                     type="button"
                     onClick={handleLogout}
-                    aria-label="Se déconnecter"
+                    aria-label={t("shell.logout.button")}
                     className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
                   >
                     <LogOutIcon className="h-4 w-4" />
@@ -997,13 +1007,13 @@ export default function AppShellLayout({
                       }`}
                     >
                       <item.icon className="h-3.5 w-3.5" />
-                      {item.label}
+                      {t(`shell.nav.${item.key}`)}
                       {item.href === "/app/sales" && <PendingSalesNavBadge />}
                     </ShellNavLink>
                   ))}
                   {navOffline && (
                     <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                      Autres pages : {OFFLINE_UNAVAILABLE_LABEL.toLowerCase()}
+                      {t("shell.otherPagesOffline")}
                     </span>
                   )}
                 </div>
@@ -1016,7 +1026,7 @@ export default function AppShellLayout({
                 role="status"
                 className="mx-auto w-full max-w-4xl px-4 pt-3 text-sm text-muted-foreground sm:px-6"
               >
-                {OFFLINE_MAIN_MESSAGE}
+                {t("shell.offlineMessage")}
               </p>
             )}
             {brandingError && (
@@ -1060,14 +1070,14 @@ export default function AppShellLayout({
               {statusUnavailable ? (
                 <div className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
                   <p role="alert" className="text-sm">
-                    Vérification momentanément indisponible.
+                    {ts("manager.checkUnavailable")}
                   </p>
                   <button
                     type="button"
                     onClick={refreshShell}
                     className="inline-flex h-11 items-center justify-center rounded-md border px-4 text-sm font-medium hover:bg-muted"
                   >
-                    Réessayer
+                    {t("actions.retry")}
                   </button>
                   <PendingSalesIfAny />
                 </div>
@@ -1076,7 +1086,7 @@ export default function AppShellLayout({
                   role="status"
                   className="mx-auto mt-10 text-sm text-muted-foreground"
                 >
-                  Chargement…
+                  {t("shell.loading")}
                 </p>
               ) : accessRefused ? (
                 <div
@@ -1084,30 +1094,28 @@ export default function AppShellLayout({
                   className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4 text-center"
                 >
                   <p role="alert" className="text-sm text-muted-foreground">
-                    Ton accès à cette organisation n&apos;est plus actif.
-                    Contacte un administrateur ou déconnecte-toi.
+                    {t("shell.accessRefused")}
                   </p>
                   <button
                     type="button"
                     onClick={handleLogout}
                     className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted"
                   >
-                    Se déconnecter
+                    {t("shell.logout.button")}
                   </button>
                   <PendingSalesIfAny />
                 </div>
               ) : noActiveOrganization ? (
                 <div className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
                   <p className="text-sm text-muted-foreground">
-                    Aucune organisation active. Contacte un administrateur ou
-                    déconnecte-toi.
+                    {t("shell.noOrganization")}
                   </p>
                   <button
                     type="button"
                     onClick={handleLogout}
                     className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted"
                   >
-                    Se déconnecter
+                    {t("shell.logout.button")}
                   </button>
                   <PendingSalesIfAny />
                 </div>
@@ -1119,7 +1127,7 @@ export default function AppShellLayout({
             <nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
               {navOffline && (
                 <p className="border-b px-4 py-0.5 text-center text-[11px] text-muted-foreground">
-                  Autres pages : {OFFLINE_UNAVAILABLE_LABEL.toLowerCase()}
+                  {t("shell.otherPagesOffline")}
                 </p>
               )}
               <div className="flex h-16 items-stretch">
@@ -1149,7 +1157,7 @@ export default function AppShellLayout({
                         </span>
                       )}
                     </span>
-                    {item.label}
+                    {t(`shell.nav.${item.key}`)}
                   </ShellNavLink>
                 ))}
                 {mobileCompact ? (
@@ -1159,7 +1167,7 @@ export default function AppShellLayout({
                     className="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs text-muted-foreground"
                   >
                     <MoreHorizontalIcon className="h-5 w-5" />
-                    Plus
+                    {t("shell.more")}
                   </button>
                 ) : (
                   <button
@@ -1168,7 +1176,7 @@ export default function AppShellLayout({
                     className="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs text-muted-foreground"
                   >
                     <LogOutIcon className="h-5 w-5" />
-                    Quitter
+                    {t("shell.quit")}
                   </button>
                 )}
               </div>
@@ -1181,7 +1189,7 @@ export default function AppShellLayout({
             {/* Portail hors de la racine du shell : jetons ré-appliqués. */}
             <DialogContent data-tenant-shell="" style={accentStyle}>
               <DialogHeader>
-                <DialogTitle>Plus</DialogTitle>
+                <DialogTitle>{t("shell.more")}</DialogTitle>
               </DialogHeader>
               <div className="flex flex-col gap-1">
                 {mobileOverflow.map((item) => (
@@ -1198,7 +1206,7 @@ export default function AppShellLayout({
                     }`}
                   >
                     <item.icon className="h-4 w-4" />
-                    {item.label}
+                    {t(`shell.nav.${item.key}`)}
                     {item.href === "/app/sales" && <PendingSalesNavBadge />}
                   </ShellNavLink>
                 ))}
@@ -1211,7 +1219,7 @@ export default function AppShellLayout({
                   className="flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-muted"
                 >
                   <ArrowLeftRightIcon className="h-4 w-4" />
-                  Convertisseur EUR ↔ CFA
+                  {t("shell.converter")}
                 </button>
                 <button
                   type="button"
@@ -1219,7 +1227,7 @@ export default function AppShellLayout({
                   className="flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-destructive hover:bg-muted"
                 >
                   <LogOutIcon className="h-4 w-4" />
-                  Se déconnecter
+                  {t("shell.logout.button")}
                 </button>
               </div>
             </DialogContent>

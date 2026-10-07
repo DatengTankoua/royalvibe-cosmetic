@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
 import { UsersService } from '../../users/users.service';
 import { UserRole } from '../../users/schemas/user.schema';
+import { isAppLocale, type AppLocale } from '../../common/i18n/locale';
 import {
   EMAIL_NOT_VERIFIED,
   EMAIL_NOT_VERIFIED_MESSAGE,
@@ -37,6 +38,8 @@ export interface AuthenticatedPrincipal {
   email: string;
   role: UserRole;
   organizationId: string;
+  /** 1-16G : langue préférée du compte (absente : comptes antérieurs). */
+  locale?: AppLocale;
   /**
    * 1-13B : version de session VALIDÉE de ce JWT (claim `ver`, égal à la
    * base au moment de la validation). Sert à signer un JWT dérivé (switch)
@@ -125,6 +128,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       email: user.email,
       role: user.role,
       organizationId: payload.orgId,
+      ...(isAppLocale(user.locale) ? { locale: user.locale } : {}),
       sessionVersion: currentSessionVersion(user),
       accessScope,
     };

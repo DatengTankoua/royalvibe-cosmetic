@@ -1,9 +1,8 @@
 // 1-12A — Formatage d'AFFICHAGE uniquement (shell /app) : les valeurs
 // stockées (utilisateur, organisation) ne sont jamais modifiées ; le nom
 // complet reste disponible via `title`/texte accessible côté composant.
-
-export const USER_NAME_FALLBACK = "Mon compte";
-export const ORGANIZATION_NAME_FALLBACK = "Mon commerce";
+// 1-16G : les libellés de repli (« Mon compte », « Mon commerce ») sont
+// traduits par l'appelant (`common` : `shell.myAccount`, `shell.myShop`).
 
 function words(value: unknown): string[] {
   if (typeof value !== "string") return [];
@@ -13,9 +12,9 @@ function words(value: unknown): string[] {
     .filter((w) => w.length > 0);
 }
 
-/** Premier segment non vide après trim, sinon un libellé neutre. */
-export function firstNameOf(fullName: unknown): string {
-  return words(fullName)[0] ?? USER_NAME_FALLBACK;
+/** Premier segment non vide après trim, sinon `null` (libellé neutre). */
+export function firstNameOf(fullName: unknown): string | null {
+  return words(fullName)[0] ?? null;
 }
 
 /** Nom complet nettoyé des espaces superflus (pour `title`). */

@@ -199,6 +199,66 @@ const PUSH_IDENTITY_KEY = "current";
 const PUSH_NAVIGATE_MESSAGE = "stockmaster:push-navigate";
 const PUSH_ICON = "/icons/icon-192.png";
 
+// 1-16G — Langue de l'appareil (`stockmaster-preferences`, écrite par la
+// page) pour l'unique texte propre au service worker. Les messages push
+// eux-mêmes arrivent déjà dans la langue du destinataire (serveur).
+// Lecture sans création, repli français.
+const DEVICE_LOCALE_DB = "stockmaster-preferences";
+const PUSH_DISABLED_BODY = {
+  fr: "Notifications désactivées sur cet appareil.",
+  en: "Notifications turned off on this device.",
+};
+
+function readDeviceLocale() {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => {
+      if (!settled) {
+        settled = true;
+        resolve(value === "en" ? "en" : "fr");
+      }
+    };
+    setTimeout(() => done("fr"), 1000);
+    let request;
+    try {
+      request = indexedDB.open(DEVICE_LOCALE_DB);
+    } catch {
+      done("fr");
+      return;
+    }
+    request.onupgradeneeded = () => {
+      request.transaction.abort();
+    };
+    request.onerror = () => done("fr");
+    request.onblocked = () => done("fr");
+    request.onsuccess = () => {
+      const db = request.result;
+      try {
+        if (!db.objectStoreNames.contains("preferences")) {
+          db.close();
+          done("fr");
+          return;
+        }
+        const get = db
+          .transaction("preferences", "readonly")
+          .objectStore("preferences")
+          .get("locale");
+        get.onsuccess = () => {
+          db.close();
+          done(get.result);
+        };
+        get.onerror = () => {
+          db.close();
+          done("fr");
+        };
+      } catch {
+        db.close();
+        done("fr");
+      }
+    };
+  });
+}
+
 // Lecture SANS création : si la base n'existe pas, la mise à niveau est
 // annulée (aucune base vide n'est laissée, le schéma de la page reste seul
 // maître de sa création).
@@ -308,8 +368,9 @@ async function handlePush(event) {
     }
     // Les navigateurs exigent un affichage pour chaque message reçu : texte
     // neutre, sans aucune donnée métier.
+    const locale = await readDeviceLocale();
     return self.registration.showNotification("Stock Master", {
-      body: "Notifications désactivées sur cet appareil.",
+      body: PUSH_DISABLED_BODY[locale],
       tag: "stockmaster-push-disabled",
       icon: PUSH_ICON,
       data: { url: "/app" },

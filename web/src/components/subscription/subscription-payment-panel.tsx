@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCwIcon, SmartphoneIcon } from "lucide-react";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   SUBSCRIPTION_OFFERS,
-  formatFcfa,
-  termLabel,
+  knownTerm,
   type SubscriptionTerm,
 } from "@/lib/subscription-offers";
 import {
@@ -35,6 +36,7 @@ import {
 import { createResponseOrder } from "@/lib/refresh-coordinator";
 import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
 import { OfferConditions, OfferSelector } from "./subscription-offers";
+import { rich } from "@/i18n/rich";
 
 // 1-14D.2C — Paiement Mobile Money de l'abonnement par le PROPRIÉTAIRE réel.
 //
@@ -95,83 +97,39 @@ function mergeHistory(
   );
 }
 
-const STATUS_COPY: Record<
-  SubscriptionPaymentStatus,
-  { label: string; detail: string }
-> = {
-  initiating: {
-    label: "Demande en cours",
-    detail:
-      "La demande de paiement est en cours de transmission à l'opérateur.",
-  },
-  pending: {
-    label: "En attente de paiement",
-    detail:
-      "Validez le paiement sur le téléphone du payeur, puis appuyez sur « Vérifier le paiement ».",
-  },
-  uncertain: {
-    label: "Résultat à vérifier",
-    detail:
-      "La transmission n'a pas pu être confirmée. Vérifiez ce paiement : aucune nouvelle demande ne sera envoyée.",
-  },
-  review: {
-    label: "Vérification nécessaire",
-    detail:
-      "Ce paiement doit être vérifié par notre équipe. Aucune nouvelle demande n'est possible en attendant.",
-  },
-  failed: {
-    label: "Échec confirmé",
-    detail: "L'opérateur a confirmé que ce paiement n'a pas abouti.",
-  },
-  succeeded: {
-    label: "Paiement confirmé",
-    detail: "Le paiement est confirmé et l'abonnement a été prolongé.",
-  },
-};
+// 1-16G : libellés dans `subscription` (`payment.status.*`) ; les messages
+// gardés en état sont des CLÉS, traduites à l'affichage (un changement de
+// langue les suit sans rien relancer).
+type MessageKey =
+  | `payment.errors.${PaymentErrorKind["kind"] | "unauthorizedRestricted"}`
+  | `payment.messages.${
+      | "offlineCreate"
+      | "termRequired"
+      | "phoneRequired"
+      | "replayed"
+      | "sent"
+      | "confirmed"
+      | "offlineVerify"}`;
 
-type Message = { tone: "info" | "error" | "success"; text: string };
-
-function formatDate(iso: string | null): string | null {
-  if (!iso) return null;
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime())
-    ? null
-    : new Intl.DateTimeFormat("fr-FR", {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }).format(date);
-}
+type Message =
+  | { tone: "info" | "error" | "success"; key: MessageKey }
+  | {
+      tone: "info";
+      key: "payment.messages.statusChecked" | "payment.messages.statusNow";
+      status: SubscriptionPaymentStatus;
+    };
 
 /** Message utile, sans faux succès ni détail technique. */
-function messageFor(error: PaymentErrorKind, restricted: boolean): string {
+function messageFor(error: PaymentErrorKind, restricted: boolean): MessageKey {
   switch (error.kind) {
-    case "no-response":
     case "unexpected":
-      return "Réponse non reçue. Rien n'est perdu : vérifiez votre connexion puis réessayez.";
+      return "payment.errors.no-response";
     case "unauthorized":
       return restricted
-        ? "Votre session a expiré. Reconnectez-vous : votre paiement sera retrouvé."
-        : "Votre session a expiré. Reconnectez-vous.";
-    case "forbidden":
-      return "Accès refusé pour ce commerce.";
-    case "already-pending":
-      return "Un paiement est déjà en cours pour ce commerce.";
-    case "operation-conflict":
-      return "Cette demande a déjà été envoyée avec d'autres informations. Saisissez exactement le même numéro.";
-    case "invalid-phone":
-      return "Numéro Mobile Money camerounais invalide (ex. 6XX XX XX XX).";
-    case "invalid-request":
-      return "Demande invalide. Vérifiez les informations saisies.";
-    case "not-found":
-      return "Paiement introuvable pour ce commerce.";
-    case "rate-limited":
-      return "Trop de demandes. Patientez avant de réessayer.";
-    case "service-unavailable":
-      return "Le paiement en ligne est indisponible pour le moment. Réessayez plus tard.";
-    case "status-unavailable":
-      return "Impossible de vérifier ce paiement pour le moment. Réessayez plus tard.";
-    case "confirmation-pending":
-      return "Paiement en cours de confirmation. Vérifiez de nouveau dans un instant.";
+        ? "payment.errors.unauthorizedRestricted"
+        : "payment.errors.unauthorized";
+    default:
+      return `payment.errors.${error.kind}`;
   }
 }
 
@@ -187,13 +145,28 @@ export function SubscriptionPaymentPanel({
   /** Reprise commerciale existante (contexte + échange `complete`). */
   onAccessRestore: () => void;
 }) {
+  const { t } = useT("subscription");
+  const format = useFormat();
+  const formatDate = (iso: string | null): string | null => {
+    if (!iso) return null;
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime())
+      ? null
+      : format.dateWith(date, { dateStyle: "medium", timeStyle: "short" });
+  };
+  const termText = (value: string | null | undefined) => {
+    const term = knownTerm(value);
+    return term ? t(`offers.term.${term}`) : "—";
+  };
   const restricted = token !== undefined;
   const [loading, setLoading] = useState(true);
   const [current, setCurrent] = useState<ApiSubscriptionPayment | null>(null);
   const [intent, setIntent] = useState<PaymentIntent | null>(null);
   const [history, setHistory] = useState<ApiSubscriptionPayment[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<
+    "historyUnavailable" | "historyMore" | null
+  >(null);
   const [busy, setBusy] = useState<
     "create" | "refresh" | "read" | "history" | null
   >(null);
@@ -249,7 +222,7 @@ export function SubscriptionPaymentPanel({
       if (error.kind === "rate-limited") {
         setRetryAt(Date.now() + (error.retryAfterMs ?? 60_000));
       }
-      setMessage({ tone: "error", text: messageFor(error, restricted) });
+      setMessage({ tone: "error", key: messageFor(error, restricted) });
     },
     [restricted],
   );
@@ -308,7 +281,7 @@ export function SubscriptionPaymentPanel({
         if (cancelled) return;
         // Historique indisponible : la reprise continue avec le marqueur
         // (paiement connu relu, ou intention sans réponse proposée au rejeu).
-        setHistoryError("Historique des paiements indisponible.");
+        setHistoryError("historyUnavailable");
         applyError(classifyPaymentError(error));
       }
       if (cancelled) return;
@@ -448,21 +421,15 @@ export function SubscriptionPaymentPanel({
     event.preventDefault();
     if (inFlight.current || blocking || rateLimited) return;
     if (!online) {
-      setMessage({
-        tone: "error",
-        text: "Hors connexion : la création d'un paiement nécessite Internet.",
-      });
+      setMessage({ tone: "error", key: "payment.messages.offlineCreate" });
       return;
     }
     if (!selectedTerm) {
-      setMessage({ tone: "error", text: "Choisissez une durée." });
+      setMessage({ tone: "error", key: "payment.messages.termRequired" });
       return;
     }
     if (phone.trim().length === 0) {
-      setMessage({
-        tone: "error",
-        text: "Saisissez le numéro Mobile Money du payeur.",
-      });
+      setMessage({ tone: "error", key: "payment.messages.phoneRequired" });
       return;
     }
     inFlight.current = true;
@@ -498,9 +465,9 @@ export function SubscriptionPaymentPanel({
       track(created, active.clientOperationId);
       setMessage({
         tone: "info",
-        text: created.replayed
-          ? "Demande retrouvée : aucun nouveau paiement n'a été demandé."
-          : "Demande envoyée. L'abonnement sera actif une fois le paiement confirmé.",
+        key: created.replayed
+          ? "payment.messages.replayed"
+          : "payment.messages.sent",
       });
     } catch (error) {
       if (!mounted.current) return;
@@ -541,10 +508,7 @@ export function SubscriptionPaymentPanel({
   const verify = async () => {
     if (!current || inFlight.current || rateLimited) return;
     if (!online) {
-      setMessage({
-        tone: "error",
-        text: "Hors connexion : la vérification nécessite Internet.",
-      });
+      setMessage({ tone: "error", key: "payment.messages.offlineVerify" });
       return;
     }
     inFlight.current = true;
@@ -558,15 +522,13 @@ export function SubscriptionPaymentPanel({
       if (!mounted.current) return;
       track(updated, intent?.clientOperationId ?? null);
       if (updated.status === "succeeded") {
-        setMessage({
-          tone: "success",
-          text: "Paiement confirmé. Rétablissement de l'accès…",
-        });
+        setMessage({ tone: "success", key: "payment.messages.confirmed" });
         onAccessRestore();
       } else {
         setMessage({
           tone: "info",
-          text: `Statut vérifié : ${STATUS_COPY[updated.status].label.toLowerCase()}.`,
+          key: "payment.messages.statusChecked",
+          status: updated.status,
         });
       }
     } catch (error) {
@@ -600,7 +562,8 @@ export function SubscriptionPaymentPanel({
         track(fresh, intent?.clientOperationId ?? null);
         setMessage({
           tone: "info",
-          text: `Ce paiement est désormais : ${STATUS_COPY[fresh.status].label.toLowerCase()}.`,
+          key: "payment.messages.statusNow",
+          status: fresh.status,
         });
         return;
       }
@@ -639,7 +602,7 @@ export function SubscriptionPaymentPanel({
       setHistoryError(null);
     } catch (error) {
       if (!mounted.current) return;
-      setHistoryError("Impossible de charger plus de paiements.");
+      setHistoryError("historyMore");
       applyError(classifyPaymentError(error));
     } finally {
       inFlight.current = false;
@@ -650,12 +613,21 @@ export function SubscriptionPaymentPanel({
   if (loading) {
     return (
       <p role="status" className="text-sm text-muted-foreground">
-        Chargement des paiements…
+        {t("payment.loading")}
       </p>
     );
   }
 
-  const copy = current ? STATUS_COPY[current.status] : null;
+  const copy = current
+    ? {
+        label: t(`payment.status.${current.status}.label`),
+        detail: t(`payment.status.${current.status}.detail`),
+      }
+    : null;
+  const messageText = (m: Message) =>
+    "status" in m
+      ? t(m.key, { status: t(`payment.status.${m.status}.lower`) })
+      : t(m.key);
 
   return (
     <div className="space-y-6" data-testid="subscription-payment-panel">
@@ -665,8 +637,7 @@ export function SubscriptionPaymentPanel({
           className="rounded-lg bg-muted p-3 text-sm"
           data-testid="payment-offline"
         >
-          Hors connexion : la création et la vérification d&apos;un paiement
-          nécessitent Internet.
+          {t("payment.offline")}
         </p>
       )}
 
@@ -685,34 +656,42 @@ export function SubscriptionPaymentPanel({
           </div>
           <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
             <div>
-              <dt className="text-muted-foreground">Durée</dt>
-              <dd data-testid="payment-term">{termLabel(current.term)}</dd>
+              <dt className="text-muted-foreground">{t("payment.term")}</dt>
+              <dd data-testid="payment-term">{termText(current.term)}</dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">Montant total</dt>
+              <dt className="text-muted-foreground">
+                {t("payment.totalAmount")}
+              </dt>
               <dd className="font-semibold" data-testid="payment-amount">
-                {formatFcfa(current.amount)}
+                {format.fcfa(current.amount)}
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">Payeur</dt>
+              <dt className="text-muted-foreground">{t("payment.payer")}</dt>
               <dd data-testid="payment-phone">{current.payerPhoneMasked}</dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">Référence</dt>
+              <dt className="text-muted-foreground">
+                {t("payment.reference")}
+              </dt>
               <dd className="break-all font-mono text-xs leading-5">
                 {current.reference}
               </dd>
             </div>
             {formatDate(current.createdAt) && (
               <div>
-                <dt className="text-muted-foreground">Demandé le</dt>
+                <dt className="text-muted-foreground">
+                  {t("payment.requestedOn")}
+                </dt>
                 <dd>{formatDate(current.createdAt)}</dd>
               </div>
             )}
             {formatDate(current.confirmedAt) && (
               <div>
-                <dt className="text-muted-foreground">Confirmé le</dt>
+                <dt className="text-muted-foreground">
+                  {t("payment.confirmedOn")}
+                </dt>
                 <dd>{formatDate(current.confirmedAt)}</dd>
               </div>
             )}
@@ -720,8 +699,7 @@ export function SubscriptionPaymentPanel({
           {current.status === "pending" && (
             <p className="flex items-start gap-2 text-xs text-muted-foreground">
               <SmartphoneIcon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-              Le code secret Mobile Money se saisit uniquement sur le téléphone
-              du payeur. Stock Master ne le demande jamais.
+              {t("payment.pinNotice")}
             </p>
           )}
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -736,7 +714,9 @@ export function SubscriptionPaymentPanel({
                   className={`h-4 w-4 ${busy === "refresh" ? "animate-spin" : ""}`}
                   aria-hidden
                 />
-                {busy === "refresh" ? "Vérification…" : "Vérifier le paiement"}
+                {busy === "refresh"
+                  ? t("payment.checking")
+                  : t("payment.verify")}
               </Button>
             )}
             {current.status === "succeeded" && (
@@ -746,9 +726,7 @@ export function SubscriptionPaymentPanel({
                 disabled={busy !== null}
                 onClick={onAccessRestore}
               >
-                {restricted
-                  ? "Accéder à mon commerce"
-                  : "Vérifier mon abonnement"}
+                {restricted ? t("payment.openShop") : t("manager.verify")}
               </Button>
             )}
             {current.status === "failed" && (
@@ -758,7 +736,9 @@ export function SubscriptionPaymentPanel({
                 disabled={busy !== null || !online}
                 onClick={() => void startNewAttempt()}
               >
-                {busy === "read" ? "Vérification…" : "Nouvel essai"}
+                {busy === "read"
+                  ? t("payment.checking")
+                  : t("payment.newAttempt")}
               </Button>
             )}
           </div>
@@ -772,7 +752,7 @@ export function SubscriptionPaymentPanel({
           data-testid="payment-message"
           className={`text-sm ${message.tone === "error" ? "text-destructive" : ""}`}
         >
-          {message.text}
+          {messageText(message)}
         </p>
       )}
 
@@ -787,7 +767,7 @@ export function SubscriptionPaymentPanel({
             setMessage(null);
           }}
         >
-          Renouveler
+          {t("payment.renew")}
         </Button>
       )}
 
@@ -800,17 +780,16 @@ export function SubscriptionPaymentPanel({
           noValidate
         >
           <h3 id="subscription-payment-form-title" className="font-semibold">
-            Payer par Mobile Money
+            {t("payment.formTitle")}
           </h3>
           {lockedTerm ? (
             <p
               className="rounded-lg bg-muted p-3 text-sm"
               data-testid="payment-locked-intent"
             >
-              Une demande précédente n&apos;a pas reçu de réponse. Saisissez de
-              nouveau <strong>le même numéro</strong> pour la retrouver : aucun
-              second paiement ne sera demandé. Durée :{" "}
-              <strong>{termLabel(lockedTerm)}</strong>.
+              {rich(t("payment.lockedIntent", { term: termText(lockedTerm) }), {
+                b: (chunk) => <strong>{chunk}</strong>,
+              })}
             </p>
           ) : (
             <>
@@ -819,7 +798,7 @@ export function SubscriptionPaymentPanel({
             </>
           )}
           <div className="space-y-2">
-            <Label htmlFor="payer-phone">Numéro Mobile Money du payeur</Label>
+            <Label htmlFor="payer-phone">{t("payment.phoneLabel")}</Label>
             <Input
               id="payer-phone"
               name="payerPhone"
@@ -834,8 +813,7 @@ export function SubscriptionPaymentPanel({
               className="h-11"
             />
             <p id="payer-phone-help" className="text-xs text-muted-foreground">
-              MTN Mobile Money ou Orange Money (Cameroun). Le payeur validera
-              sur son téléphone ; aucun code secret n&apos;est demandé ici.
+              {t("payment.phoneHelp")}
             </p>
           </div>
           <div
@@ -846,12 +824,16 @@ export function SubscriptionPaymentPanel({
           >
             {offer ? (
               <p>
-                Montant total : <strong>{formatFcfa(offer.totalXaf)}</strong>{" "}
-                pour <strong>{offer.label}</strong>. L&apos;abonnement sera
-                prolongé une fois le paiement confirmé.
+                {rich(
+                  t("payment.summary", {
+                    amount: format.fcfa(offer.totalXaf),
+                    term: t(`offers.term.${offer.term}`),
+                  }),
+                  { b: (chunk) => <strong>{chunk}</strong> },
+                )}
               </p>
             ) : (
-              <p>Sélectionnez une durée pour voir le montant total.</p>
+              <p>{t("payment.summaryEmpty")}</p>
             )}
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -862,10 +844,12 @@ export function SubscriptionPaymentPanel({
               data-testid="payment-submit"
             >
               {busy === "create"
-                ? "Envoi…"
+                ? t("payment.sending")
                 : offer
-                  ? `Payer ${formatFcfa(offer.totalXaf)}`
-                  : "Payer"}
+                  ? t("payment.payAmount", {
+                      amount: format.fcfa(offer.totalXaf),
+                    })
+                  : t("payment.pay")}
             </Button>
             {!lockedTerm && (
               <Button
@@ -879,7 +863,7 @@ export function SubscriptionPaymentPanel({
                   setMessage(null);
                 }}
               >
-                Annuler
+                {t("payment.cancel")}
               </Button>
             )}
           </div>
@@ -893,7 +877,7 @@ export function SubscriptionPaymentPanel({
           data-testid="payment-message"
           className={`text-sm ${message.tone === "error" ? "text-destructive" : ""}`}
         >
-          {message.text}
+          {messageText(message)}
         </p>
       )}
 
@@ -903,15 +887,17 @@ export function SubscriptionPaymentPanel({
         data-testid="payment-history"
       >
         <h3 id="payment-history-title" className="font-semibold">
-          Historique des paiements
+          {t("payment.historyTitle")}
         </h3>
         {historyError && (
           <p role="alert" className="text-sm text-destructive">
-            {historyError}
+            {t(`payment.${historyError}`)}
           </p>
         )}
         {history.length === 0 && !historyError ? (
-          <p className="text-sm text-muted-foreground">Aucun paiement.</p>
+          <p className="text-sm text-muted-foreground">
+            {t("payment.historyEmpty")}
+          </p>
         ) : (
           <ul className="divide-y rounded-xl border">
             {history.map((payment) => (
@@ -923,7 +909,7 @@ export function SubscriptionPaymentPanel({
               >
                 <span className="min-w-0">
                   <span className="font-medium">
-                    {termLabel(payment.term)} · {formatFcfa(payment.amount)}
+                    {termText(payment.term)} · {format.fcfa(payment.amount)}
                   </span>
                   <span className="block break-all font-mono text-xs text-muted-foreground">
                     {payment.reference}
@@ -931,7 +917,7 @@ export function SubscriptionPaymentPanel({
                 </span>
                 <span className="text-xs sm:text-right">
                   <span className="block font-medium">
-                    {STATUS_COPY[payment.status].label}
+                    {t(`payment.status.${payment.status}.label`)}
                   </span>
                   <span className="text-muted-foreground">
                     {formatDate(payment.confirmedAt ?? payment.createdAt)}
@@ -949,7 +935,9 @@ export function SubscriptionPaymentPanel({
             disabled={busy !== null}
             onClick={() => void loadMore()}
           >
-            {busy === "history" ? "Chargement…" : "Afficher plus"}
+            {busy === "history"
+              ? t("payment.loadingMore")
+              : t("payment.showMore")}
           </Button>
         )}
       </section>

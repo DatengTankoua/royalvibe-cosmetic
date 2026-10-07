@@ -1,3 +1,4 @@
+import { recipientLocale, type AppLocale } from '../common/i18n/locale';
 import {
   BadRequestException,
   Inject,
@@ -59,6 +60,7 @@ type IssuanceClaim =
       userId: string;
       email: string;
       name: string;
+      locale: AppLocale;
       rawToken: string;
       idempotencyKey: string;
     };
@@ -259,6 +261,8 @@ export class EmailVerificationService {
       userId,
       email: user.email,
       name: user.name,
+      // 1-16G : langue du destinataire (repli français).
+      locale: recipientLocale(user.locale),
       rawToken,
       idempotencyKey: `email-verification-${userId}-${now.getTime()}`,
     };
@@ -276,6 +280,7 @@ export class EmailVerificationService {
     const content = buildVerificationEmail(
       claim.name,
       buildEmailVerificationUrl(origin, claim.rawToken),
+      claim.locale,
     );
     try {
       await this.sender.send({

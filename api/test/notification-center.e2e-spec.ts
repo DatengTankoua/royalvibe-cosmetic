@@ -479,6 +479,21 @@ describe('Centre de notifications (e2e 1-16A.1)', () => {
       link: '/app/sales',
       readAt: null,
     });
+    // 1-16G : même notification lue dans la langue de l'interface ; donnée
+    // enregistrée unique (identifiant, lien et état de lecture identiques).
+    const [english, french] = await Promise.all(
+      ['en-GB,en;q=0.9', 'fr-FR'].map((language) =>
+        request(server())
+          .get('/notifications?status=all&limit=50')
+          .set(auth(a.token))
+          .set('Accept-Language', language),
+      ),
+    );
+    expect(english.body.items[0]).toEqual({
+      ...item,
+      body: 'New sale recorded.',
+    });
+    expect(french.body.items[0]).toEqual(item);
     // La liste et le compteur ne marquent rien comme lu.
     expect(await count(a.token)).toBe(1);
 

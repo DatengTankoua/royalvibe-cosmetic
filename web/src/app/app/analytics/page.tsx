@@ -16,7 +16,7 @@ import { SALE_INVALIDATION_EVENTS } from "@/hooks/use-sale-invalidation";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
 import { MonthlyHistoryDownload } from "@/components/analytics/monthly-history-download";
 import { canDownloadMonthlyHistory } from "@/lib/monthly-history";
-import { analyticsLabels } from "@/lib/analytics-labels";
+import { useAnalytics } from "@/components/analytics/use-analytics";
 import {
   FOCUS,
   SalesSection,
@@ -37,23 +37,16 @@ const ANALYTICS_SIGNALS = [
   "product:purged",
 ] as const;
 
-const L = analyticsLabels();
 const DETAILS_SUMMARY = `${FOCUS} flex min-h-11 cursor-pointer items-center justify-between gap-2 rounded-2xl px-4 py-3 font-semibold`;
-
-// "2025-03" → "mars 2025"
-function formatMonthLabel(period: string): string {
-  const [year, month] = period.split("-");
-  return new Date(Number(year), Number(month) - 1).toLocaleDateString("fr-FR", {
-    month: "long",
-    year: "numeric",
-  });
-}
 
 // /app/analytics (1-9D) — 1-16E : page orientée décisions, dans l'ordre
 // « À surveiller », « Vos ventes », « Ce qui se vend » ; détails repliés.
 // `analytics.read` gate TOUTES les routes : aucun appel sans cette permission.
 // Les droits financiers sont revalidés par le serveur (champs absents).
 export default function AnalyticsPage() {
+  // 1-16G : textes `analytics`, mois et heures selon la langue.
+  const a = useAnalytics();
+  const { t } = a;
   const { authContext } = useOrganizationShell();
   const canRead = hasPermission(authContext, "analytics.read");
   const canAdjustStock = hasPermission(authContext, "stock.adjust");
@@ -137,8 +130,8 @@ export default function AnalyticsPage() {
   if (authContext && !canRead) {
     return (
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 px-4 py-10 sm:px-6">
-        <h1 className="text-2xl font-semibold">{L.title}</h1>
-        <p className="text-sm text-muted-foreground">{L.noPermission}</p>
+        <h1 className="text-2xl font-semibold">{t("title")}</h1>
+        <p className="text-sm text-muted-foreground">{t("noPermission")}</p>
       </div>
     );
   }
@@ -151,23 +144,18 @@ export default function AnalyticsPage() {
     .filter((m) => !current || m <= current)
     .sort()
     .reverse();
-  const generatedTime = insights
-    ? new Date(insights.generatedAt).toLocaleTimeString("fr-FR", {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : null;
+  const generatedTime = insights ? a.formatTime(insights.generatedAt) : null;
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-6 sm:px-6 sm:py-10">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold">{L.title}</h1>
-          <p className="text-sm text-muted-foreground">{L.subtitle}</p>
+          <h1 className="text-2xl font-semibold">{t("title")}</h1>
+          <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
         </div>
         <div className="flex flex-col gap-1">
           <label htmlFor={selectId} className="text-xs text-muted-foreground">
-            {L.periodLabel}
+            {t("periodLabel")}
           </label>
           <select
             id={selectId}
@@ -179,8 +167,8 @@ export default function AnalyticsPage() {
             {options.map((m) => (
               <option key={m} value={m}>
                 {m === current
-                  ? L.currentMonthOption(formatMonthLabel(m))
-                  : formatMonthLabel(m)}
+                  ? t("currentMonthOption", { label: a.monthLabel(m) })
+                  : a.monthLabel(m)}
               </option>
             ))}
           </select>
@@ -191,16 +179,19 @@ export default function AnalyticsPage() {
         aria-live="polite"
         className="flex flex-col gap-1 text-xs text-muted-foreground"
       >
-        {generatedTime && <p>{L.freshness(generatedTime)}</p>}
+        {generatedTime && <p>{t("freshness", { time: generatedTime })}</p>}
         <p>
           {unfinalizedCount > 0
-            ? `${L.unsyncedPending(unfinalizedCount)} ${L.unsyncedNote}`
-            : L.unsyncedNote}
+            ? `${t("unsyncedPending", {
+                count: unfinalizedCount,
+                n: a.number(unfinalizedCount),
+              })} ${t("unsyncedNote")}`
+            : t("unsyncedNote")}
         </p>
       </div>
 
       {loading && !insights && (
-        <p className="text-sm text-muted-foreground">{L.loading}</p>
+        <p className="text-sm text-muted-foreground">{t("loading")}</p>
       )}
       {!loading && error && (
         <div role="alert" className="flex flex-wrap items-center gap-3">
@@ -210,7 +201,7 @@ export default function AnalyticsPage() {
             onClick={() => setRetryKey((k) => k + 1)}
             className={`${FOCUS} rounded text-sm text-(--tenant-accent-ink) underline underline-offset-2 hover:no-underline`}
           >
-            {L.retry}
+            {t("retry")}
           </button>
         </div>
       )}
@@ -236,7 +227,7 @@ export default function AnalyticsPage() {
             onToggle={(e) => setStockOpen(e.currentTarget.open)}
             className="rounded-2xl border bg-card"
           >
-            <summary className={DETAILS_SUMMARY}>{L.stock.title}</summary>
+            <summary className={DETAILS_SUMMARY}>{t("stock.title")}</summary>
             <div className="px-4 pb-4">
               <StockDetails insights={insights} rights={{ canAdjustStock }} />
             </div>
@@ -249,7 +240,10 @@ export default function AnalyticsPage() {
             className="rounded-2xl border bg-card"
           >
             <summary className={DETAILS_SUMMARY}>
-              {L.details.title} : {L.details.open}
+              {t("details.summary", {
+                title: t("details.title"),
+                open: t("details.open"),
+              })}
             </summary>
             <div className="px-4 pb-4">
               {detailsOpen && (

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ClockIcon } from "lucide-react";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
 import { fetchSales, getApiErrorMessage, type ApiSale } from "@/lib/api";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
 import {
@@ -10,19 +12,19 @@ import {
 } from "@/contexts/offline-sales-context";
 import { PendingSalesAnchor } from "@/components/sales/pending-sales-nav";
 import { hasPermission } from "@/lib/organization-permissions";
-import { fmtXof } from "@/lib/currency";
 import { Card, CardContent } from "@/components/ui/card";
 import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
 import { SALE_INVALIDATION_EVENTS } from "@/hooks/use-sale-invalidation";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
-
-const fmt = fmtXof;
 
 // /app/sales (1-9D, ex "/sales") : `GET /sales` exige `sales.view_all` OU
 // `sales.view_own` côté backend (403 sinon) — jamais d'appel si aucune des
 // deux permissions n'est accordée, même si le lien de nav reste visible
 // pour `sales.record` seul (enregistrement depuis la fiche produit).
 export default function SalesPage() {
+  const { t } = useT("sales");
+  const format = useFormat();
+  const fmt = format.fcfa;
   const { authContext } = useOrganizationShell();
   const canViewAll = hasPermission(authContext, "sales.view_all");
   const canViewOwn = hasPermission(authContext, "sales.view_own");
@@ -84,7 +86,7 @@ export default function SalesPage() {
     <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 sm:py-10">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-semibold">
-          {canViewAll ? "Toutes les ventes" : "Mes ventes"}
+          {canViewAll ? t("list.allTitle") : t("list.ownTitle")}
         </h1>
         {/* 1-11C.3 : accès permanent depuis la page ventes. */}
         <PendingSalesAnchor
@@ -93,7 +95,7 @@ export default function SalesPage() {
           className="inline-flex items-center gap-1.5 self-start rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-muted"
         >
           <ClockIcon className="h-3.5 w-3.5" aria-hidden />
-          Ventes en attente sur cet appareil
+          {t("pendingOnDevice")}
           {unfinalizedCount > 0 && (
             <span className="rounded-full bg-destructive px-1.5 text-[10px] font-semibold text-destructive-foreground">
               {unfinalizedCount}
@@ -103,19 +105,16 @@ export default function SalesPage() {
       </div>
 
       {!authContext || (isLoading && canView) ? (
-        <p className="text-sm text-muted-foreground">Chargement…</p>
+        <p className="text-sm text-muted-foreground">{t("loading")}</p>
       ) : null}
 
       {authContext && canRecordOnly && (
-        <p className="text-sm text-muted-foreground">
-          Tu peux enregistrer des ventes depuis la fiche d&apos;un produit. Tu
-          n&apos;as pas la permission de consulter la liste des ventes.
-        </p>
+        <p className="text-sm text-muted-foreground">{t("list.recordOnly")}</p>
       )}
 
       {authContext && !canView && !canRecordOnly && (
         <p className="text-sm text-muted-foreground">
-          Tu n&apos;as pas la permission de consulter les ventes.
+          {t("list.noPermission")}
         </p>
       )}
 
@@ -126,15 +125,13 @@ export default function SalesPage() {
             onClick={() => setRetryKey((k) => k + 1)}
             className="text-sm text-primary underline underline-offset-2 hover:no-underline"
           >
-            Réessayer
+            {t("actions.retry")}
           </button>
         </div>
       )}
 
       {canView && !isLoading && sales.length === 0 && !error && (
-        <p className="text-sm text-muted-foreground">
-          Aucune vente enregistrée.
-        </p>
+        <p className="text-sm text-muted-foreground">{t("list.empty")}</p>
       )}
 
       {canView && !isLoading && sales.length > 0 && (
@@ -166,7 +163,7 @@ export default function SalesPage() {
                     <p className="font-semibold">
                       {productName ?? (
                         <span className="italic text-muted-foreground">
-                          (nom non conservé)
+                          {t("list.nameNotKept")}
                         </span>
                       )}
                     </p>
@@ -174,21 +171,20 @@ export default function SalesPage() {
                       <p className="text-xs text-muted-foreground">
                         {productDeleted && (
                           <span className="mr-2 rounded bg-muted px-1.5 py-0.5 font-medium">
-                            Produit supprimé
+                            {t("list.productDeleted")}
                           </span>
                         )}
-                        {nameNotRecorded &&
-                          "nom non enregistré lors de la vente"}
-                        {renamedTo && `Désormais : ${renamedTo}`}
+                        {nameNotRecorded && t("list.nameNotRecorded")}
+                        {renamedTo && t("list.renamedTo", { name: renamedTo })}
                       </p>
                     )}
                     <p className="text-xs text-muted-foreground">
-                      Vendeur : {sellerName} ·{" "}
-                      {new Date(s.createdAt).toLocaleString("fr-FR")}
+                      {t("seller")} {sellerName} ·{" "}
+                      {format.dateTime(s.createdAt)}
                     </p>
                     {s.buyerName && (
                       <p className="text-xs text-muted-foreground">
-                        Acheteur : {s.buyerName}
+                        {t("buyer")} {s.buyerName}
                         {s.buyerContact ? ` — ${s.buyerContact}` : ""}
                       </p>
                     )}

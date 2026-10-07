@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fmtXof } from "@/lib/currency";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
 import {
   onOutboxChanged,
   readPartitionState,
@@ -22,6 +23,8 @@ export function LocalPendingSales({
   identity: { userId: string; organizationId: string } | null;
   token: string | null;
 }) {
+  const { t } = useT("subscription");
+  const format = useFormat();
   const [operations, setOperations] = useState<OutboxOperation[] | null>(null);
   const [unreadable, setUnreadable] = useState(false);
   const userId = identity?.userId;
@@ -56,8 +59,7 @@ export function LocalPendingSales({
   if (unreadable) {
     return (
       <p className="text-sm text-muted-foreground">
-        Ventes locales illisibles pour cette session : elles restent conservées
-        sur cet appareil.
+        {t("localSales.unreadable")}
       </p>
     );
   }
@@ -70,20 +72,18 @@ export function LocalPendingSales({
       data-testid="local-pending-sales"
     >
       <h2 id="local-pending-sales-title" className="text-sm font-semibold">
-        Ventes en attente sur cet appareil ({operations.length})
+        {t("localSales.title", { count: operations.length })}
       </h2>
-      <p className="text-sm text-muted-foreground">
-        Elles sont conservées et seront envoyées après le renouvellement.
-      </p>
+      <p className="text-sm text-muted-foreground">{t("localSales.text")}</p>
       <ul className="space-y-1 text-sm">
         {operations.map((op) => (
           <li key={op.clientOperationId} className="flex justify-between gap-2">
             <span className="min-w-0 truncate">
               {op.display.productName} — {op.payload.quantity} ×{" "}
-              {fmtXof(op.payload.salePrice)}
+              {format.fcfa(op.payload.salePrice)}
             </span>
             <span className="shrink-0 text-muted-foreground">
-              {new Date(op.createdAt).toLocaleDateString("fr-FR")}
+              {format.date(op.createdAt)}
             </span>
           </li>
         ))}

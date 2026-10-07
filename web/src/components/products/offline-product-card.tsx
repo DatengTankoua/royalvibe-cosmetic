@@ -1,3 +1,7 @@
+"use client";
+
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
 import {
   ImageOffIcon,
   BadgeCheckIcon,
@@ -11,22 +15,11 @@ import { productInfoItems } from "@/lib/product-info";
 import type { OfflineCatalogProduct } from "@/lib/offline-catalog-db";
 import { useIndicativeStock } from "@/contexts/offline-sales-context";
 
+// 1-16G : libellés dans `catalog` (`status.*`).
 const STATUS_CONFIG = {
-  in_stock: {
-    label: "En stock",
-    icon: BadgeCheckIcon,
-    variant: "default" as const,
-  },
-  low_stock: {
-    label: "Stock faible",
-    icon: AlertTriangleIcon,
-    variant: "secondary" as const,
-  },
-  out_of_stock: {
-    label: "Épuisé",
-    icon: XCircleIcon,
-    variant: "destructive" as const,
-  },
+  in_stock: { icon: BadgeCheckIcon, variant: "default" as const },
+  low_stock: { icon: AlertTriangleIcon, variant: "secondary" as const },
+  out_of_stock: { icon: XCircleIcon, variant: "destructive" as const },
 };
 
 // Carte produit hors ligne (1-11B) : uniquement les champs de l'allowlist
@@ -45,7 +38,10 @@ export function OfflineProductCard({
   snapshotUpdatedAt?: number;
   onSelect: () => void;
 }) {
-  const cfg = STATUS_CONFIG[product.status] ?? STATUS_CONFIG.in_stock;
+  const { t } = useT("catalog");
+  const { fcfa } = useFormat();
+  const status = STATUS_CONFIG[product.status] ? product.status : "in_stock";
+  const cfg = STATUS_CONFIG[status];
   const StatusIcon = cfg.icon;
   // 1-11C.3 : snapshot moins ventes locales non confirmées (≥ 0).
   const indicative = useIndicativeStock(
@@ -75,7 +71,7 @@ export function OfflineProductCard({
           </CardTitle>
           <Badge variant={cfg.variant} className="shrink-0 text-xs">
             <StatusIcon className="mr-1 h-3 w-3" />
-            {cfg.label}
+            {t(`status.${status}`)}
           </Badge>
         </div>
       </CardHeader>
@@ -83,7 +79,7 @@ export function OfflineProductCard({
         {/* 1-12H : informations standard uniquement (même source que la
             fiche en ligne). */}
         <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
-          {productInfoItems(product, indicative).map((item) => (
+          {productInfoItems(product, indicative, { t, fcfa }).map((item) => (
             <Fragment key={item.key}>
               <span className="text-muted-foreground">{item.label}</span>
               <span className="text-right font-medium">{item.value}</span>

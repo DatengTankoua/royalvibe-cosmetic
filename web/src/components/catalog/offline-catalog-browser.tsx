@@ -1,6 +1,8 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
 import {
   ArrowLeftIcon,
   FolderIcon,
@@ -30,12 +32,6 @@ import {
   type OfflineCatalogSnapshot,
 } from "@/lib/offline-catalog-db";
 
-const STATUS_LABEL = {
-  in_stock: "En stock",
-  low_stock: "Stock faible",
-  out_of_stock: "Épuisé",
-} as const;
-
 const STATUS_VARIANT = {
   in_stock: "default",
   low_stock: "secondary",
@@ -54,6 +50,7 @@ export function OfflineCatalogBrowser({
 }: {
   snapshot: OfflineCatalogSnapshot;
 }) {
+  const { t } = useT("catalog");
   const [stack, setStack] = useState<{ id: string; name: string }[]>([]);
   const [productId, setProductId] = useState<string | null>(null);
   const [saleProductId, setSaleProductId] = useState<string | null>(null);
@@ -106,7 +103,7 @@ export function OfflineCatalogBrowser({
           className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-sm hover:bg-muted"
         >
           <ArrowLeftIcon className="h-4 w-4" />
-          {stack.length > 1 ? stack[stack.length - 2].name : "Catalogue"}
+          {stack.length > 1 ? stack[stack.length - 2].name : t("root.title")}
         </button>
       )}
 
@@ -158,9 +155,7 @@ export function OfflineCatalogBrowser({
 
       {childSections.length === 0 && products.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          {scopeSynced
-            ? "Aucun élément."
-            : "Cette section n'est pas disponible sur cet appareil."}
+          {scopeSynced ? t("offline.empty") : t("offline.sectionUnavailable")}
         </p>
       )}
 
@@ -179,7 +174,7 @@ export function OfflineCatalogBrowser({
                   <ImageOffIcon className="h-6 w-6" aria-hidden />
                 </div>
                 <Badge variant={STATUS_VARIANT[openProduct.status]}>
-                  {STATUS_LABEL[openProduct.status]}
+                  {t(`status.${openProduct.status}`)}
                 </Badge>
               </div>
               <OfflineProductInfo
@@ -198,8 +193,7 @@ export function OfflineCatalogBrowser({
                 />
               )}
               <p className="text-xs text-muted-foreground">
-                Historique et analyses indisponibles hors connexion. Le stock
-                affiché peut ne plus être à jour.
+                {t("offline.productNote")}
               </p>
             </>
           )}
@@ -231,6 +225,8 @@ function OfflineProductInfo({
   product: OfflineCatalogProduct;
   loadedAt?: number;
 }) {
+  const { t } = useT("catalog");
+  const { fcfa } = useFormat();
   const indicative = useIndicativeStock(
     product._id,
     product.remainingQuantity,
@@ -238,7 +234,7 @@ function OfflineProductInfo({
   );
   return (
     <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
-      {productInfoItems(product, indicative).map((item) => (
+      {productInfoItems(product, indicative, { t, fcfa }).map((item) => (
         <Fragment key={item.key}>
           <span className="text-muted-foreground">{item.label}</span>
           <span className="text-right font-medium">{item.value}</span>
@@ -259,11 +255,12 @@ function OfflineSaleButton({
   loadedAt?: number;
   onClick: () => void;
 }) {
+  const { t } = useT("sales");
   const indicative = useIndicativeStock(productId, remaining, loadedAt);
   return (
     <Button size="sm" onClick={onClick} disabled={indicative.value === 0}>
       <ShoppingCartIcon className="mr-1 h-4 w-4" />
-      Enregistrer une vente
+      {t("form.record")}
     </Button>
   );
 }

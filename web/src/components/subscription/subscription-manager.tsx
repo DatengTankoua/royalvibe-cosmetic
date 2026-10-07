@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCwIcon } from "lucide-react";
+import { useT } from "next-i18next/client";
 import { Button } from "@/components/ui/button";
 import {
   fetchSubscription,
@@ -58,7 +59,10 @@ export function SubscriptionManager({
   const [subscription, setSubscription] = useState<ApiSubscription | null>(
     null,
   );
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const { t } = useT("subscription");
+  const [loadError, setLoadError] = useState<
+    "checkUnavailable" | "infoUnavailable" | null
+  >(null);
   const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
   // Portée des réponses : identité serveur + nature du jeton.
   const scope = `${identity?.userId ?? "-"}:${identity?.organizationId ?? "-"}:${token ? "limited" : "app"}`;
@@ -87,8 +91,8 @@ export function SubscriptionManager({
         setLoadError(
           isNetworkError(err) ||
             getApiErrorCode(err) === SUBSCRIPTION_STATUS_UNAVAILABLE
-            ? "Vérification momentanément indisponible."
-            : "Informations d'abonnement indisponibles.",
+            ? "checkUnavailable"
+            : "infoUnavailable",
         );
       }
     },
@@ -110,12 +114,12 @@ export function SubscriptionManager({
     <div className="space-y-6">
       {loadError && (
         <p role="alert" className="text-sm text-destructive">
-          {loadError}
+          {t(`manager.${loadError}`)}
         </p>
       )}
       {!subscription && !loadError && (
         <p role="status" className="text-sm text-muted-foreground">
-          Chargement de l&apos;abonnement…
+          {t("manager.loading")}
         </p>
       )}
       {subscription && (
@@ -137,7 +141,7 @@ export function SubscriptionManager({
             className={`h-4 w-4 ${verifying ? "animate-spin" : ""}`}
             aria-hidden
           />
-          {verifying ? "Vérification…" : "Vérifier mon abonnement"}
+          {verifying ? t("payment.checking") : t("manager.verify")}
         </Button>
       </div>
       {verifyMessage && (
@@ -152,7 +156,7 @@ export function SubscriptionManager({
         id="subscription-renewal"
       >
         <h3 id="subscription-renewal-title" className="text-base font-semibold">
-          Renouvellement
+          {t("manager.renewal")}
         </h3>
         {identity ? (
           // Remonté à chaque changement d'identité ou de session : aucune
@@ -165,8 +169,7 @@ export function SubscriptionManager({
           />
         ) : (
           <p className="text-sm text-muted-foreground">
-            Paiement momentanément indisponible. Utilisez « Vérifier mon
-            abonnement ».
+            {t("manager.paymentUnavailable")}
           </p>
         )}
       </section>

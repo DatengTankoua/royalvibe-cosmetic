@@ -320,7 +320,8 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
         409,
         'LEGAL_VERSION_OUTDATED',
       ],
-      [{ ...valid, locale: 'en' }, 400, 'LEGAL_LOCALE_UNAVAILABLE'],
+      // 1-16G : l'anglais existe ; une langue sans document est refusée.
+      [{ ...valid, locale: 'de' }, 400, 'LEGAL_LOCALE_UNAVAILABLE'],
       [
         {
           ...valid,
@@ -430,6 +431,148 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
       .send(registerBody(ownerEmail));
     expect(res.status).toBe(400);
     expect(await counts()).toEqual(before);
+  });
+
+  // ─── Inscription en anglais (1-16G) ─────────────────────────────────────
+
+  it('1-16G — inscription en anglais : preuve des textes anglais, archives françaises intactes, préférence et e-mail en anglais', async () => {
+    const frVersionsBefore = await versionModel
+      .find({ _id: { $regex: '/fr$' } })
+      .sort({ _id: 1 })
+      .lean();
+    expect(frVersionsBefore.length).toBeGreaterThanOrEqual(3);
+    const address = email('owner-en');
+    const valid = legalAcceptanceFor(LegalAcceptanceContext.OWNER_REGISTRATION);
+    const res = await http()
+      .post('/auth/register')
+      .set('Accept-Language', 'en')
+      .send(
+        registerBody(address, {
+          legalAcceptance: { ...valid, locale: 'en' },
+        }),
+      );
+    expect(res.status).toBe(201);
+    const userId = res.body.user._id as string;
+    const organizationId = res.body.organization._id as string;
+
+    const [proof] = await acceptanceModel.find({ userId }).lean();
+    expect(proof.locale).toBe('en');
+    const english = (id: string) => realArchive.current(id, 'en')!;
+    const asProof = (d: ResolvedLegalDocument) => ({
+      documentId: d.documentId,
+      version: d.version,
+      locale: 'en',
+      sha256: d.sha256,
+      archiveId: `${d.documentId}@${d.version}/en`,
+    });
+    expect(proof.acceptedDocuments).toEqual([
+      asProof(english(TERMS_OF_USE)),
+      asProof(english(SUBSCRIPTION_TERMS)),
+    ]);
+    expect(proof.presentedNotices).toEqual([asProof(english(PRIVACY_NOTICE))]);
+    for (const id of [TERMS_OF_USE, SUBSCRIPTION_TERMS, PRIVACY_NOTICE]) {
+      const d = english(id);
+      // Même version que le texte français : seule la langue diffère.
+      expect(d.version).toBe(current(id).version);
+      const stored = await versionModel
+        .findById(`${id}@${d.version}/en`)
+        .lean();
+      expect(stored?.text).toBe(
+        readFileSync(join(LEGAL_ARCHIVE_DIR, d.file), 'utf8'),
+      );
+      expect(sha256Hex(stored!.text)).toBe(d.sha256);
+    }
+    // Textes français déjà archivés : ni modifiés ni remplacés.
+    expect(
+      await versionModel
+        .find({ _id: { $regex: '/fr$' } })
+        .sort({ _id: 1 })
+        .lean(),
+    ).toEqual(frVersionsBefore);
+
+    // Préférence du compte : langue des envois (e-mail de confirmation).
+    expect((await userModel.findById(userId).lean())!.locale).toBe('en');
+    const [mail] = sender.sentTo(address);
+    expect(mail.subject).toBe('Confirm your email address – Stock Master');
+
+    const token = await tokenFor(address, organizationId);
+    const me = await http()
+      .get('/auth/me')
+      .set('Authorization', `Bearer ${token}`);
+    expect(me.body.locale).toBe('en');
+  });
+
+  it('1-16G — PUT /auth/me/locale : seule la préférence change, valeur contrôlée, compte authentifié', async () => {
+    const before = (await userModel.findOne({ email: ownerEmail }).lean())!;
+    // Inscrit avec les textes français : préférence initiale française.
+    expect(before.locale).toBe('fr');
+    const put = (body: object, token?: string) => {
+      const req = http().put('/auth/me/locale');
+      if (token) req.set('Authorization', `Bearer ${token}`);
+      return req.send(body);
+    };
+    expect((await put({ locale: 'en' })).status).toBe(401);
+    expect((await put({ locale: 'de' }, ownerToken)).status).toBe(400);
+    expect(
+      (await put({ locale: 'en', userId: new Types.ObjectId() }, ownerToken))
+        .status,
+    ).toBe(400);
+    const ok = await put({ locale: 'en' }, ownerToken);
+    expect([ok.status, ok.body]).toEqual([200, { locale: 'en' }]);
+    expect(ok.headers['cache-control']).toBe('no-store');
+    const after = (await userModel.findOne({ email: ownerEmail }).lean())!;
+    expect(after.locale).toBe('en');
+    expect({ ...after, locale: undefined, updatedAt: undefined }).toEqual({
+      ...before,
+      locale: undefined,
+      updatedAt: undefined,
+    });
+    await put({ locale: 'fr' }, ownerToken);
+    expect(
+      (await userModel.findOne({ email: ownerEmail }).lean())!.locale,
+    ).toBe('fr');
+  });
+
+  it('1-16G — erreurs : message dans la langue demandée, code et statut inchangés', async () => {
+    const wrong = (language?: string) => {
+      const req = http().post('/auth/login');
+      if (language) req.set('Accept-Language', language);
+      return req.send({ email: ownerEmail, password: 'wrong-password-1!' });
+    };
+    const [none, fr, en] = await Promise.all([
+      wrong(),
+      wrong('fr-FR,fr;q=0.9'),
+      wrong('en-GB,en;q=0.9,fr;q=0.5'),
+    ]);
+    expect([none.status, fr.status, en.status]).toEqual([401, 401, 401]);
+    expect(none.body.message).toBe('Email ou mot de passe incorrect!');
+    expect(fr.body.message).toBe('Email ou mot de passe incorrect!');
+    expect(en.body.message).toBe('Incorrect email or password.');
+    const rest = (body: Record<string, unknown>) =>
+      Object.fromEntries(
+        Object.entries(body).filter(
+          ([key]) => key !== 'message' && key !== 'timestamp',
+        ),
+      );
+    expect(rest(en.body as Record<string, unknown>)).toEqual(
+      rest(none.body as Record<string, unknown>),
+    );
+    // Code stable jamais traduit.
+    const locale = await http()
+      .post('/auth/register')
+      .set('Accept-Language', 'en')
+      .send(
+        registerBody(email('refused-en'), {
+          legalAcceptance: {
+            ...legalAcceptanceFor(LegalAcceptanceContext.OWNER_REGISTRATION),
+            locale: 'de',
+          },
+        }),
+      );
+    expect([locale.status, locale.body.code]).toEqual([
+      400,
+      'LEGAL_LOCALE_UNAVAILABLE',
+    ]);
   });
 
   // ─── Invitation ──────────────────────────────────────────────────────────

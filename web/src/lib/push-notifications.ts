@@ -143,7 +143,8 @@ export async function fetchPushDeviceState(): Promise<PushDeviceState> {
 
 export class PushPermissionDeniedError extends Error {
   constructor() {
-    super("Notifications refusées par le navigateur.");
+    // Message technique (jamais affiché : l'interface traduit ce cas).
+    super("PUSH_PERMISSION_DENIED");
     this.name = "PushPermissionDeniedError";
   }
 }

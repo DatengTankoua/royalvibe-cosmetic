@@ -11,10 +11,25 @@ import {
 export type QuickActionId =
   "catalog" | "sales" | "analytics" | "trash" | "organization" | "converter";
 
+// 1-16G : titres et descriptions dans `catalog` (`home.actions.*`) ; ce
+// module ne porte que des identifiants (mapping pur, testable sans DOM).
+export type QuickActionDescription =
+  | "catalog"
+  | "salesAll"
+  | "salesOwn"
+  | "salesRecord"
+  | "analytics"
+  | "trash"
+  | "organization"
+  | "converter";
+
+export type OrganizationPart = "branding" | "members" | "invitations";
+
 export interface QuickAction {
   id: QuickActionId;
-  title: string;
-  description: string;
+  description: QuickActionDescription;
+  /** Organisation : capacités administrables, dans l'ordre d'affichage. */
+  parts?: OrganizationPart[];
   /** Route interne ; absente pour le convertisseur (dialogue existant). */
   href?: string;
   /**
@@ -34,34 +49,28 @@ type AuthLike = { effectivePermissions: DelegablePermission[] } | null;
  */
 function organizationTarget(
   ctx: AuthLike,
-): { href: string; description: string } | null {
+): { href: string; parts: OrganizationPart[] } | null {
   const branding = hasPermission(ctx, "branding.manage");
   const members = hasPermission(ctx, "members.manage");
   const invite = hasPermission(ctx, "members.invite");
-  const parts = [
-    branding && "logo et couleur",
-    members && "membres",
-    invite && "invitations",
-  ].filter((p): p is string => Boolean(p));
+  const parts: OrganizationPart[] = [];
+  if (branding) parts.push("branding");
+  if (members) parts.push("members");
+  if (invite) parts.push("invitations");
   if (parts.length === 0) return null;
   const href = branding
     ? "/app/organization/branding"
     : members
       ? "/app/organization/members"
       : "/app/organization/invitations";
-  const text = parts.join(", ");
-  return {
-    href,
-    description: `${text.charAt(0).toUpperCase()}${text.slice(1)}`,
-  };
+  return { href, parts };
 }
 
 export function homeQuickActions(ctx: AuthLike): QuickAction[] {
   const actions: QuickAction[] = [
     {
       id: "catalog",
-      title: "Catalogue",
-      description: "Rayons, produits et stock",
+      description: "catalog",
       href: "/app/catalog",
       availableOffline: true,
     },
@@ -73,12 +82,7 @@ export function homeQuickActions(ctx: AuthLike): QuickAction[] {
   if (viewAll || viewOwn || hasPermission(ctx, "sales.record")) {
     actions.push({
       id: "sales",
-      title: "Ventes",
-      description: viewAll
-        ? "Toutes les ventes du commerce"
-        : viewOwn
-          ? "Vos ventes enregistrées"
-          : "Saisie depuis une fiche produit",
+      description: viewAll ? "salesAll" : viewOwn ? "salesOwn" : "salesRecord",
       href: "/app/sales",
       availableOffline: false,
     });
@@ -86,8 +90,7 @@ export function homeQuickActions(ctx: AuthLike): QuickAction[] {
   if (hasPermission(ctx, "analytics.read")) {
     actions.push({
       id: "analytics",
-      title: "Analyse",
-      description: "Chiffre d'affaires et évolution",
+      description: "analytics",
       href: "/app/analytics",
       availableOffline: false,
     });
@@ -95,8 +98,7 @@ export function homeQuickActions(ctx: AuthLike): QuickAction[] {
   if (hasPermission(ctx, "trash.manage")) {
     actions.push({
       id: "trash",
-      title: "Corbeille",
-      description: "Restaurer ou supprimer définitivement",
+      description: "trash",
       href: "/app/trash",
       availableOffline: false,
     });
@@ -105,16 +107,15 @@ export function homeQuickActions(ctx: AuthLike): QuickAction[] {
   if (org) {
     actions.push({
       id: "organization",
-      title: "Organisation",
-      description: org.description,
+      description: "organization",
+      parts: org.parts,
       href: org.href,
       availableOffline: false,
     });
   }
   actions.push({
     id: "converter",
-    title: "Convertisseur",
-    description: "Euro ↔ franc CFA, taux fixe",
+    description: "converter",
     availableOffline: true,
   });
   return actions;

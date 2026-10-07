@@ -1,3 +1,5 @@
+import type { AppLocale } from '../common/i18n/locale';
+
 /** Route frontend de confirmation (1-13A) : exclue du service worker et du cache. */
 export const EMAIL_VERIFICATION_PATH = '/auth/verify-email';
 
@@ -36,11 +38,16 @@ export interface VerificationEmailContent {
   text: string;
 }
 
-/** Email simple en français, HTML et texte, valeurs dynamiques échappées. */
+/**
+ * Email simple, HTML et texte, valeurs dynamiques échappées. 1-16G : dans
+ * la langue du DESTINATAIRE (`User.locale`, repli français).
+ */
 export function buildVerificationEmail(
   name: string,
   verificationUrl: string,
+  locale: AppLocale = 'fr',
 ): VerificationEmailContent {
+  if (locale === 'en') return buildVerificationEmailEn(name, verificationUrl);
   const safeName = escapeHtml(singleLine(name));
   const safeUrl = escapeHtml(verificationUrl);
   const subject = 'Confirmez votre adresse email – Stock Master';
@@ -69,5 +76,37 @@ export function buildVerificationEmail(
     "Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.",
   ].join('\n');
 
+  return { subject, html, text };
+}
+
+function buildVerificationEmailEn(
+  name: string,
+  verificationUrl: string,
+): VerificationEmailContent {
+  const safeName = escapeHtml(singleLine(name));
+  const safeUrl = escapeHtml(verificationUrl);
+  const subject = 'Confirm your email address – Stock Master';
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="font-family: Arial, sans-serif; color: #111827; line-height: 1.5;">
+    <p>Hello ${safeName},</p>
+    <p>Confirm your email address to access your Stock Master account.</p>
+    <p>
+      <a href="${safeUrl}" style="display: inline-block; padding: 10px 16px; background: #062B5C; color: #ffffff; text-decoration: none; border-radius: 6px;">Confirm my email address</a>
+    </p>
+    <p>This link is valid for 24 hours and can only be used once.</p>
+    <p style="color: #6b7280; font-size: 13px;">If the button does not work, copy this link into your browser:<br />${safeUrl}</p>
+    <p style="color: #6b7280; font-size: 13px;">If you did not make this request, ignore this email.</p>
+  </body>
+</html>`;
+  const text = [
+    `Hello ${singleLine(name)},`,
+    '',
+    'Confirm your email address to access your Stock Master account:',
+    verificationUrl,
+    '',
+    'This link is valid for 24 hours and can only be used once.',
+    'If you did not make this request, ignore this email.',
+  ].join('\n');
   return { subject, html, text };
 }

@@ -16,12 +16,6 @@ export const THEME_PREFERENCES: readonly ThemePreference[] = [
 ];
 export const DARK_QUERY = "(prefers-color-scheme: dark)";
 
-export const THEME_LABELS: Record<ThemePreference, string> = {
-  light: "Clair",
-  dark: "Sombre",
-  system: "Automatique",
-};
-
 export function parseThemePreference(value: unknown): ThemePreference {
   return value === "light" || value === "dark" ? value : "system";
 }

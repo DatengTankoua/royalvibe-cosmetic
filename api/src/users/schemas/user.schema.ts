@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 import { USER_NAME_MAX_LENGTH } from '../../common/validation/name-rules';
+import { APP_LOCALES, type AppLocale } from '../../common/i18n/locale';
 
 export type UserDocument = HydratedDocument<User>;
 
@@ -34,6 +35,15 @@ export class User {
 
   @Prop({ enum: UserRole, default: UserRole.SELLER })
   role: UserRole;
+
+  /**
+   * 1-16G : langue préférée du compte (`fr` | `en`) pour les e-mails et les
+   * notifications push qui lui sont destinés. Absente (comptes antérieurs,
+   * jamais réécrits) = français. Renseignée à la création du compte (langue
+   * des conditions acceptées) puis par le choix « Français / English ».
+   */
+  @Prop({ type: String, enum: APP_LOCALES, default: undefined })
+  locale?: AppLocale;
 
   /**
    * 1-13A : preuve d'accès à la boîte mail. Absent ou `null` = non vérifiée

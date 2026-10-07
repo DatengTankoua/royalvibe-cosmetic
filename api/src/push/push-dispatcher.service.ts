@@ -30,6 +30,7 @@ import {
 import { PUSH_CLOCK, PushRuntime } from './push-runtime';
 import type { PushClock } from './push-runtime';
 import { buildPushMessage, pushTopic } from './push-messages';
+import { recipientLocale } from '../common/i18n/locale';
 import type { PushSendResult } from './push-transport';
 import { completePreferences } from './push-subscriptions.service';
 import { stockLowReached } from './stock-thresholds';
@@ -684,6 +685,12 @@ export class PushDispatcherService implements OnApplicationShutdown {
       return;
     }
 
+    // 1-16G : langue du titulaire de l'appareil (repli français).
+    const recipient = await this.userModel
+      .findById(subscription.userId)
+      .select('locale')
+      .lean<{ locale?: unknown }>()
+      .exec();
     const message = buildPushMessage(
       {
         category: job.category,
@@ -697,6 +704,7 @@ export class PushDispatcherService implements OnApplicationShutdown {
       {
         userId: subscription.userId.toHexString(),
         organizationId: subscription.organizationId.toHexString(),
+        locale: recipientLocale(recipient?.locale),
       },
     );
     // Un transport qui rejette est traité comme une panne réseau (reprise

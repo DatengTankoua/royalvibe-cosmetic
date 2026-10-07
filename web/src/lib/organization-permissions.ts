@@ -54,23 +54,8 @@ export function hasPermission(
   return authContext?.effectivePermissions.includes(permission) ?? false;
 }
 
-export const PERMISSION_LABELS: Record<DelegablePermission, string> = {
-  "catalog.manage": "Gérer le catalogue",
-  "products.manage": "Gérer les produits",
-  "stock.adjust": "Ajuster le stock",
-  "sales.record": "Enregistrer des ventes",
-  "sales.view_own": "Voir ses propres ventes",
-  "sales.view_all": "Voir toutes les ventes",
-  "products.view_stock_details": "Voir le détail du stock",
-  "products.view_financials": "Voir les coûts et résultats financiers",
-  "analytics.read": "Voir les analyses",
-  "audit.read": "Voir l'historique d'audit",
-  "trash.manage": "Gérer la corbeille",
-  "branding.manage": "Gérer le branding",
-  "members.invite": "Inviter des membres",
-  "members.manage": "Gérer les membres",
-  "support.contact": "Contacter le service client",
-};
+// 1-16G : libellés des permissions et des rôles dans `organization`
+// (`permissions.*`, `roles.*`) ; les codes internes ne sont jamais traduits.
 
 export type OrganizationRole = "owner" | "admin" | "seller";
 
@@ -88,8 +73,6 @@ export function roleGrantsAllPermissions(role: OrganizationRole): boolean {
   return role === "owner" || role === "admin";
 }
 
-export const ROLE_LABELS: Record<OrganizationRole, string> = {
-  owner: "Propriétaire",
-  admin: "Administrateur",
-  seller: "Vendeur",
-};
+export function isOrganizationRole(value: unknown): value is OrganizationRole {
+  return value === "owner" || value === "admin" || value === "seller";
+}

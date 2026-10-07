@@ -6,6 +6,8 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { requestedLocale } from '../i18n/locale';
+import { translateErrorBodyMessage } from '../i18n/error-messages';
 import { NO_STORE_ERROR_CODES } from '../../subscriptions/subscription-access';
 import {
   PAYMENT_WEBHOOK_ERROR_CODE_PREFIX,
@@ -23,9 +25,16 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const body = exception.getResponse();
 
     const isObject = typeof body === 'object' && body !== null;
-    const message = isObject
+    const rawMessage = isObject
       ? ((body as { message?: string | string[] }).message ?? exception.message)
       : body;
+    // 1-16G : texte dans la langue demandée par la requête (codes, statuts
+    // et champs annexes inchangés) ; sans langue demandée, message d'origine.
+    const locale = requestedLocale(request);
+    const message =
+      locale === null
+        ? rawMessage
+        : translateErrorBodyMessage(rawMessage, locale);
 
     // Preserve extra fields from structured bodies (e.g. { message, existing })
     const extra = isObject

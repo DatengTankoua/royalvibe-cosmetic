@@ -23,6 +23,7 @@ import { EmailVerificationService } from '../email-verification/email-verificati
 import { EmailVerificationAddressThrottlerGuard } from '../email-verification/email-verification-rate-limiting';
 import { PasswordResetService } from '../password-reset/password-reset.service';
 import { PasswordResetAddressThrottlerGuard } from '../password-reset/password-reset-rate-limiting';
+import { UsersService } from '../users/users.service';
 import { PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE } from './auth.controller';
 
 /**
@@ -40,6 +41,7 @@ describe('AuthController', () => {
   let confirmMock: jest.Mock;
   let resetRequestMock: jest.Mock;
   let resetConfirmMock: jest.Mock;
+  let setLocaleMock: jest.Mock;
 
   const VALID_REG: RegisterDto = {
     name: 'E2E User',
@@ -80,6 +82,7 @@ describe('AuthController', () => {
     confirmMock = jest.fn();
     resetRequestMock = jest.fn();
     resetConfirmMock = jest.fn();
+    setLocaleMock = jest.fn().mockResolvedValue(undefined);
 
     const module: TestingModule = await Test.createTestingModule({
       // Garde 0B.6 : enregistrée pour que la DI du contrôleur se résolve
@@ -125,6 +128,8 @@ describe('AuthController', () => {
             confirm: resetConfirmMock,
           },
         },
+        // 1-16G : préférence de langue du compte.
+        { provide: UsersService, useValue: { setLocale: setLocaleMock } },
         AuthThrottlerGuard,
         EmailVerificationAddressThrottlerGuard,
         PasswordResetAddressThrottlerGuard,
@@ -252,6 +257,42 @@ describe('AuthController', () => {
       email: 'ada@example.com',
       role: 'seller',
       organizationId: principal.organizationId,
+      locale: null,
+    });
+    expect(
+      controller.me({ ...principal, locale: 'en' } as never),
+    ).toMatchObject({ locale: 'en' });
+  });
+
+  // ---- langue du compte (1-16G) ----
+
+  describe('langue du compte (1-16G)', () => {
+    it('updateLocale : enregistre pour le sub du JWT, jamais un id du corps', async () => {
+      const principal = { _id: '112233445566778899001122' };
+      const out = await controller.updateLocale(
+        principal as never,
+        { locale: 'en', userId: 'autre' } as never,
+      );
+      expect(setLocaleMock).toHaveBeenCalledTimes(1);
+      expect(setLocaleMock).toHaveBeenCalledWith(principal._id, 'en');
+      expect(out).toEqual({ locale: 'en' });
+    });
+
+    // Catégorie « identité » et exemption d'organisation : matrice des routes
+    // (subscription-access-routes.spec.ts).
+    it('updateLocale : réponse jamais mise en cache (no-store)', () => {
+      const handler: unknown = Reflect.get(
+        _AuthControllerForMetadata.prototype,
+        'updateLocale',
+      );
+      const headers = Reflect.getMetadata('__headers__', handler as object) as {
+        name: string;
+        value: string;
+      }[];
+      expect(headers).toContainEqual({
+        name: 'Cache-Control',
+        value: 'no-store',
+      });
     });
   });
 

@@ -11,6 +11,7 @@ import * as bcrypt from 'bcryptjs';
 import { UsersService } from '../users/users.service';
 import { LegalAcceptanceService } from '../legal/legal-acceptance.service';
 import { LegalAcceptanceContext } from '../legal/legal-documents';
+import { isAppLocale } from '../common/i18n/locale';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { SwitchOrganizationDto } from './dto/switch-organization.dto';
@@ -174,7 +175,13 @@ export class AuthService {
 
     try {
       await session.withTransaction(async () => {
-        const user = await this.createOwnerUser(dto, hashed, session);
+        // 1-16G : langue du compte = langue des conditions acceptées.
+        const user = await this.createOwnerUser(
+          dto,
+          hashed,
+          session,
+          legal.locale,
+        );
         const { organization } =
           await this.organizationsService.createOwnerOrganization(
             dto.organizationName,
@@ -228,6 +235,7 @@ export class AuthService {
     dto: RegisterDto,
     hashedPassword: string,
     session: MongooseSession,
+    locale: string,
   ): Promise<UserDocument> {
     try {
       return await this.usersService.create(
@@ -236,6 +244,7 @@ export class AuthService {
           email: dto.email,
           password: hashedPassword,
           role: UserRole.ADMIN,
+          ...(isAppLocale(locale) ? { locale } : {}),
         },
         session,
       );

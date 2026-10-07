@@ -1,6 +1,8 @@
 "use client";
 
 import { LogOutIcon, RefreshCwIcon } from "lucide-react";
+import type { TFunction } from "i18next";
+import { useT } from "next-i18next/client";
 import { Button } from "@/components/ui/button";
 import type { ApiAccessView } from "@/lib/api";
 import { SubscriptionManager } from "./subscription-manager";
@@ -11,19 +13,22 @@ import { LocalPendingSales } from "./local-pending-sales";
 // principal par situation, aucun terme technique. Aucun appel métier : seuls
 // la lecture d'abonnement (propriétaire) et la consultation locale.
 
-export function blockTitle(access: ApiAccessView | null): string {
+export function blockTitle(
+  access: ApiAccessView | null,
+  t: TFunction<"subscription">,
+): string {
   switch (access?.subscriptionState) {
     case "expired":
-      return "L'abonnement de ce commerce a expiré";
+      return t("block.title.expired");
     case "none":
-      return "Ce commerce n'a pas d'abonnement actif";
+      return t("block.title.none");
     case "scheduled":
-      return "L'abonnement de ce commerce n'a pas encore commencé";
+      return t("block.title.scheduled");
     case "active":
       // Abonnement actif mais accès pas encore rétabli (session limitée).
-      return "L'abonnement de ce commerce est actif";
+      return t("block.title.active");
     default:
-      return "L'abonnement de ce commerce n'est pas actif";
+      return t("block.title.inactive");
   }
 }
 
@@ -55,6 +60,7 @@ export function CommercialBlockScreen({
   onLogout: () => void;
   managerReloadKey: number;
 }) {
+  const { t } = useT("subscription");
   const activeButLimited = access?.subscriptionState === "active";
   return (
     <div
@@ -67,16 +73,16 @@ export function CommercialBlockScreen({
           tabIndex={-1}
           id="commercial-block-title"
         >
-          {blockTitle(access)}
+          {blockTitle(access, t)}
         </h1>
         <p className="text-sm text-muted-foreground">
           {offline
-            ? "Vous êtes hors connexion. La vérification reprendra au retour de la connexion."
+            ? t("block.text.offline")
             : activeButLimited
-              ? "Utilisez « Vérifier mon abonnement » pour retrouver l'accès."
+              ? t("block.text.activeLimited")
               : isOwner
-                ? "Renouvelez l'abonnement pour retrouver l'accès à votre commerce."
-                : "Contactez le propriétaire pour renouveler."}
+                ? t("block.text.owner")
+                : t("block.text.member")}
         </p>
       </div>
 
@@ -103,7 +109,7 @@ export function CommercialBlockScreen({
               className={`h-4 w-4 ${verifying ? "animate-spin" : ""}`}
               aria-hidden
             />
-            {verifying ? "Vérification…" : "Vérifier l'accès"}
+            {verifying ? t("payment.checking") : t("block.verifyAccess")}
           </Button>
           {verifyMessage && (
             <p role="status" aria-live="polite" className="text-sm">
@@ -123,7 +129,7 @@ export function CommercialBlockScreen({
           onClick={onLogout}
         >
           <LogOutIcon className="h-4 w-4" aria-hidden />
-          Se déconnecter
+          {t("block.logout")}
         </Button>
       </div>
     </div>

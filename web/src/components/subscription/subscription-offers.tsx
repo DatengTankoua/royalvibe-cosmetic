@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { CheckIcon } from "lucide-react";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
 import {
   SUBSCRIPTION_OFFERS,
-  formatFcfa,
   monthlyEquivalentXaf,
   type SubscriptionOffer,
   type SubscriptionTerm,
@@ -15,28 +16,33 @@ import {
 // Aucune action de paiement ici : présentation uniquement.
 
 function OfferBody({ offer }: { offer: SubscriptionOffer }) {
+  const { t } = useT("subscription");
+  const { fcfa } = useFormat();
+  const label = t(`offers.term.${offer.term}`);
   return (
     <>
       <span className="flex items-center justify-between gap-2">
-        <span className="text-sm font-semibold">{offer.label}</span>
+        <span className="text-sm font-semibold">{label}</span>
         {offer.highlight && (
           <span className="rounded-full bg-(--brand-orange)/15 px-2 py-0.5 text-[11px] font-semibold text-(--brand-ink)">
-            {offer.highlight}
+            {offer.highlight === "saving"
+              ? t("offers.highlight.saving", { amount: fcfa(offer.savingXaf) })
+              : t("offers.highlight.freeMonths")}
           </span>
         )}
       </span>
       <span className="mt-2 block text-2xl font-bold tracking-tight">
-        {formatFcfa(offer.totalXaf)}
+        {fcfa(offer.totalXaf)}
       </span>
       <span className="block text-xs text-muted-foreground">
-        pour {offer.label}
+        {t("offers.forTerm", { term: label })}
         {offer.months > 1 &&
-          ` · soit ${formatFcfa(monthlyEquivalentXaf(offer))} / mois en équivalent mensuel`}
+          ` · ${t("offers.monthlyEquivalent", { amount: fcfa(monthlyEquivalentXaf(offer)) })}`}
       </span>
       <span className="mt-2 block text-xs font-medium">
         {offer.savingXaf > 0
-          ? `Économie de ${formatFcfa(offer.savingXaf)} par rapport au paiement mensuel`
-          : "Paiement mensuel"}
+          ? t("offers.saving", { amount: fcfa(offer.savingXaf) })
+          : t("offers.monthlyPayment")}
       </span>
     </>
   );
@@ -46,11 +52,11 @@ function OfferBody({ offer }: { offer: SubscriptionOffer }) {
 export const RECOMMENDED_TERM: SubscriptionTerm = "annual";
 
 const PUBLIC_INCLUDED = [
-  "Catalogue, stock et ventes",
-  "Convertisseur EUR ↔ FCFA",
-  "Analyses et corbeille",
-  "Membres et permissions",
-];
+  "catalog",
+  "converter",
+  "analytics",
+  "members",
+] as const;
 
 /**
  * Grille publique : quatre cartes, la durée recommandée mise en avant.
@@ -59,6 +65,7 @@ const PUBLIC_INCLUDED = [
  * ni attribuée depuis le navigateur.
  */
 export function OfferGrid({ cta }: { cta?: { href: string; label: string } }) {
+  const { t } = useT("subscription");
   return (
     <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:items-stretch">
       {SUBSCRIPTION_OFFERS.map((offer) => {
@@ -74,7 +81,7 @@ export function OfferGrid({ cta }: { cta?: { href: string; label: string } }) {
           >
             {recommended && (
               <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-(--brand-solid) px-3 py-1 text-xs font-semibold whitespace-nowrap text-white">
-                Le plus avantageux
+                {t("offers.best")}
               </span>
             )}
             <OfferBody offer={offer} />
@@ -87,7 +94,7 @@ export function OfferGrid({ cta }: { cta?: { href: string; label: string } }) {
                     className="mt-0.5 h-3.5 w-3.5 shrink-0 text-(--brand-ink)"
                     aria-hidden
                   />
-                  {item}
+                  {t(`offers.included.${item}`)}
                 </li>
               ))}
             </ul>
@@ -99,7 +106,10 @@ export function OfferGrid({ cta }: { cta?: { href: string; label: string } }) {
                     ? "bg-(--brand-solid) text-white hover:bg-(--brand-solid)/90"
                     : "border border-(--brand-ink) text-(--brand-ink) hover:bg-(--brand-ink)/5"
                 }`}
-                aria-label={`${cta.label} — formule ${offer.label}`}
+                aria-label={t("offers.ctaLabel", {
+                  label: cta.label,
+                  term: t(`offers.term.${offer.term}`),
+                })}
               >
                 {cta.label}
               </Link>
@@ -119,10 +129,11 @@ export function OfferSelector({
   selected: SubscriptionTerm | null;
   onSelect: (term: SubscriptionTerm) => void;
 }) {
+  const { t } = useT("subscription");
   return (
     <div
       role="radiogroup"
-      aria-label="Durée du renouvellement"
+      aria-label={t("offers.selectorLabel")}
       className="grid grid-cols-1 gap-3 sm:grid-cols-2"
     >
       {SUBSCRIPTION_OFFERS.map((offer) => {
@@ -156,16 +167,12 @@ export function OfferSelector({
 
 /** Rappel commun des conditions validées. */
 export function OfferConditions() {
+  const { t } = useT("subscription");
   return (
     <ul className="space-y-1 text-sm text-muted-foreground">
-      <li>
-        Mêmes fonctionnalités pour toutes les durées, selon les droits de chaque
-        membre.
-      </li>
-      <li>Abonnement par commerce, sans supplément par vendeur.</li>
-      <li>
-        Aucun prélèvement automatique : chaque renouvellement est volontaire.
-      </li>
+      <li>{t("offers.conditions.features")}</li>
+      <li>{t("offers.conditions.perShop")}</li>
+      <li>{t("offers.conditions.noAutoPay")}</li>
     </ul>
   );
 }

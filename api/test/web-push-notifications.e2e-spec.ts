@@ -671,6 +671,41 @@ describe('Notifications Web Push métier (e2e 1-16A)', () => {
     ).toHaveLength(2);
   });
 
+  it('3 bis (1-16G). langue du DESTINATAIRE : même alerte, texte de chacun ; ni celle de l’auteur de la vente ni celle du processus', async () => {
+    const a = await registerOwner('stock-lang');
+    const admin = await seedMember(a.orgId, OrganizationRole.ADMIN);
+    const seller = await seedMember(a.orgId, OrganizationRole.SELLER);
+    // L'administrateur choisit l'anglais ; le vendeur (auteur de la vente)
+    // aussi, sans effet sur les autres destinataires.
+    for (const token of [admin.token, seller.token]) {
+      const res = await request(server())
+        .put('/auth/me/locale')
+        .set(auth(token))
+        .send({ locale: 'en' });
+      expect(res.status).toBe(200);
+    }
+    const devices = {
+      owner: await subscribed(a.token, 'owner-lang'),
+      admin: await subscribed(admin.token, 'admin-lang'),
+    };
+    const productId = await seedProduct(a.orgId, 1);
+    expect((await sell(seller.token, productId, 1)).status).toBe(201);
+    await dispatcher.runOnce();
+
+    const toOwner = transport.to(devices.owner.endpoint);
+    const toAdmin = transport.to(devices.admin.endpoint);
+    expect(toOwner).toHaveLength(1);
+    expect(toAdmin).toHaveLength(1);
+    expect(toOwner[0].payload.body).toBe('Un produit est en rupture de stock.');
+    expect(toAdmin[0].payload.body).toBe('A product is out of stock.');
+    // Seul le texte change : catégorie, lien et regroupement identiques.
+    expect({ ...toAdmin[0].payload, body: '', aud: null }).toEqual({
+      ...toOwner[0].payload,
+      body: '',
+      aud: null,
+    });
+  });
+
   it('4. pertinence revérifiée : réapprovisionné ou purgé avant la passe → aucune alerte', async () => {
     const a = await registerOwner('relevance');
     const owner = await subscribed(a.token, 'owner');

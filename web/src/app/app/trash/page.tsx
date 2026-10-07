@@ -10,6 +10,9 @@ import {
   SquareIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
+import { rich } from "@/i18n/rich";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +35,6 @@ import {
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
 import { hasPermission } from "@/lib/organization-permissions";
 import { useTrash } from "@/hooks/use-trash";
-import { fmtXof } from "@/lib/currency";
 import { getApiErrorMessage } from "@/lib/api";
 import Image from "next/image";
 
@@ -50,6 +52,8 @@ type ConfirmAction =
 // backend — `useTrash(enabled)` n'appelle l'API que si cette permission est
 // confirmée (jamais un 403 provoqué volontairement). Jamais `User.role`.
 export default function TrashPage() {
+  const { t } = useT("catalog");
+  const format = useFormat();
   const { authContext } = useOrganizationShell();
   const canManage = hasPermission(authContext, "trash.manage");
   const {
@@ -81,10 +85,10 @@ export default function TrashPage() {
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 px-4 py-10 sm:px-6">
         <h1 className="flex items-center gap-2 text-2xl font-semibold">
           <Trash2Icon className="h-6 w-6 text-muted-foreground" />
-          Corbeille
+          {t("trash.title")}
         </h1>
         <p className="text-sm text-muted-foreground">
-          Tu n&apos;as pas la permission de gérer la corbeille.
+          {t("trash.noPermission")}
         </p>
       </div>
     );
@@ -134,43 +138,53 @@ export default function TrashPage() {
       switch (confirm.kind) {
         case "restore-section":
           await doRestoreSection(confirm.id);
-          toast.success(`Catalogue « ${confirm.name} » restauré`);
+          toast.success(
+            t("trash.toast.sectionRestored", { name: confirm.name }),
+          );
           break;
         case "delete-section":
           await doPermanentDeleteSection(confirm.id);
           toast.success(
-            `Catalogue « ${confirm.name} » supprimé définitivement`,
+            t("trash.toast.sectionDeleted", { name: confirm.name }),
           );
           break;
         case "restore-product":
           await doRestoreProduct(confirm.id);
-          toast.success(`Produit « ${confirm.name} » restauré`);
+          toast.success(
+            t("trash.toast.productRestored", { name: confirm.name }),
+          );
           break;
         case "delete-product":
           await doPermanentDeleteProduct(confirm.id);
-          toast.success(`Produit « ${confirm.name} » supprimé définitivement`);
+          toast.success(
+            t("trash.toast.productDeleted", { name: confirm.name }),
+          );
           break;
         case "bulk-restore-sections":
           await doBulkRestoreSections(confirm.ids);
-          toast.success(`${confirm.ids.length} catalogue(s) restauré(s)`);
+          toast.success(
+            t("trash.toast.sectionsRestored", { count: confirm.ids.length }),
+          );
           setSelectedSections(new Set());
           break;
         case "bulk-delete-sections":
           await doBulkDeleteSections(confirm.ids);
           toast.success(
-            `${confirm.ids.length} catalogue(s) supprimé(s) définitivement`,
+            t("trash.toast.sectionsDeleted", { count: confirm.ids.length }),
           );
           setSelectedSections(new Set());
           break;
         case "bulk-restore-products":
           await doBulkRestoreProducts(confirm.ids);
-          toast.success(`${confirm.ids.length} produit(s) restauré(s)`);
+          toast.success(
+            t("trash.toast.productsRestored", { count: confirm.ids.length }),
+          );
           setSelectedProducts(new Set());
           break;
         case "bulk-delete-products":
           await doBulkDeleteProducts(confirm.ids);
           toast.success(
-            `${confirm.ids.length} produit(s) supprimé(s) définitivement`,
+            t("trash.toast.productsDeleted", { count: confirm.ids.length }),
           );
           setSelectedProducts(new Set());
           break;
@@ -188,21 +202,29 @@ export default function TrashPage() {
     if (!confirm) return "";
     switch (confirm.kind) {
       case "restore-section":
-        return "Restaurer ce catalogue ?";
+        return t("trash.confirm.restoreSectionTitle");
       case "delete-section":
-        return "Supprimer définitivement ce catalogue ?";
+        return t("trash.confirm.deleteSectionTitle");
       case "restore-product":
-        return "Restaurer ce produit ?";
+        return t("trash.confirm.restoreProductTitle");
       case "delete-product":
-        return "Supprimer définitivement ce produit ?";
+        return t("trash.confirm.deleteProductTitle");
       case "bulk-restore-sections":
-        return `Restaurer ${confirm.ids.length} catalogue(s) ?`;
+        return t("trash.confirm.bulkRestoreSectionsTitle", {
+          count: confirm.ids.length,
+        });
       case "bulk-delete-sections":
-        return `Supprimer ${confirm.ids.length} catalogue(s) définitivement ?`;
+        return t("trash.confirm.bulkDeleteSectionsTitle", {
+          count: confirm.ids.length,
+        });
       case "bulk-restore-products":
-        return `Restaurer ${confirm.ids.length} produit(s) ?`;
+        return t("trash.confirm.bulkRestoreProductsTitle", {
+          count: confirm.ids.length,
+        });
       case "bulk-delete-products":
-        return `Supprimer ${confirm.ids.length} produit(s) définitivement ?`;
+        return t("trash.confirm.bulkDeleteProductsTitle", {
+          count: confirm.ids.length,
+        });
     }
   };
 
@@ -210,41 +232,37 @@ export default function TrashPage() {
     if (!confirm) return "";
     switch (confirm.kind) {
       case "restore-section":
-        return (
-          <>
-            Le catalogue <strong>{confirm.name}</strong> sera remis dans le
-            catalogue principal.
-          </>
-        );
       case "delete-section":
-        return (
-          <>
-            Le catalogue <strong>{confirm.name}</strong> sera supprimé
-            définitivement. Cette action est irréversible.
-          </>
-        );
       case "restore-product":
-        return (
-          <>
-            Le produit <strong>{confirm.name}</strong> sera remis dans son
-            catalogue.
-          </>
-        );
-      case "delete-product":
-        return (
-          <>
-            Le produit <strong>{confirm.name}</strong> sera supprimé
-            définitivement avec son image. Cette action est irréversible.
-          </>
-        );
+      case "delete-product": {
+        const name = confirm.name;
+        const key = {
+          "restore-section": "trash.confirm.restoreSectionText",
+          "delete-section": "trash.confirm.deleteSectionText",
+          "restore-product": "trash.confirm.restoreProductText",
+          "delete-product": "trash.confirm.deleteProductText",
+        } as const;
+        // Nom saisi : rendu à part, jamais interprété dans le gabarit.
+        return rich(t(key[confirm.kind]), {
+          name: () => <strong>{name}</strong>,
+        });
+      }
       case "bulk-restore-sections":
-        return `Les ${confirm.ids.length} catalogue(s) sélectionné(s) seront restaurés.`;
+        return t("trash.confirm.bulkRestoreSectionsText", {
+          count: confirm.ids.length,
+        });
       case "bulk-delete-sections":
-        return `Les ${confirm.ids.length} catalogue(s) sélectionné(s) seront supprimés définitivement. Cette action est irréversible.`;
+        return t("trash.confirm.bulkDeleteSectionsText", {
+          count: confirm.ids.length,
+        });
       case "bulk-restore-products":
-        return `Les ${confirm.ids.length} produit(s) sélectionné(s) seront restaurés.`;
+        return t("trash.confirm.bulkRestoreProductsText", {
+          count: confirm.ids.length,
+        });
       case "bulk-delete-products":
-        return `Les ${confirm.ids.length} produit(s) sélectionné(s) seront supprimés définitivement avec leurs images. Cette action est irréversible.`;
+        return t("trash.confirm.bulkDeleteProductsText", {
+          count: confirm.ids.length,
+        });
     }
   };
 
@@ -262,16 +280,13 @@ export default function TrashPage() {
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-semibold">
             <Trash2Icon className="h-6 w-6 text-muted-foreground" />
-            Corbeille
+            {t("trash.title")}
           </h1>
-          <p className="text-sm text-muted-foreground">
-            Les éléments supprimés peuvent être restaurés ou effacés
-            définitivement.
-          </p>
+          <p className="text-sm text-muted-foreground">{t("trash.subtitle")}</p>
         </div>
 
         {isLoading && (
-          <p className="text-sm text-muted-foreground">Chargement…</p>
+          <p className="text-sm text-muted-foreground">{t("loading")}</p>
         )}
         {!isLoading && error && (
           <div className="flex items-center gap-3">
@@ -280,7 +295,7 @@ export default function TrashPage() {
               onClick={() => void reload()}
               className="text-sm text-primary underline underline-offset-2 hover:no-underline"
             >
-              Réessayer
+              {t("actions.retry")}
             </button>
           </div>
         )}
@@ -291,7 +306,7 @@ export default function TrashPage() {
             <div className="flex items-center justify-between">
               <h2 className="flex items-center gap-2 text-lg font-medium">
                 <FolderIcon className="h-5 w-5" />
-                Catalogues ({sections.length})
+                {t("trash.sections", { count: sections.length })}
               </h2>
               {sections.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2">
@@ -306,7 +321,7 @@ export default function TrashPage() {
                     ) : (
                       <SquareIcon className="h-4 w-4 mr-1" />
                     )}
-                    Tout sélectionner
+                    {t("trash.selectAll")}
                   </Button>
                   {selectedSections.size > 0 && (
                     <>
@@ -321,7 +336,9 @@ export default function TrashPage() {
                         }
                       >
                         <RotateCcwIcon className="h-4 w-4 mr-1" />
-                        Restaurer ({selectedSections.size})
+                        {t("trash.restoreCount", {
+                          count: selectedSections.size,
+                        })}
                       </Button>
                       <Button
                         variant="destructive"
@@ -334,7 +351,9 @@ export default function TrashPage() {
                         }
                       >
                         <Trash2Icon className="h-4 w-4 mr-1" />
-                        Supprimer ({selectedSections.size})
+                        {t("trash.deleteCount", {
+                          count: selectedSections.size,
+                        })}
                       </Button>
                     </>
                   )}
@@ -344,7 +363,7 @@ export default function TrashPage() {
 
             {sections.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Aucun catalogue dans la corbeille.
+                {t("trash.noSections")}
               </p>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -357,6 +376,8 @@ export default function TrashPage() {
                       <div className="flex items-start gap-2">
                         <button
                           onClick={() => toggleSection(s._id)}
+                          aria-pressed={selectedSections.has(s._id)}
+                          aria-label={t("trash.select", { name: s.name })}
                           className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground"
                         >
                           {selectedSections.has(s._id) ? (
@@ -385,8 +406,9 @@ export default function TrashPage() {
                     </CardHeader>
                     <CardContent className="pt-0">
                       <p className="text-xs text-muted-foreground mb-3">
-                        Supprimé le{" "}
-                        {new Date(s.deletedAt).toLocaleDateString("fr-FR")}
+                        {t("trash.deletedOn", {
+                          date: format.date(s.deletedAt),
+                        })}
                       </p>
                       <div className="flex gap-2">
                         <Button
@@ -402,12 +424,13 @@ export default function TrashPage() {
                           }
                         >
                           <RotateCcwIcon className="h-3 w-3 mr-1" />
-                          Restaurer
+                          {t("trash.restore")}
                         </Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           className="text-destructive hover:text-destructive"
+                          aria-label={t("trash.deletePermanently")}
                           onClick={() =>
                             setConfirm({
                               kind: "delete-section",
@@ -433,7 +456,7 @@ export default function TrashPage() {
             <div className="flex items-center justify-between">
               <h2 className="flex items-center gap-2 text-lg font-medium">
                 <PackageIcon className="h-5 w-5" />
-                Produits ({products.length})
+                {t("trash.products", { count: products.length })}
               </h2>
               {products.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2">
@@ -448,7 +471,7 @@ export default function TrashPage() {
                     ) : (
                       <SquareIcon className="h-4 w-4 mr-1" />
                     )}
-                    Tout sélectionner
+                    {t("trash.selectAll")}
                   </Button>
                   {selectedProducts.size > 0 && (
                     <>
@@ -463,7 +486,9 @@ export default function TrashPage() {
                         }
                       >
                         <RotateCcwIcon className="h-4 w-4 mr-1" />
-                        Restaurer ({selectedProducts.size})
+                        {t("trash.restoreCount", {
+                          count: selectedProducts.size,
+                        })}
                       </Button>
                       <Button
                         variant="destructive"
@@ -476,7 +501,9 @@ export default function TrashPage() {
                         }
                       >
                         <Trash2Icon className="h-4 w-4 mr-1" />
-                        Supprimer ({selectedProducts.size})
+                        {t("trash.deleteCount", {
+                          count: selectedProducts.size,
+                        })}
                       </Button>
                     </>
                   )}
@@ -486,7 +513,7 @@ export default function TrashPage() {
 
             {products.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Aucun produit dans la corbeille.
+                {t("trash.noProducts")}
               </p>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -514,6 +541,8 @@ export default function TrashPage() {
                       <div className="flex items-start gap-2">
                         <button
                           onClick={() => toggleProduct(p._id)}
+                          aria-pressed={selectedProducts.has(p._id)}
+                          aria-label={t("trash.select", { name: p.name })}
                           className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground"
                         >
                           {selectedProducts.has(p._id) ? (
@@ -530,16 +559,19 @@ export default function TrashPage() {
                             {/* 1-12H : prix d'achat seulement s'il est
                                 projeté (products.view_financials). */}
                             {p.purchasePrice !== undefined &&
-                              `Achat : ${fmtXof(p.purchasePrice)} · `}
-                            Vente : {fmtXof(p.salePrice)}
+                              `${t("trash.purchase", { amount: format.fcfa(p.purchasePrice) })} · `}
+                            {t("trash.sale", {
+                              amount: format.fcfa(p.salePrice),
+                            })}
                           </CardDescription>
                         </div>
                       </div>
                     </CardHeader>
                     <CardContent className="pt-0">
                       <p className="text-xs text-muted-foreground mb-3">
-                        Supprimé le{" "}
-                        {new Date(p.deletedAt).toLocaleDateString("fr-FR")}
+                        {t("trash.deletedOn", {
+                          date: format.date(p.deletedAt),
+                        })}
                       </p>
                       <div className="flex gap-2">
                         <Button
@@ -555,12 +587,13 @@ export default function TrashPage() {
                           }
                         >
                           <RotateCcwIcon className="h-3 w-3 mr-1" />
-                          Restaurer
+                          {t("trash.restore")}
                         </Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           className="text-destructive hover:text-destructive"
+                          aria-label={t("trash.deletePermanently")}
                           onClick={() =>
                             setConfirm({
                               kind: "delete-product",
@@ -594,7 +627,7 @@ export default function TrashPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               className={
                 isDestructive
@@ -603,7 +636,9 @@ export default function TrashPage() {
               }
               onClick={() => void executeConfirm()}
             >
-              {isDestructive ? "Supprimer définitivement" : "Restaurer"}
+              {isDestructive
+                ? t("trash.deletePermanently")
+                : t("trash.restore")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

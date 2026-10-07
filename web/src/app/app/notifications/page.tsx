@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
+import { useLocale } from "@/i18n/locale-provider";
 import { Button } from "@/components/ui/button";
 import { getApiErrorMessage } from "@/lib/api";
 import { getToken } from "@/lib/auth";
@@ -16,10 +19,6 @@ import {
 } from "@/lib/notifications";
 
 const PAGE = 20;
-const timeFormat = new Intl.DateTimeFormat("fr-FR", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
 
 /** Première page relue fusionnée avec les pages déjà chargées. */
 function merge(
@@ -35,6 +34,11 @@ function merge(
 // « Tout marquer comme lu ». Consulter la liste ne marque rien comme lu ;
 // ouvrir une notification la marque lue (page de détail).
 export default function NotificationsPage() {
+  const { t } = useT("notifications");
+  const format = useFormat();
+  // 1-16G : textes génériques rendus par l'API dans la langue de la
+  // requête : la liste est relue (lecture seule) après un changement.
+  const { locale } = useLocale();
   const [status, setStatus] = useState<"all" | "unread">("all");
   const [items, setItems] = useState<AppNotification[] | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -68,7 +72,7 @@ export default function NotificationsPage() {
     setItems(null);
     setCursor(null);
     loadFirst("reset").catch(() => setFailed(true));
-  }, [loadFirst]);
+  }, [loadFirst, locale]);
 
   const request = useLiveRefresh(
     () => loadFirst("merge").catch(() => undefined),
@@ -109,25 +113,25 @@ export default function NotificationsPage() {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 py-6 sm:px-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-xl font-bold">Notifications</h1>
+        <h1 className="text-xl font-bold">{t("title")}</h1>
         <Button
           variant="outline"
           size="sm"
           onClick={() => void readAll()}
           disabled={busy || !items?.some((n) => !n.readAt)}
         >
-          Tout marquer comme lu
+          {t("list.readAll")}
         </Button>
       </div>
       <div
         role="tablist"
-        aria-label="Filtre"
+        aria-label={t("list.filter")}
         className="mt-4 flex gap-1 border-b"
       >
         {(
           [
-            ["all", "Toutes"],
-            ["unread", "Non lues"],
+            ["all", t("list.all")],
+            ["unread", t("list.unread")],
           ] as const
         ).map(([value, label]) => (
           <button
@@ -149,15 +153,13 @@ export default function NotificationsPage() {
       <div className="mt-4">
         {failed ? (
           <p className="text-sm text-muted-foreground">
-            Notifications indisponibles pour le moment.
+            {t("list.unavailable")}
           </p>
         ) : items === null ? (
-          <p className="text-sm text-muted-foreground">Chargement…</p>
+          <p className="text-sm text-muted-foreground">{t("loading")}</p>
         ) : items.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            {status === "unread"
-              ? "Aucune notification non lue."
-              : "Aucune notification."}
+            {status === "unread" ? t("list.emptyUnread") : t("empty")}
           </p>
         ) : (
           <ul
@@ -181,9 +183,14 @@ export default function NotificationsPage() {
                     <span className={n.readAt ? "" : "font-medium"}>
                       {n.body}
                     </span>
-                    {!n.readAt && <span className="sr-only"> (non lue)</span>}
+                    {!n.readAt && (
+                      <span className="sr-only"> {t("unreadMark")}</span>
+                    )}
                     <span className="block text-xs text-muted-foreground">
-                      {timeFormat.format(new Date(n.createdAt))}
+                      {format.dateWith(n.createdAt, {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })}
                     </span>
                   </span>
                 </Link>
@@ -198,7 +205,7 @@ export default function NotificationsPage() {
             onClick={() => void loadMore()}
             disabled={busy}
           >
-            Afficher plus
+            {t("showMore")}
           </Button>
         )}
       </div>

@@ -5,25 +5,24 @@
 export const PASSWORD_MIN_LENGTH = 6;
 export const PASSWORD_MAX_LENGTH = 100;
 
-export const PASSWORD_HINT = `Entre ${PASSWORD_MIN_LENGTH} et ${PASSWORD_MAX_LENGTH} caractères.`;
-export const PASSWORD_MISMATCH_MESSAGE =
-  "Les mots de passe ne correspondent pas.";
+// 1-16G : textes dans `auth` (`password.*`), avec ces limites en variables.
 
 /**
  * Contrôle avant soumission d'un nouveau mot de passe et de sa confirmation.
- * Renvoie le message à afficher, ou `null` si la soumission peut partir.
- * La confirmation reste côté interface : seul `password` est envoyé à l'API.
+ * Renvoie la clé du message à afficher (namespace `auth`), ou `null` si la
+ * soumission peut partir. La confirmation reste côté interface : seul
+ * `password` est envoyé à l'API.
  */
 export function validateNewPassword(
   password: string,
   confirmation: string,
-): string | null {
+): "password.lengthError" | "password.mismatch" | null {
   if (
     password.length < PASSWORD_MIN_LENGTH ||
     password.length > PASSWORD_MAX_LENGTH
   ) {
-    return `Le mot de passe doit contenir entre ${PASSWORD_MIN_LENGTH} et ${PASSWORD_MAX_LENGTH} caractères.`;
+    return "password.lengthError";
   }
-  if (password !== confirmation) return PASSWORD_MISMATCH_MESSAGE;
+  if (password !== confirmation) return "password.mismatch";
   return null;
 }

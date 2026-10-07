@@ -2,6 +2,9 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useLocale } from "@/i18n/locale-provider";
+import { rich } from "@/i18n/rich";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,7 +19,8 @@ import { getApiErrorCode, getApiErrorMessage } from "@/lib/api";
 import {
   confirmLegalAcceptance,
   fetchLegalAcceptanceStatus,
-  legalAcceptanceErrorMessage,
+  legalAcceptanceErrorKey,
+  type LegalAcceptanceErrorKey,
   matchesDisplayedVersions,
   type LegalAcceptanceStatus,
 } from "@/lib/legal/acceptance";
@@ -55,12 +59,17 @@ function writeDeferred(scope: string): void {
 //   serveur, seul un rechargement est proposé (aucun accord sur un texte
 //   que la page ne montre pas).
 export function LegalAcceptancePrompt({ scope }: { scope: string }) {
+  const { t } = useT("legal");
+  const { locale } = useLocale();
   const online = useOnlineStatus();
   const [status, setStatus] = useState<LegalAcceptanceStatus | null>(null);
   const [open, setOpen] = useState(false);
   const [checked, setChecked] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Clé de traduction, ou message déjà traduit par l'API (1-16G).
+  const [error, setError] = useState<
+    { key: LegalAcceptanceErrorKey } | { text: string } | null
+  >(null);
   const loaded = useRef(false);
 
   useEffect(() => {
@@ -102,15 +111,13 @@ export function LegalAcceptancePrompt({ scope }: { scope: string }) {
     setBusy(true);
     setError(null);
     try {
-      await confirmLegalAcceptance(status);
+      await confirmLegalAcceptance(status, locale);
       setOpen(false);
       setStatus(null);
-      toast.success("Ton accord est enregistré.");
+      toast.success(t("prompt.recorded"));
     } catch (err) {
-      setError(
-        legalAcceptanceErrorMessage(getApiErrorCode(err)) ??
-          getApiErrorMessage(err),
-      );
+      const key = legalAcceptanceErrorKey(getApiErrorCode(err));
+      setError(key ? { key } : { text: getApiErrorMessage(err) });
     } finally {
       setBusy(false);
     }
@@ -125,11 +132,9 @@ export function LegalAcceptancePrompt({ scope }: { scope: string }) {
     >
       <DialogContent showCloseButton={false}>
         <DialogHeader>
-          <DialogTitle>Ton accord est demandé</DialogTitle>
+          <DialogTitle>{t("prompt.title")}</DialogTitle>
           <DialogDescription>
-            {upToDate
-              ? "Avant de continuer à utiliser Stock Master, lis les textes ci-dessous. Ton accord n'est enregistré que si tu coches la case et valides."
-              : "De nouvelles versions des conditions sont en vigueur. Recharge la page pour les afficher avant de donner ton accord."}
+            {upToDate ? t("prompt.description") : t("prompt.outdated")}
           </DialogDescription>
         </DialogHeader>
 
@@ -145,22 +150,27 @@ export function LegalAcceptancePrompt({ scope }: { scope: string }) {
                 className="mt-0.5 size-5 shrink-0 accent-primary"
               />
               <label htmlFor="legal-prompt-terms" className="leading-relaxed">
-                J&apos;ai lu et j&apos;accepte{" "}
+                {t("acceptance.prefix")}{" "}
                 {pendingDocs.map((doc, index) => (
                   <Fragment key={doc.id}>
                     {index > 0 &&
-                      (index === pendingDocs.length - 1 ? " et " : ", ")}
-                    les{" "}
+                      (index === pendingDocs.length - 1
+                        ? t("acceptance.and")
+                        : t("acceptance.comma"))}
+                    {t("acceptance.article")}{" "}
                     <a
                       href={doc.href}
                       target="_blank"
                       rel="noopener"
                       className="font-medium underline underline-offset-2"
                     >
-                      {doc.title.charAt(0).toLowerCase() + doc.title.slice(1)}
-                      <span className="sr-only"> (nouvel onglet)</span>
+                      {t(`documents.${doc.id}.inSentence`)}
+                      <span className="sr-only"> {t("acceptance.newTab")}</span>
                     </a>{" "}
-                    (version {doc.version})
+                    {t("acceptance.versions", {
+                      count: 1,
+                      versions: doc.version,
+                    })}
                   </Fragment>
                 ))}
                 .
@@ -168,27 +178,29 @@ export function LegalAcceptancePrompt({ scope }: { scope: string }) {
             </div>
             {noticeDocs.map((doc) => (
               <p key={doc.id} className="text-xs text-muted-foreground">
-                Information :{" "}
-                <a
-                  href={doc.href}
-                  target="_blank"
-                  rel="noopener"
-                  className="font-medium underline underline-offset-2"
-                >
-                  {doc.title.toLowerCase()}
-                  <span className="sr-only"> (nouvel onglet)</span>
-                </a>{" "}
-                (version {doc.version}). La lire ne vaut pas accord.
+                {rich(t("prompt.notice", { version: doc.version }), {
+                  doc: () => (
+                    <a
+                      href={doc.href}
+                      target="_blank"
+                      rel="noopener"
+                      className="font-medium underline underline-offset-2"
+                    >
+                      {t(`documents.${doc.id}.inSentence`)}
+                      <span className="sr-only"> {t("acceptance.newTab")}</span>
+                    </a>
+                  ),
+                })}
               </p>
             ))}
             {!online && (
               <p role="status" className="text-xs text-muted-foreground">
-                Connexion Internet nécessaire pour enregistrer ton accord.
+                {t("prompt.offline")}
               </p>
             )}
             {error && (
               <p role="alert" className="text-sm text-destructive">
-                {error}
+                {"key" in error ? t(error.key) : error.text}
               </p>
             )}
           </div>
@@ -196,7 +208,7 @@ export function LegalAcceptancePrompt({ scope }: { scope: string }) {
 
         <DialogFooter>
           <Button type="button" variant="outline" onClick={later}>
-            Plus tard
+            {t("prompt.later")}
           </Button>
           {upToDate ? (
             <Button
@@ -204,11 +216,11 @@ export function LegalAcceptancePrompt({ scope }: { scope: string }) {
               onClick={() => void accept()}
               disabled={!checked || busy || !online}
             >
-              {busy ? "Enregistrement…" : "J'accepte"}
+              {busy ? t("prompt.saving") : t("prompt.accept")}
             </Button>
           ) : (
             <Button type="button" onClick={() => window.location.reload()}>
-              Recharger
+              {t("prompt.reload")}
             </Button>
           )}
         </DialogFooter>

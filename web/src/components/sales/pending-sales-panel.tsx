@@ -7,6 +7,8 @@ import {
   ShieldAlertIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -26,7 +28,6 @@ import {
   OFFLINE_SALES_PANEL_OPEN_EVENT,
   useOfflineSales,
 } from "@/contexts/offline-sales-context";
-import { fmtXof } from "@/lib/currency";
 import {
   allowedOperationActions,
   describeOperationError,
@@ -34,14 +35,7 @@ import {
 } from "@/lib/offline-sales-policy";
 import type { OutboxOperation } from "@/lib/offline-sales-outbox-db";
 
-const STATUS_LABEL: Record<OutboxOperation["status"], string> = {
-  pending: "En attente",
-  syncing: "Envoi en cours",
-  synced: "Synchronisée",
-  conflict: "À traiter",
-  abandoned: "Abandonnée",
-};
-
+// 1-16G : libellés de statut dans `sales` (`outbox.status.*`).
 const STATUS_VARIANT = {
   pending: "secondary",
   syncing: "secondary",
@@ -56,6 +50,8 @@ const STATUS_VARIANT = {
 // synchronisées se télécharge depuis Analyses.
 // Aucune erreur brute, aucun token ni empreinte affichés.
 export function PendingSalesPanel() {
+  const { t } = useT("sales");
+  const format = useFormat();
   const { status, operations, blocked, online, syncNow, act } =
     useOfflineSales();
   const [editing, setEditing] = useState<OutboxOperation | null>(null);
@@ -86,15 +82,14 @@ export function PendingSalesPanel() {
   if (status === "idle" || status === "loading") {
     return (
       <p role="status" className="text-sm text-muted-foreground">
-        Chargement des ventes locales…
+        {t("outbox.loading")}
       </p>
     );
   }
   if (status === "error" || status === "unavailable") {
     return (
       <p role="alert" className="text-sm text-destructive">
-        Ventes locales illisibles pour cette session. Reconnecte-toi pour y
-        accéder ; elles restent conservées sur cet appareil.
+        {t("outbox.unreadable")}
       </p>
     );
   }
@@ -104,9 +99,9 @@ export function PendingSalesPanel() {
       <dl className="grid grid-cols-3 gap-2 text-center">
         {(
           [
-            ["En attente", counts.pending],
-            ["Envoi", counts.syncing],
-            ["À traiter", counts.conflict],
+            [t("outbox.counts.pending"), counts.pending],
+            [t("outbox.counts.syncing"), counts.syncing],
+            [t("outbox.counts.conflict"), counts.conflict],
           ] as const
         ).map(([label, value]) => (
           <div key={label} className="rounded-md border p-2">
@@ -127,10 +122,10 @@ export function PendingSalesPanel() {
           />
           <p>
             {blocked.reason === "subscription"
-              ? "Envoi suspendu : l'abonnement de ce commerce n'est pas actif. Les ventes restent sur cet appareil et repartiront après le renouvellement."
+              ? t("outbox.blocked.subscription")
               : blocked.reason === "access_denied"
-                ? "Envoi suspendu : le serveur a refusé l'accès (session, droits ou organisation). Reconnecte-toi ou contacte un administrateur ; les ventes restent sur cet appareil."
-                : "Envoi suspendu : une incohérence a été détectée. Note les ventes concernées et contacte le support avant de retirer l'opération."}
+                ? t("outbox.blocked.accessDenied")
+                : t("outbox.blocked.corruption")}
           </p>
         </div>
       )}
@@ -144,23 +139,20 @@ export function PendingSalesPanel() {
             onClick={() => void run(syncNow)}
           >
             <RefreshCwIcon className="mr-1 h-3.5 w-3.5" aria-hidden />
-            Synchroniser maintenant
+            {t("syncNow")}
           </Button>
         )}
       </div>
       {!online && counts.pending > 0 && (
         <p className="text-xs text-muted-foreground">
-          L&apos;envoi reprendra automatiquement au retour de la connexion,
-          application ouverte.
+          {t("outbox.resumeOnline")}
         </p>
       )}
 
       {unfinalized.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          Aucune vente en attente sur cet appareil.
-        </p>
+        <p className="text-sm text-muted-foreground">{t("outbox.empty")}</p>
       ) : (
-        <ul className="space-y-2" aria-label="Ventes non finalisées">
+        <ul className="space-y-2" aria-label={t("outbox.listLabel")}>
           {unfinalized.map((op) => (
             <OperationItem
               key={op.clientOperationId}
@@ -170,7 +162,7 @@ export function PendingSalesPanel() {
               onRetry={() =>
                 void run(async () => {
                   if (!(await act(op.clientOperationId, "retry"))) {
-                    toast.error("Action impossible.");
+                    toast.error(t("outbox.actionFailed"));
                   }
                 })
               }
@@ -186,10 +178,10 @@ export function PendingSalesPanel() {
       {synced.length > 0 && (
         <details className="rounded-md border p-3 text-sm">
           <summary className="cursor-pointer font-medium">
-            Récemment synchronisées ({synced.length})
+            {t("outbox.recentlySynced", { count: synced.length })}
           </summary>
           <p className="mt-1 text-xs text-muted-foreground">
-            Effacées automatiquement de cet appareil après 7 jours.
+            {t("outbox.syncedRetention")}
           </p>
           <ul className="mt-2 space-y-1">
             {synced.map((op) => (
@@ -199,12 +191,12 @@ export function PendingSalesPanel() {
               >
                 <span className="min-w-0 truncate">
                   {op.display.productName} — {op.payload.quantity} ×{" "}
-                  {fmtXof(op.payload.salePrice)}
+                  {format.fcfa(op.payload.salePrice)}
                 </span>
                 <span className="shrink-0 text-muted-foreground">
                   {op.lastError?.code === "SALE_OPERATION_ALREADY_APPLIED"
-                    ? "Annulée ensuite"
-                    : "Confirmée"}
+                    ? t("outbox.cancelledLater")
+                    : t("outbox.confirmed")}
                 </span>
               </li>
             ))}
@@ -238,19 +230,18 @@ export function PendingSalesPanel() {
           <AlertDialogHeader>
             <AlertDialogTitle>
               {confirm?.action === "remove-corrupted"
-                ? "Retirer cette vente de la file ?"
-                : "Abandonner cette vente ?"}
+                ? t("outbox.confirm.removeTitle")
+                : t("outbox.confirm.abandonTitle")}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirm && allowedOperationActions(confirm.op).mayBeRecorded
-                ? "Attention : le serveur a peut-être déjà enregistré cette vente. Vérifie la liste des ventes avant de l'abandonner. "
-                : "Cette vente ne sera jamais envoyée au serveur. "}
-              Elle ne sera plus proposée à l&apos;envoi et restera visible sur
-              cet appareil (aucune suppression silencieuse).
+                ? t("outbox.confirm.mayBeRecorded")
+                : t("outbox.confirm.neverSent")}{" "}
+              {t("outbox.confirm.staysVisible")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
@@ -261,14 +252,14 @@ export function PendingSalesPanel() {
                   if (
                     !(await act(target.op.clientOperationId, target.action))
                   ) {
-                    toast.error("Action impossible.");
+                    toast.error(t("outbox.actionFailed"));
                   }
                 });
               }}
             >
               {confirm?.action === "remove-corrupted"
-                ? "Retirer"
-                : "Abandonner"}
+                ? t("outbox.actions.remove")
+                : t("outbox.actions.abandon")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -292,8 +283,11 @@ function OperationItem({
   onAbandon: () => void;
   onRemoveCorrupted: () => void;
 }) {
+  const { t } = useT("sales");
+  const format = useFormat();
   const allowed = allowedOperationActions(op);
-  const message = describeOperationError(op.lastError);
+  const errorKey = describeOperationError(op.lastError);
+  const message = errorKey ? t(`outbox.errors.${errorKey}`) : null;
   return (
     <li>
       <Card>
@@ -302,22 +296,22 @@ function OperationItem({
             <div className="min-w-0">
               <p className="truncate font-semibold">{op.display.productName}</p>
               <p className="text-xs text-muted-foreground">
-                {new Date(op.payload.occurredAt).toLocaleString("fr-FR")}
+                {format.dateTime(op.payload.occurredAt)}
               </p>
             </div>
             <Badge variant={STATUS_VARIANT[op.status]} className="shrink-0">
-              {STATUS_LABEL[op.status]}
+              {t(`outbox.status.${op.status}`)}
             </Badge>
           </div>
           <p>
-            {op.payload.quantity} × {fmtXof(op.payload.salePrice)} ={" "}
+            {op.payload.quantity} × {format.fcfa(op.payload.salePrice)} ={" "}
             <strong>
-              {fmtXof(op.payload.quantity * op.payload.salePrice)}
+              {format.fcfa(op.payload.quantity * op.payload.salePrice)}
             </strong>
           </p>
           {(op.payload.buyerName || op.payload.buyerContact) && (
             <p className="wrap-break-word text-xs text-muted-foreground">
-              Acheteur : {op.payload.buyerName ?? "—"}
+              {t("buyer")} {op.payload.buyerName ?? "—"}
               {op.payload.buyerContact ? ` — ${op.payload.buyerContact}` : ""}
             </p>
           )}
@@ -331,7 +325,9 @@ function OperationItem({
               )}
               <span>
                 {message}
-                {op.attempts > 0 ? ` Tentatives : ${op.attempts}.` : ""}
+                {op.attempts > 0
+                  ? ` ${t("outbox.attempts", { count: op.attempts })}`
+                  : ""}
               </span>
             </p>
           )}
@@ -347,7 +343,7 @@ function OperationItem({
                   onClick={onEdit}
                   disabled={busy}
                 >
-                  Corriger
+                  {t("outbox.actions.edit")}
                 </Button>
               )}
               {allowed.retry && (
@@ -357,7 +353,7 @@ function OperationItem({
                   onClick={onRetry}
                   disabled={busy}
                 >
-                  Réessayer
+                  {t("outbox.actions.retry")}
                 </Button>
               )}
               {allowed.abandon && (
@@ -369,7 +365,7 @@ function OperationItem({
                   onClick={onAbandon}
                   disabled={busy}
                 >
-                  Abandonner
+                  {t("outbox.actions.abandon")}
                 </Button>
               )}
               {allowed.removeCorrupted && (
@@ -381,7 +377,7 @@ function OperationItem({
                   onClick={onRemoveCorrupted}
                   disabled={busy}
                 >
-                  Retirer de la file
+                  {t("outbox.actions.removeFromQueue")}
                 </Button>
               )}
             </div>
@@ -396,16 +392,15 @@ function OperationItem({
 // restent consultables avant déconnexion. Rien si la file
 // est vide.
 export function PendingSalesIfAny() {
+  const { t } = useT("sales");
   const { unfinalizedCount } = useOfflineSales();
   if (unfinalizedCount === 0) return null;
   return (
     <section
-      aria-label="Ventes en attente sur cet appareil"
+      aria-label={t("pendingOnDevice")}
       className="w-full space-y-3 text-left"
     >
-      <h2 className="text-base font-semibold">
-        Ventes en attente sur cet appareil
-      </h2>
+      <h2 className="text-base font-semibold">{t("pendingOnDevice")}</h2>
       <PendingSalesPanel />
     </section>
   );
@@ -418,6 +413,7 @@ export function PendingSalesIfAny() {
  * l'événement émis par le lien « ventes en attente ».
  */
 export function OfflineSalesPanelSection({ count }: { count: number }) {
+  const { t } = useT("sales");
   const [open, setOpen] = useState(false);
   const sectionRef = useRef<HTMLElement>(null);
 
@@ -448,7 +444,7 @@ export function OfflineSalesPanelSection({ count }: { count: number }) {
       id={OFFLINE_SALES_PANEL_ID}
       ref={sectionRef}
       tabIndex={-1}
-      aria-label="Ventes en attente sur cet appareil"
+      aria-label={t("pendingOnDevice")}
       className="scroll-mt-24 rounded-md border p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <details
@@ -456,7 +452,7 @@ export function OfflineSalesPanelSection({ count }: { count: number }) {
         onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
       >
         <summary className="cursor-pointer text-sm font-medium">
-          Ventes en attente sur cet appareil ({count})
+          {t("pendingOnDeviceCount", { count })}
         </summary>
         <div className="mt-3">
           <PendingSalesPanel />

@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeftIcon, FolderIcon, SearchIcon } from "lucide-react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
 import { ProductCard } from "@/components/products/product-card";
 import { CreateProductDialog } from "@/components/products/create-product-dialog";
 import { UpdateProductDialog } from "@/components/products/update-product-dialog";
@@ -54,6 +55,7 @@ function toOfflineSection(s: ApiSection): OfflineCatalogSection {
 // page continue en revanche d'ALIMENTER le cache (scope section) après
 // chaque chargement en ligne complet et réussi.
 export default function CatalogSectionPage() {
+  const { t } = useT("catalog");
   const params = useParams<{ id: string }>();
   const { authContext } = useOrganizationShell();
   const canManageCatalog = hasPermission(authContext, "catalog.manage");
@@ -237,12 +239,12 @@ export default function CatalogSectionPage() {
   const backHref = section?.parentId
     ? `/app/catalog/${section.parentId}`
     : "/app/catalog";
-  const backLabel = section?.parentId ? "Catalogue parent" : "Catalogue";
+  const backLabel = section?.parentId ? t("section.parent") : t("root.title");
 
   const handleDeleteProduct = async (id: string) => {
     try {
       await removeProduct(id);
-      toast.success("Produit supprimé");
+      toast.success(t("product.trashed"));
     } catch (err: unknown) {
       toast.error(getApiErrorMessage(err));
     }
@@ -278,7 +280,7 @@ export default function CatalogSectionPage() {
     try {
       await deleteSection(id);
       setSubSections((prev) => prev.filter((s) => s._id !== id));
-      toast.success("Sous-catalogue supprimé");
+      toast.success(t("section.subDeleted"));
     } catch (err: unknown) {
       toast.error(getApiErrorMessage(err));
     }
@@ -318,7 +320,7 @@ export default function CatalogSectionPage() {
         <div className="flex shrink-0 gap-2">
           {canManageCatalog && (mode === "subsections" || mode === "empty") && (
             <CreateSectionDialog
-              label="Nouveau sous-catalogue"
+              label={t("section.newSub")}
               onCreated={async (name, description) => {
                 const s = await createSection({
                   name,
@@ -348,8 +350,8 @@ export default function CatalogSectionPage() {
             className="pl-9"
             placeholder={
               mode === "subsections"
-                ? "Rechercher un sous-catalogue…"
-                : "Rechercher un produit…"
+                ? t("section.searchSub")
+                : t("section.searchProduct")
             }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -360,16 +362,16 @@ export default function CatalogSectionPage() {
       {/* 1-15B : état de la section courante modifié par un collègue. */}
       {sectionPurged ? (
         <p role="status" className="text-sm text-muted-foreground">
-          Ce catalogue a été supprimé définitivement.
+          {t("section.purged")}
         </p>
       ) : section?.deletedAt ? (
         <p role="status" className="text-sm text-muted-foreground">
-          Ce catalogue a été placé dans la corbeille.
+          {t("section.trashed")}
         </p>
       ) : null}
 
       {isLoading && (
-        <p className="text-sm text-muted-foreground">Chargement…</p>
+        <p className="text-sm text-muted-foreground">{t("loading")}</p>
       )}
       {!isLoading && error && (
         <p className="text-sm text-destructive">{error}</p>
@@ -380,7 +382,7 @@ export default function CatalogSectionPage() {
         <>
           {filteredSubSections.length === 0 && query.trim() ? (
             <p className="text-sm text-muted-foreground">
-              Aucun résultat pour « {query} ».
+              {t("noResults", { query })}
             </p>
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -403,11 +405,11 @@ export default function CatalogSectionPage() {
         <>
           {products.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              Aucun produit dans cette section.
+              {t("section.noProducts")}
             </p>
           ) : filtered.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              Aucun résultat pour « {query} ».
+              {t("noResults", { query })}
             </p>
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -432,12 +434,9 @@ export default function CatalogSectionPage() {
       {!isLoading && mode === "empty" && (
         <div className="flex flex-col items-center gap-4 py-16 text-center text-muted-foreground">
           <FolderIcon className="h-10 w-10 opacity-30" />
-          <p className="text-sm">Ce catalogue est vide.</p>
+          <p className="text-sm">{t("section.empty")}</p>
           {(canManageCatalog || canManageProducts) && (
-            <p className="text-xs">
-              Utilise les boutons ci-dessus pour créer un sous-catalogue ou
-              ajouter un produit.
-            </p>
+            <p className="text-xs">{t("section.emptyHint")}</p>
           )}
         </div>
       )}

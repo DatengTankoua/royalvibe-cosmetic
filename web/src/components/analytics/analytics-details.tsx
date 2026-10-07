@@ -13,33 +13,17 @@ import {
   type ProductRanking,
   type SellerRanking,
 } from "@/lib/api";
-import { fmtXof } from "@/lib/currency";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
 import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
-import { analyticsLabels } from "@/lib/analytics-labels";
 import { UNKNOWN } from "./insights-sections";
+import { useAnalytics } from "./use-analytics";
 
 // 1-16E — détails conservés de l'ancienne page Analyse (classements produits
 // et vendeurs du mois, historique par mois, vue toutes périodes). Montés
 // UNIQUEMENT quand la section est ouverte : aucune requête sinon. Champs
 // financiers absents sans droit (le serveur ne les renvoie pas).
 
-const L = analyticsLabels();
-const number = new Intl.NumberFormat("fr-FR");
-const UNKNOWN_COST_HINT = "Coût d'achat inconnu (produits supprimés)";
 const TH = "py-2 px-2 text-right font-normal";
-
-function monthLabel(period: string): string {
-  const [year, month] = period.split("-");
-  return new Date(Number(year), Number(month) - 1).toLocaleDateString("fr-FR", {
-    month: "long",
-    year: "numeric",
-  });
-}
-
-function money(value: number | null | undefined): string {
-  return value === null || value === undefined ? UNKNOWN : fmtXof(value);
-}
 
 export function AnalyticsDetails({
   month,
@@ -48,6 +32,14 @@ export function AnalyticsDetails({
   month: string;
   signals: readonly string[];
 }) {
+  // 1-16G : textes `analytics` (`details.*`), formats selon la langue.
+  const a = useAnalytics();
+  const { t, monthLabel } = a;
+  const number = { format: a.number };
+  const fmtXof = a.fcfa;
+  const money = (value: number | null | undefined) =>
+    value === null || value === undefined ? UNKNOWN : a.fcfa(value);
+  const UNKNOWN_COST_HINT = t("details.unknownCost");
   const [products, setProducts] = useState<ProductRanking[]>([]);
   const [sellers, setSellers] = useState<SellerRanking[]>([]);
   const [monthly, setMonthly] = useState<MonthlyTrend[]>([]);
@@ -98,7 +90,7 @@ export function AnalyticsDetails({
   useSocketSignals(signals, scheduleRefresh);
 
   if (loading) {
-    return <p className="text-sm text-muted-foreground">{L.loading}</p>;
+    return <p className="text-sm text-muted-foreground">{t("loading")}</p>;
   }
   if (error) {
     return (
@@ -109,7 +101,7 @@ export function AnalyticsDetails({
           onClick={() => void load()}
           className="text-sm text-(--tenant-accent-ink) underline underline-offset-2 hover:no-underline"
         >
-          {L.retry}
+          {t("retry")}
         </button>
       </div>
     );
@@ -120,31 +112,31 @@ export function AnalyticsDetails({
     <div className="flex flex-col gap-6">
       <section className="flex flex-col gap-2">
         <h3 className="font-medium">
-          Tous les produits vendus · {monthLabel(month)}
+          {t("details.allProducts", { month: monthLabel(month) })}
         </h3>
         {products.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{L.sells.topEmpty}</p>
+          <p className="text-sm text-muted-foreground">{t("sells.topEmpty")}</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-xs text-muted-foreground">
                   <th scope="col" className="py-2 pr-2 text-left font-normal">
-                    Produit
+                    {t("details.product")}
                   </th>
                   <th scope="col" className={TH}>
-                    Vendus
+                    {t("details.sold")}
                   </th>
                   <th scope="col" className={TH}>
-                    Montant
+                    {t("details.amount")}
                   </th>
                   {financials && (
                     <th scope="col" className={TH}>
-                      Gain estimé
+                      {t("details.estimatedGain")}
                     </th>
                   )}
                   <th scope="col" className="py-2 pl-2 text-right font-normal">
-                    Stock actuel
+                    {t("details.currentStock")}
                   </th>
                 </tr>
               </thead>
@@ -154,12 +146,12 @@ export function AnalyticsDetails({
                     <td className="py-2 pr-2">
                       {p.productName ?? (
                         <span className="italic text-muted-foreground">
-                          {L.sells.unnamed}
+                          {t("sells.unnamed")}
                         </span>
                       )}
                       {p.productDeleted && (
                         <Badge variant="secondary" className="ml-2">
-                          {L.sells.deleted}
+                          {t("sells.deleted")}
                         </Badge>
                       )}
                     </td>
@@ -192,10 +184,10 @@ export function AnalyticsDetails({
 
       <section className="flex flex-col gap-2">
         <h3 className="font-medium">
-          Ventes par vendeur · {monthLabel(month)}
+          {t("details.sellersTitle", { month: monthLabel(month) })}
         </h3>
         {sellers.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{L.sells.topEmpty}</p>
+          <p className="text-sm text-muted-foreground">{t("sells.topEmpty")}</p>
         ) : (
           <ul className="divide-y rounded-xl border">
             {sellers.map((s) => (
@@ -214,8 +206,15 @@ export function AnalyticsDetails({
                     {fmtXof(s.totalRevenue)}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {number.format(s.transactionCount)} vente(s) ·{" "}
-                    {number.format(s.totalUnitsSold)} unité(s)
+                    {t("details.sellerSales", {
+                      count: s.transactionCount,
+                      n: number.format(s.transactionCount),
+                    })}{" "}
+                    ·{" "}
+                    {t("details.sellerUnits", {
+                      count: s.totalUnitsSold,
+                      n: number.format(s.totalUnitsSold),
+                    })}
                   </p>
                 </div>
               </li>
@@ -225,25 +224,25 @@ export function AnalyticsDetails({
       </section>
 
       <section className="flex flex-col gap-2">
-        <h3 className="font-medium">Historique par mois</h3>
+        <h3 className="font-medium">{t("details.historyTitle")}</h3>
         {monthly.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{L.sells.topEmpty}</p>
+          <p className="text-sm text-muted-foreground">{t("sells.topEmpty")}</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-xs text-muted-foreground">
                   <th scope="col" className="py-2 pr-2 text-left font-normal">
-                    Mois
+                    {t("details.month")}
                   </th>
                   <th scope="col" className={TH}>
-                    Montant
+                    {t("details.amount")}
                   </th>
                   <th scope="col" className={TH}>
-                    Ventes
+                    {t("details.sales")}
                   </th>
                   <th scope="col" className="py-2 pl-2 text-right font-normal">
-                    Unités
+                    {t("details.units")}
                   </th>
                 </tr>
               </thead>
@@ -270,24 +269,26 @@ export function AnalyticsDetails({
 
       {overall && (
         <section className="flex flex-col gap-2">
-          <h3 className="font-medium">Depuis le début</h3>
+          <h3 className="font-medium">{t("details.sinceStart")}</h3>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
             <div>
               <dt className="text-xs text-muted-foreground">
-                Montant des ventes
+                {t("details.salesAmount")}
               </dt>
               <dd className="tabular-nums">{fmtXof(overall.totalRevenue)}</dd>
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">
-                Nombre de ventes
+                {t("details.salesCount")}
               </dt>
               <dd className="tabular-nums">
                 {number.format(overall.totalTransactions)}
               </dd>
             </div>
             <div>
-              <dt className="text-xs text-muted-foreground">Produits</dt>
+              <dt className="text-xs text-muted-foreground">
+                {t("details.products")}
+              </dt>
               <dd className="tabular-nums">
                 {number.format(overall.productsCount)}
               </dd>
@@ -295,7 +296,7 @@ export function AnalyticsDetails({
             {"totalInvested" in overall && (
               <div>
                 <dt className="text-xs text-muted-foreground">
-                  Capital investi
+                  {t("details.capital")}
                 </dt>
                 <dd className="tabular-nums">{money(overall.totalInvested)}</dd>
               </div>
@@ -303,7 +304,7 @@ export function AnalyticsDetails({
             {"netProfit" in overall && (
               <div>
                 <dt className="text-xs text-muted-foreground">
-                  Bénéfice estimé (toutes périodes)
+                  {t("details.profitAll")}
                 </dt>
                 <dd
                   className="tabular-nums"

@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { messageText, useMessage } from "@/i18n/use-message";
+import { rich } from "@/i18n/rich";
 import { PencilIcon, Crown } from "lucide-react";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,7 +21,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { EditMemberDialog } from "@/components/organization/edit-member-dialog";
-import { ROLE_LABELS, PERMISSION_LABELS } from "@/lib/organization-permissions";
 import { describeOrganizationError } from "@/lib/organization-errors";
 import { fetchMembers, transferOwnership, type ApiMember } from "@/lib/api";
 import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
@@ -32,10 +34,11 @@ const MEMBER_SIGNALS = ["members:changed"] as const;
 // Édition (role/permissions/status) : `members.manage`. Transfert de
 // propriété : `ownership.transfer`, réservé au rôle `owner` STRICT.
 export default function OrganizationMembersPage() {
+  const { t } = useT("organization");
   const { authContext } = useOrganizationShell();
   const [members, setMembers] = useState<ApiMember[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useMessage("organization");
   const [editing, setEditing] = useState<ApiMember | null>(null);
   const [transferring, setTransferring] = useState<ApiMember | null>(null);
   const [transferBusy, setTransferBusy] = useState(false);
@@ -50,23 +53,26 @@ export default function OrganizationMembersPage() {
   // contexte n'est jamais appliquée.
   const order = useRef(createResponseOrder());
   const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
-  const load = useCallback(async (options: { silent?: boolean } = {}) => {
-    if (!options.silent) setLoading(true);
-    const requestedAt = Date.now();
-    const ticket = order.current.begin();
-    try {
-      const data = await fetchMembers();
-      if (!order.current.accept(ticket)) return;
-      setMembers(data);
-      setError(null);
-      setLoadedAt(requestedAt);
-    } catch (err: unknown) {
-      // Une relecture silencieuse en échec conserve la liste affichée.
-      if (!options.silent) setError(describeOrganizationError(err));
-    } finally {
-      if (!options.silent) setLoading(false);
-    }
-  }, []);
+  const load = useCallback(
+    async (options: { silent?: boolean } = {}) => {
+      if (!options.silent) setLoading(true);
+      const requestedAt = Date.now();
+      const ticket = order.current.begin();
+      try {
+        const data = await fetchMembers();
+        if (!order.current.accept(ticket)) return;
+        setMembers(data);
+        setError(null);
+        setLoadedAt(requestedAt);
+      } catch (err: unknown) {
+        // Une relecture silencieuse en échec conserve la liste affichée.
+        if (!options.silent) setError(describeOrganizationError(err));
+      } finally {
+        if (!options.silent) setLoading(false);
+      }
+    },
+    [setError],
+  );
 
   // Aucune requête tant que la permission n'est pas confirmée (accès direct
   // par URL sans passer par l'onglet, déjà filtré par permission) : évite un
@@ -103,23 +109,24 @@ export default function OrganizationMembersPage() {
           return m;
         }),
       );
-      toast.success("Propriété transférée");
+      toast.success(t("members.transferred"));
       setTransferring(null);
     } catch (err) {
-      toast.error(describeOrganizationError(err));
+      toast.error(messageText(describeOrganizationError(err), t));
     } finally {
       setTransferBusy(false);
     }
   };
 
   if (loading || !authContext) {
-    return <p className="text-sm text-muted-foreground">Chargement…</p>;
+    return <p className="text-sm text-muted-foreground">{t("loading")}</p>;
   }
   if (!canManage) {
     return (
       <p className="text-sm text-muted-foreground">
-        La permission « Gérer les membres » est requise pour accéder à cet
-        écran.
+        {t("members.permissionRequired", {
+          permission: t("permissions.members.manage"),
+        })}
       </p>
     );
   }
@@ -151,7 +158,7 @@ export default function OrganizationMembersPage() {
                   )}
                   {isSelf && (
                     <span className="ml-1 text-xs text-muted-foreground">
-                      (vous)
+                      {t("members.you")}
                     </span>
                   )}
                 </p>
@@ -159,21 +166,17 @@ export default function OrganizationMembersPage() {
                   {member.user.email}
                 </p>
                 <div className="mt-1 flex flex-wrap gap-1">
-                  <Badge variant="secondary">{ROLE_LABELS[member.role]}</Badge>
+                  <Badge variant="secondary">{t(`roles.${member.role}`)}</Badge>
                   <Badge
                     variant={
                       member.status === "active" ? "default" : "destructive"
                     }
                   >
-                    {member.status === "active"
-                      ? "Active"
-                      : member.status === "suspended"
-                        ? "Suspendue"
-                        : "Révoquée"}
+                    {t(`memberStatus.${member.status}`)}
                   </Badge>
                   {member.permissions.map((p) => (
                     <Badge key={p} variant="outline" className="text-xs">
-                      {PERMISSION_LABELS[p]}
+                      {t(`permissions.${p}`)}
                     </Badge>
                   ))}
                 </div>
@@ -188,7 +191,7 @@ export default function OrganizationMembersPage() {
                       onClick={() => setEditing(member)}
                     >
                       <PencilIcon className="mr-1 h-3.5 w-3.5" />
-                      Modifier
+                      {t("members.edit")}
                     </Button>
                   )}
                   {canTransferToThis && (
@@ -197,7 +200,7 @@ export default function OrganizationMembersPage() {
                       size="sm"
                       onClick={() => setTransferring(member)}
                     >
-                      Transférer la propriété
+                      {t("members.transfer")}
                     </Button>
                   )}
                 </div>
@@ -228,21 +231,23 @@ export default function OrganizationMembersPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Transférer la propriété ?</AlertDialogTitle>
+            <AlertDialogTitle>{t("members.transferTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Tu vas céder définitivement la propriété de cette organisation à{" "}
-              <strong>{transferring?.user.name}</strong>. Tu deviendras
-              administrateur et ne pourras plus annuler cette action toi-même.
+              {rich(t("members.transferText"), {
+                name: () => <strong>{transferring?.user.name}</strong>,
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={transferBusy}
               onClick={() => void handleTransfer()}
             >
-              {transferBusy ? "Transfert…" : "Confirmer le transfert"}
+              {transferBusy
+                ? t("members.transferring")
+                : t("members.transferConfirm")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

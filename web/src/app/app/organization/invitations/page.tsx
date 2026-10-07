@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
+import { messageText, useMessage } from "@/i18n/use-message";
+import { rich } from "@/i18n/rich";
 import { Ban } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -18,7 +22,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { CreateInvitationDialog } from "@/components/organization/create-invitation-dialog";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
-import { ROLE_LABELS, PERMISSION_LABELS } from "@/lib/organization-permissions";
 import { describeOrganizationError } from "@/lib/organization-errors";
 import {
   fetchInvitations,
@@ -30,13 +33,6 @@ import { createResponseOrder } from "@/lib/refresh-coordinator";
 
 // 1-15C : création, révocation ou acceptation (payload vide).
 const INVITATION_SIGNALS = ["invitations:changed"] as const;
-
-const STATUS_LABELS: Record<ApiInvitation["status"], string> = {
-  pending: "En attente",
-  accepted: "Acceptée",
-  revoked: "Révoquée",
-  expired: "Expirée",
-};
 
 const STATUS_VARIANT: Record<
   ApiInvitation["status"],
@@ -52,10 +48,12 @@ const STATUS_VARIANT: Record<
 // n'existe que dans la réponse de création (voir CreateInvitationDialog) :
 // cette liste ne l'affiche/reconstruit JAMAIS.
 export default function OrganizationInvitationsPage() {
+  const { t } = useT("organization");
+  const format = useFormat();
   const { authContext } = useOrganizationShell();
   const [invitations, setInvitations] = useState<ApiInvitation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useMessage("organization");
   const [revoking, setRevoking] = useState<ApiInvitation | null>(null);
   const [revokeBusy, setRevokeBusy] = useState(false);
 
@@ -66,22 +64,25 @@ export default function OrganizationInvitationsPage() {
   // (rattrapage après reconnexion).
   const order = useRef(createResponseOrder());
   const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
-  const load = useCallback(async (options: { silent?: boolean } = {}) => {
-    if (!options.silent) setLoading(true);
-    const requestedAt = Date.now();
-    const ticket = order.current.begin();
-    try {
-      const data = await fetchInvitations();
-      if (!order.current.accept(ticket)) return;
-      setInvitations(data);
-      setError(null);
-      setLoadedAt(requestedAt);
-    } catch (err: unknown) {
-      if (!options.silent) setError(describeOrganizationError(err));
-    } finally {
-      if (!options.silent) setLoading(false);
-    }
-  }, []);
+  const load = useCallback(
+    async (options: { silent?: boolean } = {}) => {
+      if (!options.silent) setLoading(true);
+      const requestedAt = Date.now();
+      const ticket = order.current.begin();
+      try {
+        const data = await fetchInvitations();
+        if (!order.current.accept(ticket)) return;
+        setInvitations(data);
+        setError(null);
+        setLoadedAt(requestedAt);
+      } catch (err: unknown) {
+        if (!options.silent) setError(describeOrganizationError(err));
+      } finally {
+        if (!options.silent) setLoading(false);
+      }
+    },
+    [setError],
+  );
 
   // Aucune requête tant que la permission n'est pas confirmée (accès direct
   // par URL, l'onglet étant déjà filtré) : le backend reste de toute façon
@@ -111,23 +112,24 @@ export default function OrganizationInvitationsPage() {
       setInvitations((prev) =>
         prev.map((i) => (i._id === updated._id ? updated : i)),
       );
-      toast.success("Invitation révoquée");
+      toast.success(t("invitations.revoked"));
       setRevoking(null);
     } catch (err) {
-      toast.error(describeOrganizationError(err));
+      toast.error(messageText(describeOrganizationError(err), t));
     } finally {
       setRevokeBusy(false);
     }
   };
 
   if (loading || !authContext) {
-    return <p className="text-sm text-muted-foreground">Chargement…</p>;
+    return <p className="text-sm text-muted-foreground">{t("loading")}</p>;
   }
   if (!canInvite) {
     return (
       <p className="text-sm text-muted-foreground">
-        La permission « Inviter des membres » est requise pour accéder à cet
-        écran.
+        {t("members.permissionRequired", {
+          permission: t("permissions.members.invite"),
+        })}
       </p>
     );
   }
@@ -149,7 +151,7 @@ export default function OrganizationInvitationsPage() {
 
       {invitations.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          Aucune invitation pour le moment.
+          {t("invitations.empty")}
         </p>
       ) : (
         <div className="space-y-3">
@@ -160,20 +162,21 @@ export default function OrganizationInvitationsPage() {
                   <p className="truncate font-medium">{invitation.email}</p>
                   <div className="mt-1 flex flex-wrap gap-1">
                     <Badge variant="secondary">
-                      {ROLE_LABELS[invitation.role]}
+                      {t(`roles.${invitation.role}`)}
                     </Badge>
                     <Badge variant={STATUS_VARIANT[invitation.status]}>
-                      {STATUS_LABELS[invitation.status]}
+                      {t(`invitationStatus.${invitation.status}`)}
                     </Badge>
                     {invitation.permissions.map((p) => (
                       <Badge key={p} variant="outline" className="text-xs">
-                        {PERMISSION_LABELS[p]}
+                        {t(`permissions.${p}`)}
                       </Badge>
                     ))}
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Expire le{" "}
-                    {new Date(invitation.expiresAt).toLocaleDateString("fr-FR")}
+                    {t("invitations.expiresOn", {
+                      date: format.date(invitation.expiresAt),
+                    })}
                   </p>
                 </div>
                 {invitation.status === "pending" && (
@@ -184,7 +187,7 @@ export default function OrganizationInvitationsPage() {
                     onClick={() => setRevoking(invitation)}
                   >
                     <Ban className="mr-1 h-3.5 w-3.5" />
-                    Révoquer
+                    {t("invitations.revoke")}
                   </Button>
                 )}
               </CardContent>
@@ -199,20 +202,21 @@ export default function OrganizationInvitationsPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Révoquer cette invitation ?</AlertDialogTitle>
+            <AlertDialogTitle>{t("invitations.revokeTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              L&apos;invitation destinée à <strong>{revoking?.email}</strong> ne
-              pourra plus être acceptée.
+              {rich(t("invitations.revokeText"), {
+                email: () => <strong>{revoking?.email}</strong>,
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={revokeBusy}
               onClick={() => void handleRevoke()}
             >
-              {revokeBusy ? "Révocation…" : "Révoquer"}
+              {revokeBusy ? t("invitations.revoking") : t("invitations.revoke")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

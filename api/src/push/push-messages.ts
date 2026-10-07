@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { PushCategory } from './schemas/push-category';
 import { SubscriptionPeriodKind } from '../subscriptions/subscription-terms';
+import type { AppLocale } from '../common/i18n/locale';
 
 /**
  * 1-16A — Contenu des notifications. GÉNÉRIQUE par construction : visible sur
@@ -41,11 +42,16 @@ export interface PushMessageSubject {
 
 export const NOTIFICATION_TITLE = 'Stock Master';
 
-/** 1-16A.1 — Texte générique d'une catégorie (push et liste du centre). */
+/**
+ * 1-16A.1 — Texte générique d'une catégorie (push et liste du centre).
+ * 1-16G : en anglais ou en français ; toujours aussi générique.
+ */
 export function notificationBody(
   category: PushCategory,
   periodKind: SubscriptionPeriodKind | null = null,
+  locale: AppLocale = 'fr',
 ): string {
+  if (locale === 'en') return notificationBodyEn(category, periodKind);
   switch (category) {
     case PushCategory.STOCK_DEPLETED:
       return 'Un produit est en rupture de stock.';
@@ -63,6 +69,30 @@ export function notificationBody(
       return 'Votre paiement a été confirmé.';
     case PushCategory.MONTHLY_REPORT:
       return 'Votre bilan mensuel est disponible.';
+  }
+}
+
+function notificationBodyEn(
+  category: PushCategory,
+  periodKind: SubscriptionPeriodKind | null,
+): string {
+  switch (category) {
+    case PushCategory.STOCK_DEPLETED:
+      return 'A product is out of stock.';
+    case PushCategory.STOCK_LOW:
+      return 'A product is running low.';
+    case PushCategory.SALE_CREATED:
+      return 'New sale recorded.';
+    case PushCategory.SALE_DIGEST:
+      return 'New sales have been recorded.';
+    case PushCategory.SUBSCRIPTION_ENDING:
+      return periodKind === SubscriptionPeriodKind.TRIAL
+        ? 'Your trial period is ending soon.'
+        : 'Your subscription is ending soon.';
+    case PushCategory.PAYMENT_SUCCEEDED:
+      return 'Your payment has been confirmed.';
+    case PushCategory.MONTHLY_REPORT:
+      return 'Your monthly summary is available.';
   }
 }
 
@@ -104,15 +134,24 @@ function pushTag(subject: PushMessageSubject): string {
   }
 }
 
+/**
+ * 1-16G : `locale` = langue du DESTINATAIRE (`User.locale` du titulaire de
+ * l'abonnement push), jamais celle de l'utilisateur à l'origine de
+ * l'événement ni du processus.
+ */
 export function buildPushMessage(
   subject: PushMessageSubject,
-  recipient: { userId: string; organizationId: string },
+  recipient: { userId: string; organizationId: string; locale?: AppLocale },
 ): PushMessagePayload {
   return {
     v: 1,
     category: subject.category,
     title: NOTIFICATION_TITLE,
-    body: notificationBody(subject.category, subject.periodKind),
+    body: notificationBody(
+      subject.category,
+      subject.periodKind,
+      recipient.locale ?? 'fr',
+    ),
     url: pushUrl(subject),
     tag: pushTag(subject),
     aud: { u: recipient.userId, o: recipient.organizationId },

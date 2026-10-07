@@ -315,46 +315,66 @@ export function allowedOperationActions(op: {
   return { ...none, abandon: true, mayBeRecorded: op.attempts > 0 };
 }
 
+export type OperationErrorKey =
+  | "insufficientStock"
+  | "productNotFound"
+  | "dateOutOfRange"
+  | "validationFailed"
+  | "expired"
+  | "serverUnavailable"
+  | "alreadyApplied"
+  | "inconsistency"
+  | "accessDenied"
+  | "subscriptionInactive"
+  | "network"
+  | "server"
+  | "auth"
+  | "refused";
+
 // Message GÉNÉRIQUE (jamais de texte serveur brut) pour une opération.
-export function describeOperationError(error?: OutboxLastError): string | null {
+// 1-16G : renvoie la CLÉ du message (`sales` : `outbox.errors.<clé>`) ;
+// codes et classification inchangés.
+export function describeOperationError(
+  error?: OutboxLastError,
+): OperationErrorKey | null {
   if (!error) return null;
   switch (error.code) {
     case "INSUFFICIENT_STOCK":
-      return "Stock insuffisant côté serveur.";
+      return "insufficientStock";
     case "PRODUCT_NOT_FOUND":
-      return "Produit introuvable ou supprimé.";
+      return "productNotFound";
     case "SALE_DATE_OUT_OF_RANGE":
-      return "Date de vente hors de la période autorisée.";
+      return "dateOutOfRange";
     case "VALIDATION_FAILED":
-      return "Données de vente refusées par le serveur.";
+      return "validationFailed";
     case "EXPIRED":
-      return "Vente en attente depuis plus de 14 jours : non envoyée automatiquement.";
+      return "expired";
     case "SERVER_UNAVAILABLE":
-      return "Serveur indisponible après plusieurs tentatives.";
+      return "serverUnavailable";
     case "SALE_OPERATION_ALREADY_APPLIED":
-      return "Déjà enregistrée par le serveur, puis annulée.";
+      return "alreadyApplied";
     case "IDEMPOTENCY_KEY_REUSED":
     case "IDEMPOTENCY_KEY_CONFLICT":
     case "PARTITION_MISMATCH":
-      return "Incohérence détectée : notez cette vente et contactez le support.";
+      return "inconsistency";
     case "ORGANIZATION_ACCESS_DENIED":
     case "PERMISSION_DENIED":
-      return "Accès refusé par le serveur.";
+      return "accessDenied";
     // 1-14C.2 : refus commercial — la vente reste en attente.
     case "SUBSCRIPTION_INACTIVE":
     case "SUBSCRIPTION_ACCESS_LIMITED":
-      return "Abonnement du commerce inactif : vente conservée, envoi après renouvellement.";
+      return "subscriptionInactive";
   }
   switch (error.kind) {
     case "network":
-      return "Réseau indisponible, nouvel essai automatique.";
+      return "network";
     case "server":
-      return "Envoi momentanément impossible, nouvel essai automatique.";
+      return "server";
     case "auth":
-      return "Session expirée ou accès refusé.";
+      return "auth";
     case "corruption":
-      return "Incohérence détectée : notez cette vente et contactez le support.";
+      return "inconsistency";
     default:
-      return "Vente refusée par le serveur.";
+      return "refused";
   }
 }

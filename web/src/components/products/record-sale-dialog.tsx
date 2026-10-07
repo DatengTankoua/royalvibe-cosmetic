@@ -3,6 +3,9 @@
 import { useRef, useState } from "react";
 import { ShoppingCartIcon, WifiOffIcon } from "lucide-react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
+import { useMessage } from "@/i18n/use-message";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,26 +22,13 @@ import {
   usePendingSalesHref,
   type RecordSaleResult,
 } from "@/contexts/offline-sales-context";
-import { fmtXof } from "@/lib/currency";
 import { describeOperationError } from "@/lib/offline-sales-policy";
 import { PendingSalesAnchor } from "@/components/sales/pending-sales-nav";
 
 const TEXT_MAX = 100;
-const PENDING_MESSAGE =
-  "Vente enregistrée sur cet appareil, en attente de synchronisation";
 
-const REFUSAL_MESSAGES: Record<
-  Extract<RecordSaleResult, { kind: "refused" }>["reason"],
-  string
-> = {
-  capability: "Saisie de vente non autorisée sur cet appareil.",
-  identity: "Session non vérifiée sur cet appareil : reconnecte-toi.",
-  invalid: "Données de vente invalides.",
-  limit:
-    "Limite de 200 ventes en attente atteinte : synchronise-les avant d'en saisir d'autres.",
-  unavailable: "Stockage local indisponible : vente non enregistrée.",
-  "not-replaceable": "Cette vente ne peut plus être corrigée.",
-};
+// 1-16G : messages dans `sales` (`form.refusal.*`), par raison de refus.
+type RefusalReason = Extract<RecordSaleResult, { kind: "refused" }>["reason"];
 
 export interface SaleFormInitial {
   quantity: number;
@@ -81,6 +71,8 @@ export function SaleFormDialog({
   replaces,
   onSaleRecorded,
 }: SaleFormDialogProps) {
+  const { t } = useT("sales");
+  const format = useFormat();
   const { online, canRecordSales, recordSale } = useOfflineSales();
   const indicative = useIndicativeStock(
     productId,
@@ -97,7 +89,9 @@ export function SaleFormDialog({
   );
   const [buyerName, setBuyerName] = useState(initial?.buyerName ?? "");
   const [buyerContact, setBuyerContact] = useState(initial?.buyerContact ?? "");
-  const [formError, setFormError] = useState<string | null>(null);
+  const [formError, setFormError] = useMessage("sales");
+  // Refus « limite de 200 ventes » : lien vers les ventes en attente.
+  const [limitReached, setLimitReached] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   // Garde synchrone : l'état React ne suffit pas contre un double clic.
   const submittingRef = useRef(false);
@@ -108,6 +102,7 @@ export function SaleFormDialog({
     setBuyerName("");
     setBuyerContact("");
     setFormError(null);
+    setLimitReached(false);
   };
 
   const validate = (): {
@@ -115,23 +110,26 @@ export function SaleFormDialog({
     salePrice: number;
   } | null => {
     if (!/^\d+$/.test(quantity.trim()) || Number(quantity) < 1) {
-      setFormError("La quantité doit être un entier supérieur ou égal à 1.");
+      setFormError((tr) => tr("form.errors.quantity"));
       return null;
     }
     const q = Number(quantity);
     if (maxQuantity !== undefined && q > maxQuantity) {
-      setFormError(
-        `Quantité supérieure au stock ${indicative.hasReservation ? "indicatif" : "disponible"} (${maxQuantity}).`,
+      const hasReservation = indicative.hasReservation;
+      setFormError((tr) =>
+        hasReservation
+          ? tr("form.errors.aboveIndicative", { max: maxQuantity })
+          : tr("form.errors.aboveStock", { max: maxQuantity }),
       );
       return null;
     }
     const price = Number(salePrice);
     if (salePrice.trim() === "" || !Number.isFinite(price) || price < 0) {
-      setFormError("Le prix doit être un nombre positif ou nul.");
+      setFormError((tr) => tr("form.errors.price"));
       return null;
     }
     if (buyerName.length > TEXT_MAX || buyerContact.length > TEXT_MAX) {
-      setFormError("Nom et contact : 100 caractères maximum.");
+      setFormError((tr) => tr("form.errors.buyerLength", { max: TEXT_MAX }));
       return null;
     }
     return { quantity: q, salePrice: price };
@@ -141,6 +139,7 @@ export function SaleFormDialog({
     e.preventDefault();
     if (submittingRef.current) return;
     setFormError(null);
+    setLimitReached(false);
     const values = validate();
     if (!values) return;
     submittingRef.current = true;
@@ -159,24 +158,24 @@ export function SaleFormDialog({
         replaces ? { replaces } : undefined,
       );
       if (result.kind === "refused") {
-        setFormError(REFUSAL_MESSAGES[result.reason]);
+        const reason: RefusalReason = result.reason;
+        setLimitReached(reason === "limit");
+        setFormError((tr) => tr(`form.refusal.${reason}`));
         return;
       }
       onOpenChange(false);
       reset();
       if (result.kind === "synced") {
-        toast.success("Vente enregistrée");
+        toast.success(t("form.recorded"));
         onSaleRecorded?.();
       } else if (result.kind === "conflict") {
-        toast.error(
-          describeOperationError(result.operation.lastError) ??
-            "Vente refusée par le serveur.",
-          { description: "Voir « Ventes en attente » pour la corriger." },
-        );
+        const key = describeOperationError(result.operation.lastError);
+        toast.error(t(`outbox.errors.${key ?? "refused"}`), {
+          description: t("form.conflictHint"),
+        });
       } else {
-        toast.info(PENDING_MESSAGE, {
-          description:
-            "Elle sera envoyée automatiquement au retour de la connexion.",
+        toast.info(t("form.pending"), {
+          description: t("form.pendingHint"),
         });
       }
     } finally {
@@ -190,7 +189,7 @@ export function SaleFormDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {replaces ? "Corriger la vente" : "Vente"} — {productName}
+            {replaces ? t("form.titleFix") : t("form.title")} — {productName}
           </DialogTitle>
           {!online && (
             <DialogDescription className="flex items-start gap-1.5">
@@ -198,20 +197,19 @@ export function SaleFormDialog({
                 className="mt-0.5 h-3.5 w-3.5 shrink-0"
                 aria-hidden
               />
-              La vente sera enregistrée sur cet appareil et envoyée au retour de
-              la connexion.
+              {t("form.offline")}
             </DialogDescription>
           )}
         </DialogHeader>
         {!canRecordSales ? (
           <p role="alert" className="text-sm text-destructive">
-            {REFUSAL_MESSAGES.capability}
+            {t("form.refusal.capability")}
           </p>
         ) : (
           <form onSubmit={handleSubmit} className="mt-2 space-y-4" noValidate>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="s-qty">Quantité</Label>
+                <Label htmlFor="s-qty">{t("form.quantity")}</Label>
                 <Input
                   id="s-qty"
                   type="number"
@@ -225,13 +223,14 @@ export function SaleFormDialog({
                 />
                 {maxQuantity !== undefined && (
                   <p className="text-xs text-muted-foreground">
-                    {indicative.hasReservation ? "Stock indicatif" : "Stock"} :{" "}
-                    {maxQuantity}
+                    {indicative.hasReservation
+                      ? t("form.indicativeStock", { count: maxQuantity })
+                      : t("form.stock", { count: maxQuantity })}
                   </p>
                 )}
               </div>
               <div className="space-y-2">
-                <Label htmlFor="s-price">Prix de vente réel (FCFA)</Label>
+                <Label htmlFor="s-price">{t("form.actualPrice")}</Label>
                 <Input
                   id="s-price"
                   type="number"
@@ -244,47 +243,49 @@ export function SaleFormDialog({
                 />
                 {salePrice && Number.isFinite(Number(salePrice)) && (
                   <p className="text-xs text-muted-foreground">
-                    Total :{" "}
-                    {fmtXof(Number(salePrice) * (Number(quantity) || 1))}
+                    {t("form.total", {
+                      amount: format.fcfa(
+                        Number(salePrice) * (Number(quantity) || 1),
+                      ),
+                    })}
                   </p>
                 )}
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="s-buyer">Nom acheteur (optionnel)</Label>
+              <Label htmlFor="s-buyer">{t("form.buyerName")}</Label>
               <Input
                 id="s-buyer"
                 maxLength={TEXT_MAX}
                 value={buyerName}
                 onChange={(e) => setBuyerName(e.target.value)}
-                placeholder="Prénom / Nom"
+                placeholder={t("form.buyerNamePlaceholder")}
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="s-contact">Contact acheteur (optionnel)</Label>
+              <Label htmlFor="s-contact">{t("form.buyerContact")}</Label>
               <Input
                 id="s-contact"
                 maxLength={TEXT_MAX}
                 value={buyerContact}
                 onChange={(e) => setBuyerContact(e.target.value)}
-                placeholder="Téléphone ou email"
+                placeholder={t("form.buyerContactPlaceholder")}
               />
             </div>
             {indicative.hasReservation && (
               <p className="text-xs text-muted-foreground">
-                Des ventes de ce produit sont en attente d&apos;envoi : le stock
-                affiché est indicatif.
+                {t("form.indicativeNote")}
               </p>
             )}
             {formError && (
               <p role="alert" className="text-sm text-destructive">
                 {formError}{" "}
-                {formError === REFUSAL_MESSAGES.limit && (
+                {limitReached && (
                   <PendingSalesAnchor
                     href={pendingLink.href}
                     offline={pendingLink.offline}
                   >
-                    Voir les ventes en attente
+                    {t("form.seePending")}
                   </PendingSalesAnchor>
                 )}
               </p>
@@ -292,11 +293,11 @@ export function SaleFormDialog({
             <Button type="submit" className="w-full" disabled={submitting}>
               {submitting
                 ? online
-                  ? "Envoi…"
-                  : "Enregistrement…"
+                  ? t("form.sending")
+                  : t("form.saving")
                 : replaces
-                  ? "Enregistrer la correction"
-                  : "Confirmer la vente"}
+                  ? t("form.saveFix")
+                  : t("form.confirm")}
             </Button>
           </form>
         )}
@@ -322,6 +323,7 @@ export function RecordSaleDialog({
   serverLoadedAt,
   onSaleRecorded,
 }: RecordSaleDialogProps) {
+  const { t } = useT("sales");
   const [open, setOpen] = useState(false);
   const { canRecordSales } = useOfflineSales();
   const indicative = useIndicativeStock(
@@ -338,7 +340,7 @@ export function RecordSaleDialog({
         disabled={indicative.value === 0}
       >
         <ShoppingCartIcon className="mr-1 h-4 w-4" />
-        Enregistrer une vente
+        {t("form.record")}
       </Button>
       <SaleFormDialog
         open={open}

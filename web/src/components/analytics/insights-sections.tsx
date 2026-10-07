@@ -20,14 +20,13 @@ import type {
   InsightTotals,
 } from "@/lib/api";
 import { fetchInsightList, getApiErrorMessage } from "@/lib/api";
-import { fmtXof } from "@/lib/currency";
-import { analyticsLabels } from "@/lib/analytics-labels";
+import { useAnalytics, type AnalyticsFormat } from "./use-analytics";
 
 // 1-16E — sections de la page Analyse. Aucun calcul de décision ici : les
 // listes, seuils et estimations viennent du serveur (valeurs non arrondies) ;
 // ce module n'arrondit que pour l'affichage.
+// 1-16G : textes dans le namespace `analytics`, formats selon la langue.
 
-const L = analyticsLabels();
 // 1-15D : un chiffre inconnu s'affiche « — », jamais 0.
 export const UNKNOWN = "—";
 
@@ -36,30 +35,6 @@ export const FOCUS =
 const SECTION_TITLE = "text-lg font-semibold";
 const ACTION_PRIMARY = `${FOCUS} inline-flex min-h-10 items-center rounded-lg bg-(--tenant-accent) px-3 text-sm font-medium text-(--tenant-accent-foreground) hover:ring-2 hover:ring-(--tenant-accent-border)`;
 const ACTION_SECONDARY = `${FOCUS} inline-flex min-h-10 items-center rounded-lg border border-(--tenant-accent-border) px-3 text-sm font-medium text-(--tenant-accent-ink) hover:bg-(--tenant-accent-soft)`;
-
-const number = new Intl.NumberFormat("fr-FR");
-const decimal = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 });
-
-/** Jours estimés : 1 décimale sous 10 jours, entier au-delà (affichage seul). */
-export function formatDays(days: number): string {
-  return days < 10 ? decimal.format(days) : number.format(Math.floor(days));
-}
-
-export function formatShortDate(value: string | Date): string {
-  return new Date(value).toLocaleDateString("fr-FR", {
-    day: "numeric",
-    month: "short",
-  });
-}
-
-function formatDateTime(value: string | Date): string {
-  return new Date(value).toLocaleString("fr-FR", {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 /** Dernier jour inclus d'un intervalle `[start, end[`. */
 function lastIncludedDay(end: string): Date {
@@ -96,11 +71,22 @@ function editHref(item: { productId: string; sectionId: string }) {
   return `/app/catalog/${item.sectionId}?modifier=${item.productId}`;
 }
 
-function stockFact(item: InsightStockItem, kind: InsightPriorityKind): string {
+function remainingText(a: AnalyticsFormat, quantity: number): string {
+  return a.t("stock.remaining", { n: a.number(quantity) });
+}
+
+function stockFact(
+  a: AnalyticsFormat,
+  item: InsightStockItem,
+  kind: InsightPriorityKind,
+): string {
   const e = item.estimate;
-  const base = `${item.name} : ${L.stock.remaining(item.remainingQuantity)}`;
+  const base = a.t("watch.stockFact", {
+    name: item.name,
+    remaining: remainingText(a, item.remainingQuantity),
+  });
   if (kind === "soon" && e.estimable && e.daysLeft !== null) {
-    return `${base}, ${L.stock.daysLeft(formatDays(e.daysLeft))}`;
+    return `${base}, ${a.t("stock.daysLeft", { days: a.formatDays(e.daysLeft) })}`;
   }
   return base;
 }
@@ -118,31 +104,37 @@ function PriorityCard({
   rights: ProductActionRights;
   onSeeAll: (kind: InsightPriorityKind) => void;
 }) {
-  const k = L.watch.kinds[priority.kind];
-  const kinds = L.watch.kinds;
+  const a = useAnalytics();
+  const { t } = a;
   const Icon = KIND_ICON[priority.kind];
-  const t = insights.thresholds;
+  const thresholds = insights.thresholds;
   const first = priority.items[0];
   const fact =
     priority.kind === "price"
-      ? `${(first as InsightPriceItem).name} : gain estimé ${fmtXof((first as InsightPriceItem).gain)}`
-      : stockFact(first as InsightStockItem, priority.kind);
+      ? t("watch.priceFact", {
+          name: (first as InsightPriceItem).name,
+          gain: a.fcfa((first as InsightPriceItem).gain),
+        })
+      : stockFact(a, first as InsightStockItem, priority.kind);
   const reason =
     priority.kind === "soon"
-      ? kinds.soon.reason(t.soonStockoutDays)
+      ? t("watch.kinds.soon.reason", { days: thresholds.soonStockoutDays })
       : priority.kind === "stale"
-        ? kinds.stale.reason(t.observationWindowDays)
-        : kinds[priority.kind].reason;
+        ? t("watch.kinds.stale.reason", {
+            days: thresholds.observationWindowDays,
+          })
+        : t(`watch.kinds.${priority.kind}.reason`);
   const action =
     rights.canAdjustStock && priority.kind !== "stale"
       ? {
           href: editHref(first),
           label:
             priority.kind === "price"
-              ? L.watch.actions.reviewPrice
-              : L.watch.actions.restock,
+              ? t("watch.actions.reviewPrice")
+              : t("watch.actions.restock"),
         }
-      : { href: productHref(first), label: L.watch.actions.viewProduct };
+      : { href: productHref(first), label: t("watch.actions.viewProduct") };
+  const others = priority.count - 1;
   const titleId = `priority-${priority.kind}`;
   return (
     <article
@@ -155,14 +147,21 @@ function PriorityCard({
           className={`size-5 shrink-0 ${KIND_TONE[priority.kind]}`}
         />
         <h3 id={titleId} className="font-semibold">
-          {k.title}
+          {t(`watch.kinds.${priority.kind}.title`)}
         </h3>
       </div>
-      <p className="text-sm text-muted-foreground">{k.count(priority.count)}</p>
+      <p className="text-sm text-muted-foreground">
+        {t(`watch.kinds.${priority.kind}.count`, {
+          count: priority.count,
+          n: a.number(priority.count),
+        })}
+      </p>
       <p className="text-sm font-medium wrap-break-word">
         {fact}{" "}
         <span className="font-normal text-muted-foreground">
-          {L.watch.andOthers(priority.count - 1)}
+          {others > 0
+            ? t("watch.andOthers", { count: others, n: a.number(others) })
+            : ""}
         </span>
       </p>
       <p className="text-xs text-muted-foreground">{reason}</p>
@@ -176,7 +175,7 @@ function PriorityCard({
             onClick={() => onSeeAll(priority.kind)}
             className={ACTION_SECONDARY}
           >
-            {L.watch.seeAll(priority.count)}
+            {t("watch.seeAll", { count: priority.count })}
           </button>
         )}
       </div>
@@ -193,14 +192,15 @@ export function WatchSection({
   rights: ProductActionRights;
   onSeeAll: (kind: InsightPriorityKind) => void;
 }) {
+  const { t } = useAnalytics();
   return (
     <section aria-labelledby="watch-title" className="flex flex-col gap-3">
       <h2 id="watch-title" className={SECTION_TITLE}>
-        {L.watch.title}
+        {t("watch.title")}
       </h2>
       {insights.priorities.length === 0 ? (
         <p className="rounded-2xl border bg-card p-4 text-sm text-muted-foreground">
-          {L.watch.empty}
+          {t("watch.empty")}
         </p>
       ) : (
         <div className="grid gap-3 md:grid-cols-3">
@@ -233,12 +233,14 @@ function Change({
   /** « Total du mois » / « Par jour » : mois terminés de durées différentes. */
   prefix?: string;
 }) {
+  const a = useAnalytics();
+  const { t } = a;
   if (change === null) {
     // Période précédente à zéro : jamais de pourcentage trompeur.
     return (
       <p className="text-xs text-muted-foreground">
-        {prefix && `${prefix} : `}
-        {L.sales.previousZero(format(previous))}
+        {prefix && `${t("sales.prefixed", { prefix })} `}
+        {t("sales.previousZero", { amount: format(previous) })}
       </p>
     );
   }
@@ -249,16 +251,16 @@ function Change({
       ? ArrowUpRightIcon
       : ArrowDownRightIcon;
   const label = flat
-    ? L.sales.changeFlat
+    ? t("sales.changeFlat")
     : change > 0
-      ? L.sales.changeUp(decimal.format(change))
-      : L.sales.changeDown(decimal.format(Math.abs(change)));
+      ? t("sales.changeUp", { pct: a.decimal(change) })
+      : t("sales.changeDown", { pct: a.decimal(Math.abs(change)) });
   return (
     <p className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
       <Icon aria-hidden className="size-3.5" />
-      {prefix && <span>{prefix} :</span>}
+      {prefix && <span>{t("sales.prefixed", { prefix })}</span>}
       <span className="font-medium text-foreground">{label}</span>
-      <span>· {L.sales.previousValue(format(previous))}</span>
+      <span>· {t("sales.previousValue", { value: format(previous) })}</span>
     </p>
   );
 }
@@ -286,13 +288,15 @@ function sentence(text: string): string {
   return text.endsWith(".") ? text : `${text}.`;
 }
 
-function gainText(totals: InsightTotals): string {
+function gainText(a: AnalyticsFormat, totals: InsightTotals): string {
   return totals.gain === null || totals.gain === undefined
     ? UNKNOWN
-    : fmtXof(totals.gain);
+    : a.fcfa(totals.gain);
 }
 
 export function SalesSection({ insights }: { insights: AnalyticsInsights }) {
+  const a = useAnalytics();
+  const { t, formatShortDate, formatDateTime } = a;
   const { period, summary, comparison } = insights;
   const from = formatShortDate(period.start);
   const to = period.inProgress
@@ -316,25 +320,25 @@ export function SalesSection({ insights }: { insights: AnalyticsInsights }) {
     <section aria-labelledby="sales-title" className="flex flex-col gap-3">
       <div>
         <h2 id="sales-title" className={SECTION_TITLE}>
-          {L.sales.title}
+          {t("sales.title")}
         </h2>
         <p className="text-sm text-muted-foreground">
           {period.inProgress
-            ? L.sales.periodInProgress(from, to)
-            : L.sales.periodClosed(from, to)}
+            ? t("sales.periodInProgress", { from, to })
+            : t("sales.periodClosed", { from, to })}
         </p>
       </div>
       <div
         className={`grid gap-3 ${showGain ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}
       >
-        <Kpi label={L.sales.revenue} value={fmtXof(summary.revenue)}>
+        <Kpi label={t("sales.revenue")} value={a.fcfa(summary.revenue)}>
           {prev && comparison.available && (
             <Change
               current={summary.revenue}
               previous={prev.revenue}
               change={comparison.revenueChange}
-              format={fmtXof}
-              prefix={durations ? L.sales.totalPrefix : undefined}
+              format={a.fcfa}
+              prefix={durations ? t("sales.totalPrefix") : undefined}
             />
           )}
           {prev && comparison.available && durations && (
@@ -342,22 +346,25 @@ export function SalesSection({ insights }: { insights: AnalyticsInsights }) {
               current={perDay(summary.revenue, durations.days)}
               previous={perDay(prev.revenue, durations.previousDays)}
               change={comparison.revenuePerDayChange ?? null}
-              format={(n) => L.sales.perDayValue(fmtXof(n))}
-              prefix={L.sales.perDayPrefix}
+              format={(n) => t("sales.perDayValue", { value: a.fcfa(n) })}
+              prefix={t("sales.perDayPrefix")}
             />
           )}
         </Kpi>
-        <Kpi label={L.sales.count} value={number.format(summary.salesCount)}>
+        <Kpi label={t("sales.count")} value={a.number(summary.salesCount)}>
           <p className="text-xs text-muted-foreground">
-            {L.sales.units(summary.unitsSold)}
+            {t("sales.units", {
+              count: summary.unitsSold,
+              n: a.number(summary.unitsSold),
+            })}
           </p>
           {prev && comparison.available && (
             <Change
               current={summary.salesCount}
               previous={prev.salesCount}
               change={comparison.salesCountChange}
-              format={(n) => number.format(n)}
-              prefix={durations ? L.sales.totalPrefix : undefined}
+              format={(n) => a.number(n)}
+              prefix={durations ? t("sales.totalPrefix") : undefined}
             />
           )}
           {prev && comparison.available && durations && (
@@ -365,19 +372,21 @@ export function SalesSection({ insights }: { insights: AnalyticsInsights }) {
               current={perDay(summary.salesCount, durations.days)}
               previous={perDay(prev.salesCount, durations.previousDays)}
               change={comparison.salesCountPerDayChange ?? null}
-              format={(n) => L.sales.perDayValue(decimal.format(n))}
-              prefix={L.sales.perDayPrefix}
+              format={(n) => t("sales.perDayValue", { value: a.decimal(n) })}
+              prefix={t("sales.perDayPrefix")}
             />
           )}
         </Kpi>
         {showGain && (
-          <Kpi label={L.sales.gain} value={gainText(summary)}>
+          <Kpi label={t("sales.gain")} value={gainText(a, summary)}>
             <p className="text-xs text-muted-foreground">
-              {summary.gain === null ? L.sales.gainUnknown : L.sales.gainHint}
+              {summary.gain === null
+                ? t("sales.gainUnknown")
+                : t("sales.gainHint")}
             </p>
             {prev && "gain" in prev && (
               <p className="text-xs text-muted-foreground">
-                {L.sales.previousValue(gainText(prev))}
+                {t("sales.previousValue", { value: gainText(a, prev) })}
               </p>
             )}
           </Kpi>
@@ -386,39 +395,48 @@ export function SalesSection({ insights }: { insights: AnalyticsInsights }) {
       <p className="text-xs text-muted-foreground">
         {comparison.available
           ? sentence(
-              `${L.sales.compareTo(
-                formatShortDate(comparison.start),
-                comparison.partial
+              `${t("sales.compareTo", {
+                from: formatShortDate(comparison.start),
+                to: comparison.partial
                   ? formatDateTime(comparison.end)
                   : formatShortDate(lastIncludedDay(comparison.end)),
-              )}${comparison.partial ? ` (${L.sales.compareSameElapsed})` : ""}`,
+              })}${comparison.partial ? ` (${t("sales.compareSameElapsed")})` : ""}`,
             ) +
             (durations
-              ? ` ${L.sales.durations(durations.days, durations.previousDays)}`
+              ? ` ${t("sales.durations", {
+                  days: durations.days,
+                  previousDays: durations.previousDays,
+                })}`
               : "")
-          : L.sales.noComparison[comparison.reason ?? "none"]}{" "}
-        {L.recordedSalesNote}
+          : t(`sales.noComparison.${comparison.reason ?? "none"}`)}{" "}
+        {t("recordedSalesNote")}
       </p>
     </section>
   );
 }
 
 function TrendBars({ insights }: { insights: AnalyticsInsights }) {
+  const a = useAnalytics();
+  const { t, formatShortDate } = a;
   const days = insights.trend;
   const max = Math.max(0, ...days.map((d) => d.revenue));
   const total = days.reduce((s, d) => s + d.revenue, 0);
   const best = max > 0 ? days.find((d) => d.revenue === max) : undefined;
-  const summary = L.sells.trendSummary(
-    fmtXof(total),
-    best
-      ? `${formatShortDate(best.date + "T12:00:00")} (${fmtXof(best.revenue)})`
-      : null,
-    days.length,
-  );
+  const summary = best
+    ? t("sells.trendSummary", {
+        count: days.length,
+        n: a.number(days.length),
+        total: a.fcfa(total),
+        best: t("sells.bestDay", {
+          date: formatShortDate(best.date + "T12:00:00"),
+          amount: a.fcfa(best.revenue),
+        }),
+      })
+    : t("sells.trendNone", { count: days.length, n: a.number(days.length) });
   return (
     <figure className="flex flex-col gap-2 rounded-2xl border bg-card p-4">
       <figcaption className="text-sm">
-        <span className="font-medium">{L.sells.trendTitle}</span>
+        <span className="font-medium">{t("sells.trendTitle")}</span>
         <span className="block text-muted-foreground">{summary}</span>
       </figcaption>
       {/* Graphique décoratif : sa lecture textuelle est le résumé ci-dessus
@@ -427,7 +445,12 @@ function TrendBars({ insights }: { insights: AnalyticsInsights }) {
         {days.map((d) => (
           <div
             key={d.date}
-            title={`${formatShortDate(d.date + "T12:00:00")} : ${fmtXof(d.revenue)} · ${d.salesCount} vente(s)`}
+            title={t("sells.barTitle", {
+              count: d.salesCount,
+              n: a.number(d.salesCount),
+              date: formatShortDate(d.date + "T12:00:00"),
+              amount: a.fcfa(d.revenue),
+            })}
             className="flex h-full flex-1 items-end"
           >
             <div
@@ -447,20 +470,20 @@ function TrendBars({ insights }: { insights: AnalyticsInsights }) {
         <summary
           className={`${FOCUS} cursor-pointer rounded text-(--tenant-accent-ink)`}
         >
-          {L.sells.trendTable}
+          {t("sells.trendTable")}
         </summary>
         <div className="mt-2 max-h-64 overflow-y-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-xs text-muted-foreground">
                 <th scope="col" className="py-1 text-left">
-                  {L.sells.day}
+                  {t("sells.day")}
                 </th>
                 <th scope="col" className="py-1 text-right">
-                  {L.sells.amount}
+                  {t("sells.amount")}
                 </th>
                 <th scope="col" className="py-1 text-right">
-                  {L.sells.salesCount}
+                  {t("sells.salesCount")}
                 </th>
               </tr>
             </thead>
@@ -471,10 +494,10 @@ function TrendBars({ insights }: { insights: AnalyticsInsights }) {
                     {formatShortDate(d.date + "T12:00:00")}
                   </td>
                   <td className="py-1 text-right tabular-nums">
-                    {fmtXof(d.revenue)}
+                    {a.fcfa(d.revenue)}
                   </td>
                   <td className="py-1 text-right tabular-nums">
-                    {number.format(d.salesCount)}
+                    {a.number(d.salesCount)}
                   </td>
                 </tr>
               ))}
@@ -487,36 +510,40 @@ function TrendBars({ insights }: { insights: AnalyticsInsights }) {
 }
 
 export function SellsSection({ insights }: { insights: AnalyticsInsights }) {
+  const a = useAnalytics();
+  const { t } = a;
   return (
     <section aria-labelledby="sells-title" className="flex flex-col gap-3">
       <h2 id="sells-title" className={SECTION_TITLE}>
-        {L.sells.title}
+        {t("sells.title")}
       </h2>
       <div className="grid gap-3 lg:grid-cols-2">
         <TrendBars insights={insights} />
         <div className="flex flex-col gap-2 rounded-2xl border bg-card p-4">
-          <h3 className="text-sm font-medium">{L.sells.topTitle}</h3>
+          <h3 className="text-sm font-medium">{t("sells.topTitle")}</h3>
           {insights.topProducts.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{L.sells.topEmpty}</p>
+            <p className="text-sm text-muted-foreground">
+              {t("sells.topEmpty")}
+            </p>
           ) : (
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-xs text-muted-foreground">
                   <th scope="col" className="py-1 text-left">
-                    {L.sells.product}
+                    {t("sells.product")}
                   </th>
                   <th scope="col" className="py-1 pl-3 text-right">
-                    {L.sells.amount}
+                    {t("sells.amount")}
                   </th>
                   <th scope="col" className="py-1 pl-3 text-right">
-                    {L.sells.quantity}
+                    {t("sells.quantity")}
                   </th>
                   <th
                     scope="col"
                     className="py-1 pl-3 text-right"
-                    title={L.sells.currentStockHint}
+                    title={t("sells.currentStockHint")}
                   >
-                    {L.sells.currentStock}
+                    {t("sells.currentStock")}
                   </th>
                 </tr>
               </thead>
@@ -528,11 +555,11 @@ export function SellsSection({ insights }: { insights: AnalyticsInsights }) {
                         <span>
                           {p.name ?? (
                             <span className="italic text-muted-foreground">
-                              {L.sells.unnamed}
+                              {t("sells.unnamed")}
                             </span>
                           )}{" "}
                           <span className="text-xs text-muted-foreground">
-                            ({L.sells.deleted})
+                            ({t("sells.deleted")})
                           </span>
                         </span>
                       ) : (
@@ -541,20 +568,20 @@ export function SellsSection({ insights }: { insights: AnalyticsInsights }) {
                           href={productHref(p)}
                           className={`${FOCUS} rounded underline-offset-2 hover:underline`}
                         >
-                          {p.name ?? L.sells.unnamed}
+                          {p.name ?? t("sells.unnamed")}
                         </Link>
                       )}
                     </td>
                     <td className="py-2 pl-3 text-right tabular-nums whitespace-nowrap">
-                      {fmtXof(p.revenue)}
+                      {a.fcfa(p.revenue)}
                     </td>
                     <td className="py-2 pl-3 text-right tabular-nums whitespace-nowrap">
-                      {number.format(p.unitsSold)}
+                      {a.number(p.unitsSold)}
                     </td>
                     <td className="py-2 pl-3 text-right tabular-nums whitespace-nowrap">
                       {p.remainingQuantity === null
                         ? UNKNOWN
-                        : number.format(p.remainingQuantity)}
+                        : a.number(p.remainingQuantity)}
                     </td>
                   </tr>
                 ))}
@@ -562,7 +589,7 @@ export function SellsSection({ insights }: { insights: AnalyticsInsights }) {
             </table>
           )}
           <p className="text-xs text-muted-foreground">
-            {L.sells.currentStockHint}
+            {t("sells.currentStockHint")}
           </p>
         </div>
       </div>
@@ -570,16 +597,18 @@ export function SellsSection({ insights }: { insights: AnalyticsInsights }) {
   );
 }
 
-function estimateText(item: InsightStockItem): string {
+function estimateText(a: AnalyticsFormat, item: InsightStockItem): string {
   const e = item.estimate;
   if (!e.estimable) {
     return e.reason === "invalid_quantities"
-      ? L.stock.invalidQuantities
-      : L.stock.notEnough;
+      ? a.t("stock.invalidQuantities")
+      : a.t("stock.notEnough");
   }
-  const parts = [L.stock.perDay(decimal.format(e.dailyAverage))];
+  const parts: string[] = [
+    a.t("stock.perDay", { avg: a.decimal(e.dailyAverage) }),
+  ];
   if (e.daysLeft !== null)
-    parts.unshift(L.stock.daysLeft(formatDays(e.daysLeft)));
+    parts.unshift(a.t("stock.daysLeft", { days: a.formatDays(e.daysLeft) }));
   return parts.join(" · ");
 }
 
@@ -607,9 +636,12 @@ function StockList({
   insights: AnalyticsInsights;
   rights: ProductActionRights;
 }) {
+  const a = useAnalytics();
+  const { t } = a;
   const [items, setItems] = useState<ListItem[]>(firstPage);
   const [total, setTotal] = useState(count);
   const [loadingMore, setLoadingMore] = useState(false);
+  // Message de l'API (déjà traduit) ; l'en-tête est traduit au rendu.
   const [loadError, setLoadError] = useState<string | null>(null);
   const titleId = `stock-${kind}-title`;
 
@@ -631,12 +663,14 @@ function StockList({
       });
       setTotal(page.count);
     } catch (err) {
-      setLoadError(`${L.stock.loadError} ${getApiErrorMessage(err)}`);
+      setLoadError(getApiErrorMessage(err));
     } finally {
       setLoadingMore(false);
     }
   };
 
+  const shown = Math.min(items.length, total);
+  const next = Math.min(total - items.length, insights.thresholds.listPageSize);
   return (
     <div
       id={`stock-${kind}`}
@@ -645,28 +679,37 @@ function StockList({
       className="flex flex-col gap-1 scroll-mt-24"
     >
       <h3 id={titleId} className="text-sm font-medium">
-        {L.stock.sections[kind]} ({number.format(total)})
+        {t("stock.sectionCount", {
+          title: t(`stock.sections.${kind}`),
+          n: a.number(total),
+        })}
       </h3>
       {items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{L.stock.noneInSection}</p>
+        <p className="text-sm text-muted-foreground">
+          {t("stock.noneInSection")}
+        </p>
       ) : (
         <ul className="divide-y rounded-xl border">
           {items.map((item) => {
             const isPrice = kind === "price";
+            const price = item as InsightPriceItem;
             const detail = isPrice
-              ? L.stock.priceFacts(
-                  fmtXof((item as InsightPriceItem).revenue),
-                  (item as InsightPriceItem).unitsSold,
-                  fmtXof((item as InsightPriceItem).purchasePrice),
-                  fmtXof((item as InsightPriceItem).gain),
-                )
+              ? t("stock.priceFacts", {
+                  count: price.unitsSold,
+                  n: a.number(price.unitsSold),
+                  revenue: a.fcfa(price.revenue),
+                  cost: a.fcfa(price.purchasePrice),
+                  gain: a.fcfa(price.gain),
+                })
               : kind === "stale"
-                ? L.stock.staleLabel(insights.thresholds.observationWindowDays)
+                ? t("stock.staleLabel", {
+                    days: insights.thresholds.observationWindowDays,
+                  })
                 : kind === "recent"
-                  ? L.stock.recentLabel
+                  ? t("stock.recentLabel")
                   : kind === "out"
                     ? null
-                    : estimateText(item as InsightStockItem);
+                    : estimateText(a, item as InsightStockItem);
             const canEdit =
               rights.canAdjustStock && kind !== "stale" && kind !== "recent";
             return (
@@ -680,7 +723,8 @@ function StockList({
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {!isPrice &&
-                      L.stock.remaining(
+                      remainingText(
+                        a,
                         (item as InsightStockItem).remainingQuantity,
                       )}
                     {!isPrice && detail ? " · " : ""}
@@ -694,9 +738,9 @@ function StockList({
                 >
                   {canEdit
                     ? isPrice
-                      ? L.watch.actions.reviewPrice
-                      : L.watch.actions.restock
-                    : L.watch.actions.viewProduct}
+                      ? t("watch.actions.reviewPrice")
+                      : t("watch.actions.restock")
+                    : t("watch.actions.viewProduct")}
                 </Link>
               </li>
             );
@@ -706,7 +750,11 @@ function StockList({
       {total > 0 && (
         <div className="flex flex-wrap items-center gap-3 pt-1">
           <p className="text-xs text-muted-foreground" aria-live="polite">
-            {L.stock.shownOf(Math.min(items.length, total), total)}
+            {t("stock.shownOf", {
+              count: shown,
+              shown: a.number(shown),
+              total: a.number(total),
+            })}
           </p>
           {items.length < total && (
             <button
@@ -717,20 +765,15 @@ function StockList({
               className={`${FOCUS} min-h-10 rounded-lg border border-(--tenant-accent-border) px-3 text-sm font-medium text-(--tenant-accent-ink) hover:bg-(--tenant-accent-soft) disabled:opacity-60`}
             >
               {loadingMore
-                ? L.loading
-                : L.stock.showMore(
-                    Math.min(
-                      total - items.length,
-                      insights.thresholds.listPageSize,
-                    ),
-                  )}
+                ? t("loading")
+                : t("stock.showMore", { count: next })}
             </button>
           )}
         </div>
       )}
       {loadError && (
         <p role="alert" className="text-xs text-destructive">
-          {loadError}
+          {t("stock.loadError")} {loadError}
         </p>
       )}
     </div>
@@ -744,6 +787,7 @@ export function StockDetails({
   insights: AnalyticsInsights;
   rights: ProductActionRights;
 }) {
+  const { t, formatShortDate } = useAnalytics();
   const { stock } = insights;
   const w = stock.window;
   const sections: Array<{
@@ -763,11 +807,11 @@ export function StockDetails({
   return (
     <div className="flex flex-col gap-4">
       <p className="text-xs text-muted-foreground">
-        {L.stock.windowNote(
-          w.days,
-          formatShortDate(w.start),
-          formatShortDate(lastIncludedDay(w.end)),
-        )}
+        {t("stock.windowNote", {
+          days: w.days,
+          from: formatShortDate(w.start),
+          to: formatShortDate(lastIncludedDay(w.end)),
+        })}
       </p>
       {sections.map((s) => (
         <StockList

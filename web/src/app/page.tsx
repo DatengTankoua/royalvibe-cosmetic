@@ -18,6 +18,8 @@ import {
   formatFcfa,
   monthlyEquivalentXaf,
 } from "@/lib/subscription-offers";
+import { getServerT } from "@/i18n/server";
+import { rich } from "@/i18n/rich";
 
 // 1-16B — Accueil public. Tous les contenus décrivent des capacités LIVRÉES
 // (vérifiées dans le code au moment du lot, voir
@@ -42,97 +44,52 @@ const bestOffer = SUBSCRIPTION_OFFERS.find(
   (offer) => monthlyEquivalentXaf(offer) === lowestMonthlyEquivalent,
 );
 const monthlyOffer = SUBSCRIPTION_OFFERS.find((offer) => offer.months === 1);
-const metaPrice = `${formatFcfa(monthlyOffer?.totalXaf ?? 0)} par mois, ou ${formatFcfa(bestOffer?.totalXaf ?? 0)} pour ${bestOffer?.label}`;
 
-export const metadata: Metadata = {
-  title: "Stock Master — Stock et ventes de votre commerce, sur téléphone",
-  description: `Suivez votre stock, enregistrez vos ventes, travaillez avec vos vendeurs et comprenez votre activité. ${
-    registrationEnabled
-      ? `Essai gratuit de ${TRIAL_DAYS} jours, puis ${metaPrice}.`
-      : `Abonnement de ${metaPrice}.`
-  }`,
-  openGraph: {
-    title: "Stock Master — Stock et ventes de votre commerce, sur téléphone",
-    description: `Stock, ventes, équipe et analyses pour les commerces et PME.${
-      registrationEnabled ? ` Essai gratuit de ${TRIAL_DAYS} jours.` : ""
+// 1-16G : textes dans `public` (`landing.*`), durées dans `subscription`.
+export async function generateMetadata(): Promise<Metadata> {
+  const { t, lng } = await getServerT("public");
+  const { t: ts } = await getServerT("subscription");
+  const metaPrice = t("landing.meta.price", {
+    monthly: formatFcfa(monthlyOffer?.totalXaf ?? 0, lng),
+    best: formatFcfa(bestOffer?.totalXaf ?? 0, lng),
+    term: bestOffer ? ts(`offers.term.${bestOffer.term}`) : "",
+  });
+  const title = t("landing.meta.title");
+  return {
+    title,
+    description: `${t("landing.meta.description")} ${
+      registrationEnabled
+        ? t("landing.meta.trial", { days: TRIAL_DAYS, price: metaPrice })
+        : t("landing.meta.subscription", { price: metaPrice })
     }`,
-  },
-};
+    openGraph: {
+      title,
+      description: `${t("landing.meta.ogDescription")}${
+        registrationEnabled
+          ? ` ${t("landing.meta.ogTrial", { days: TRIAL_DAYS })}`
+          : ""
+      }`,
+    },
+  };
+}
 
-const benefits = [
-  {
-    icon: PackageIcon,
-    title: "Suivre votre stock",
-    text: "Rangez vos produits par rayon. Chaque vente fait baisser le stock restant, et l'application vous signale les produits en stock faible ou épuisés.",
-  },
-  {
-    icon: ReceiptTextIcon,
-    title: "Enregistrer vos ventes",
-    text: "Choisissez le produit, la quantité et le prix, puis validez. Chaque vente garde sa date et le nom du vendeur.",
-  },
-  {
-    icon: UsersIcon,
-    title: "Travailler avec votre équipe",
-    text: "Invitez vos vendeurs avec un lien et choisissez ce que chacun peut faire : vendre, gérer le catalogue, voir les chiffres. Le prix ne change pas avec le nombre de vendeurs.",
-  },
-  {
-    icon: BarChart3Icon,
-    title: "Comprendre votre activité",
-    text: "La page Analyse calcule votre chiffre d'affaires, votre bénéfice et votre marge, et classe vos produits et vos vendeurs.",
-  },
-];
+const BENEFITS = [
+  { icon: PackageIcon, key: "stock" },
+  { icon: ReceiptTextIcon, key: "sales" },
+  { icon: UsersIcon, key: "team" },
+  { icon: BarChart3Icon, key: "analytics" },
+] as const;
 
-const offlineSteps = [
-  {
-    title: "Ouvrez l'application avec du réseau",
-    text: "Le téléphone garde votre catalogue et votre droit de vendre pendant 72 heures.",
-  },
-  {
-    title: "Vendez même sans connexion",
-    text: "Chaque vente est enregistrée sur l'appareil et marquée « en attente ».",
-  },
-  {
-    title: "Le réseau revient, les ventes partent",
-    text: "L'envoi est automatique. Le serveur vérifie le stock ; si une vente pose problème, elle vous est signalée pour que vous décidiez.",
-  },
-];
+const OFFLINE_STEPS = ["open", "sell", "sync"] as const;
 
-const faq = [
-  registrationEnabled
-    ? {
-        question: "Comment je commence ?",
-        answer: `Créez votre compte avec le nom de votre commerce, puis confirmez votre adresse e-mail grâce au lien reçu. Connectez-vous, ajoutez vos rayons et vos produits : vous pouvez enregistrer vos premières ventes. L'essai gratuit de ${TRIAL_DAYS} jours commence à la création du commerce.`,
-      }
-    : {
-        question: "Comment je commence ?",
-        answer:
-          "Les inscriptions en ligne sont momentanément fermées. Si votre commerce a déjà un compte, connectez-vous. Un vendeur rejoint le commerce avec le lien d'invitation que lui transmet le propriétaire.",
-      },
-  {
-    question: "Mes vendeurs peuvent-ils utiliser l'application ?",
-    answer:
-      "Oui. Depuis l'espace Organisation, créez une invitation : vous obtenez un lien à transmettre au vendeur, par SMS ou messagerie par exemple. Il crée son accès avec ce lien. Chaque membre peut enregistrer des ventes ; vous ajoutez les autres droits un par un.",
-  },
-  {
-    question: "Faut-il installer une application sur le téléphone ?",
-    answer:
-      "Non. Stock Master s'ouvre dans le navigateur d'un téléphone, d'une tablette ou d'un ordinateur, sans passer par un magasin d'applications. Vous avez la possibilité de telecharger l'application depuis le navigateurpour un accès plus rapide. Une fois téléchargée, vous pouvez l'ouvrir directement depuis votre écran d'accueil.",
-  },
-  {
-    question: "Et si la connexion est mauvaise ?",
-    answer:
-      "Si vous avez ouvert l'application avec du réseau dans les 72 dernières heures, vous pouvez continuer à enregistrer des ventes sans connexion. Elles restent sur l'appareil jusqu'à 14 jours et partent dès que le réseau revient. Ajouter des produits, consulter les analyses ou gérer l'équipe demande une connexion.",
-  },
-  {
-    question: "Comment fonctionne l'abonnement ?",
-    answer: `${registrationEnabled ? `Après les ${TRIAL_DAYS} jours d'essai, le` : "Le"} propriétaire choisit une durée de 1, 3, 6 ou 12 mois depuis l'espace Abonnement. Il n'y a aucun prélèvement automatique : chaque renouvellement est volontaire. Le prix couvre tout le commerce, quel que soit le nombre de vendeurs.`,
-  },
-  {
-    question: "Les autres commerces voient-ils mes données ?",
-    answer:
-      "Non. Chaque commerce a son propre espace. Seuls les membres que vous invitez y accèdent, avec les droits que vous leur donnez.",
-  },
-];
+const FAQ = [
+  registrationEnabled ? "startOpen" : "startClosed",
+  "sellers",
+  "install",
+  "network",
+  "subscription",
+  "privacy",
+] as const;
 
 const primaryCta =
   "inline-flex min-h-12 items-center justify-center rounded-lg bg-(--brand-orange) px-6 text-base font-semibold text-(--brand-navy) hover:bg-[#ff8533] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white";
@@ -145,7 +102,10 @@ const inlineLink =
 // seul `SessionCta` lit la session déjà en mémoire (jamais de fetch). Une
 // session ouverte (y compris limitée) n'est jamais redirigée : l'en-tête
 // propose « Ouvrir l'application », le shell /app décide ensuite.
-export default function LandingPage() {
+export default async function LandingPage() {
+  const { t, lng } = await getServerT("public");
+  const { t: ts } = await getServerT("subscription");
+  const fcfa = (amount: number) => formatFcfa(amount, lng);
   return (
     <div
       id="haut"
@@ -155,7 +115,7 @@ export default function LandingPage() {
         href="#contenu"
         className="sr-only z-40 rounded-md bg-(--public-bg) px-4 py-3 font-semibold text-(--brand-ink) focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:outline-2 focus:outline-(--brand-ink)"
       >
-        Aller au contenu
+        {t("skipToContent")}
       </a>
       <LandingHeader />
 
@@ -171,55 +131,62 @@ export default function LandingPage() {
                 id="hero-title"
                 className="text-[2.1rem] leading-[1.08] font-extrabold tracking-tight text-balance sm:text-5xl lg:text-[3.4rem]"
               >
-                Suivez votre stock et vos ventes depuis votre téléphone
+                {t("landing.hero.title")}
               </h1>
               <p className="mt-4 max-w-[34rem] text-base leading-relaxed text-pretty text-white/85 sm:mt-5 sm:text-lg">
-                Stock Master remplace le cahier de la boutique. Ajoutez vos
-                produits, enregistrez chaque vente et voyez ce qui reste en
-                rayon et ce que vous gagnez, seul ou avec vos vendeurs.
+                {t("landing.hero.text")}
               </p>
 
               <div className="mt-6 flex flex-col gap-3 sm:mt-8 sm:flex-row sm:items-center">
                 {registrationEnabled ? (
                   <Link href="/auth/register" className={primaryCta}>
-                    Commencer mon essai gratuit
+                    {t("landing.cta.startTrial")}
                   </Link>
                 ) : (
                   <Link href="/auth/login" className={primaryCta}>
-                    Se connecter
+                    {t("landing.cta.login")}
                   </Link>
                 )}
                 <a
                   href="#tarifs"
                   className="inline-flex min-h-12 items-center justify-center rounded-lg border border-white/40 px-6 text-base font-semibold text-white hover:border-white hover:bg-(--public-bg)/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                 >
-                  Voir les tarifs
+                  {t("landing.cta.seePricing")}
                 </a>
               </div>
 
               <p className="mt-5 text-sm leading-relaxed text-white/80">
-                {registrationEnabled ? (
-                  <>
-                    {TRIAL_DAYS} jours d&apos;essai gratuit, aucun paiement
-                    requis. Ensuite, à partir de{" "}
-                    <strong className="font-semibold text-white tabular-nums">
-                      {formatFcfa(lowestMonthlyEquivalent)}&nbsp;par mois
-                    </strong>{" "}
-                    avec la formule {bestOffer?.label}.
-                  </>
-                ) : (
-                  "Les inscriptions sont momentanément fermées. Les commerces déjà inscrits peuvent se connecter."
-                )}
+                {registrationEnabled
+                  ? rich(
+                      t("landing.hero.trialNote", {
+                        days: TRIAL_DAYS,
+                        price: fcfa(lowestMonthlyEquivalent),
+                        term: bestOffer
+                          ? ts(`offers.term.${bestOffer.term}`)
+                          : "",
+                      }),
+                      {
+                        price: (chunk) => (
+                          <strong className="font-semibold text-white tabular-nums">
+                            {chunk}
+                          </strong>
+                        ),
+                      },
+                    )
+                  : t("landing.hero.registrationClosed")}
               </p>
               {registrationEnabled && (
                 <p className="mt-2 text-sm text-white/80">
-                  Déjà inscrit ?{" "}
-                  <Link
-                    href="/auth/login"
-                    className={`${inlineLink} text-white focus-visible:outline-white`}
-                  >
-                    Se connecter
-                  </Link>
+                  {rich(t("landing.hero.alreadyRegistered"), {
+                    login: (chunk) => (
+                      <Link
+                        href="/auth/login"
+                        className={`${inlineLink} text-white focus-visible:outline-white`}
+                      >
+                        {chunk}
+                      </Link>
+                    ),
+                  })}
                 </p>
               )}
             </div>
@@ -238,11 +205,11 @@ export default function LandingPage() {
             id="fonctionnalites-title"
             className="max-w-2xl text-3xl font-extrabold tracking-tight text-balance sm:text-4xl"
           >
-            Tout ce qu&apos;il faut pour tenir la boutique
+            {t("landing.benefits.title")}
           </h2>
           <ul className="mt-10 grid gap-x-12 gap-y-10 sm:grid-cols-2">
-            {benefits.map(({ icon: Icon, title, text }) => (
-              <li key={title} className="flex gap-4">
+            {BENEFITS.map(({ icon: Icon, key }) => (
+              <li key={key} className="flex gap-4">
                 <span
                   aria-hidden
                   className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-(--brand-orange)/12 text-(--brand-ink)"
@@ -250,18 +217,18 @@ export default function LandingPage() {
                   <Icon className="size-5" />
                 </span>
                 <div className="min-w-0">
-                  <h3 className="text-lg font-bold">{title}</h3>
+                  <h3 className="text-lg font-bold">
+                    {t(`landing.benefits.${key}.title`)}
+                  </h3>
                   <p className="mt-1.5 leading-relaxed text-pretty text-(--public-muted)">
-                    {text}
+                    {t(`landing.benefits.${key}.text`)}
                   </p>
                 </div>
               </li>
             ))}
           </ul>
           <p className="mt-12 max-w-3xl border-t border-(--brand-ink)/10 pt-6 leading-relaxed text-(--public-muted)">
-            Aussi inclus : la corbeille pour récupérer un produit supprimé, le
-            convertisseur euro ↔ franc CFA, le logo et la couleur de votre
-            commerce, et un centre de notifications dans l&apos;application.
+            {t("landing.benefits.alsoIncluded")}
           </p>
         </section>
 
@@ -277,11 +244,11 @@ export default function LandingPage() {
               id="hors-ligne-title"
               className="max-w-2xl text-3xl font-extrabold tracking-tight text-balance sm:text-4xl"
             >
-              Le réseau coupe ? Vous continuez à vendre.
+              {t("landing.offline.title")}
             </h2>
             <ol className="mt-10 grid gap-8 md:grid-cols-3 md:gap-6">
-              {offlineSteps.map(({ title, text }, index) => (
-                <li key={title} className="flex gap-4 md:flex-col md:gap-3">
+              {OFFLINE_STEPS.map((key, index) => (
+                <li key={key} className="flex gap-4 md:flex-col md:gap-3">
                   <span
                     aria-hidden
                     className="flex size-9 shrink-0 items-center justify-center rounded-full bg-(--brand-solid) text-sm font-bold text-white tabular-nums"
@@ -289,19 +256,18 @@ export default function LandingPage() {
                     {index + 1}
                   </span>
                   <div className="min-w-0">
-                    <h3 className="text-lg font-bold">{title}</h3>
+                    <h3 className="text-lg font-bold">
+                      {t(`landing.offline.steps.${key}.title`)}
+                    </h3>
                     <p className="mt-1.5 leading-relaxed text-pretty text-(--public-muted)">
-                      {text}
+                      {t(`landing.offline.steps.${key}.text`)}
                     </p>
                   </div>
                 </li>
               ))}
             </ol>
             <p className="mt-10 max-w-3xl text-sm leading-relaxed text-(--public-muted)">
-              Sans réseau, seule la vente est possible. Ajouter des produits,
-              consulter les analyses ou gérer l&apos;équipe demande une
-              connexion. Les ventes en attente restent sur l&apos;appareil
-              jusqu&apos;à 14 jours.
+              {t("landing.offline.note")}
             </p>
           </div>
         </section>
@@ -319,15 +285,14 @@ export default function LandingPage() {
                 id="tarifs-title"
                 className="text-3xl font-extrabold tracking-tight text-balance sm:text-4xl"
               >
-                Un abonnement, la durée de votre choix
+                {t("landing.pricing.title")}
               </h2>
               <p className="mt-4 max-w-md leading-relaxed text-pretty text-(--public-muted)">
-                Toutes les fonctionnalités, pour tout le commerce. Le montant
-                indiqué est le total payé pour la durée choisie.
+                {t("landing.pricing.text")}
               </p>
               {registrationEnabled && (
                 <p className="mt-6 inline-block rounded-lg bg-(--brand-orange)/12 px-4 py-2.5 font-semibold">
-                  {TRIAL_DAYS} jours d&apos;essai gratuit, sans carte bancaire
+                  {t("landing.pricing.trial", { days: TRIAL_DAYS })}
                 </p>
               )}
             </div>
@@ -346,25 +311,29 @@ export default function LandingPage() {
                       }`}
                     >
                       <p className="flex flex-wrap items-center gap-2 text-lg font-bold">
-                        {offer.label}
+                        {ts(`offers.term.${offer.term}`)}
                         {recommended && (
                           <span className="rounded-full bg-(--brand-solid) px-2.5 py-0.5 text-xs font-semibold text-white">
-                            Le plus avantageux
+                            {ts("offers.best")}
                           </span>
                         )}
                       </p>
                       <p className="text-right text-2xl font-extrabold tracking-tight whitespace-nowrap tabular-nums">
-                        {formatFcfa(offer.totalXaf)}
+                        {fcfa(offer.totalXaf)}
                       </p>
                       <p className="col-span-2 text-sm text-(--public-muted) tabular-nums">
                         {offer.months > 1
-                          ? `Soit ${formatFcfa(monthlyEquivalentXaf(offer))} par mois et ${formatFcfa(offer.savingXaf)} d'économie par rapport au paiement mensuel${
-                              offer.highlight &&
-                              !offer.highlight.includes("économie")
-                                ? `, soit ${offer.highlight}`
-                                : ""
-                            }.`
-                          : "Paiement mois par mois."}
+                          ? offer.highlight === "freeMonths"
+                            ? t("landing.pricing.equivalentFree", {
+                                monthly: fcfa(monthlyEquivalentXaf(offer)),
+                                saving: fcfa(offer.savingXaf),
+                                highlight: ts("offers.highlight.freeMonths"),
+                              })
+                            : t("landing.pricing.equivalent", {
+                                monthly: fcfa(monthlyEquivalentXaf(offer)),
+                                saving: fcfa(offer.savingXaf),
+                              })
+                          : t("landing.pricing.monthByMonth")}
                       </p>
                     </li>
                   );
@@ -373,17 +342,20 @@ export default function LandingPage() {
               <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
                 {registrationEnabled ? (
                   <Link href="/auth/register" className={primaryCtaOnLight}>
-                    Commencer mon essai gratuit
+                    {t("landing.cta.startTrial")}
                   </Link>
                 ) : (
                   <p className="text-sm text-(--public-muted)">
-                    Les inscriptions sont momentanément fermées.{" "}
-                    <Link
-                      href="/auth/login"
-                      className={`${inlineLink} focus-visible:outline-(--brand-ink)`}
-                    >
-                      Se connecter
-                    </Link>
+                    {rich(t("landing.pricing.closed"), {
+                      login: (chunk) => (
+                        <Link
+                          href="/auth/login"
+                          className={`${inlineLink} focus-visible:outline-(--brand-ink)`}
+                        >
+                          {chunk}
+                        </Link>
+                      ),
+                    })}
                   </p>
                 )}
               </div>
@@ -405,20 +377,27 @@ export default function LandingPage() {
               id="questions-title"
               className="text-3xl font-extrabold tracking-tight sm:text-4xl"
             >
-              Questions fréquentes
+              {t("landing.faq.title")}
             </h2>
             <div className="mt-8 divide-y divide-(--brand-ink)/10 border-y border-(--brand-ink)/10">
-              {faq.map(({ question, answer }) => (
-                <details key={question} className="group">
+              {FAQ.map((key) => (
+                <details key={key} className="group">
                   <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 rounded-md py-4 text-left text-lg font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-ink) [&::-webkit-details-marker]:hidden">
-                    {question}
+                    {t(`landing.faq.${key}.question`)}
                     <ChevronDownIcon
                       aria-hidden
                       className="size-5 shrink-0 motion-safe:transition-transform group-open:rotate-180"
                     />
                   </summary>
                   <p className="pb-5 leading-relaxed text-pretty text-(--public-muted)">
-                    {answer}
+                    {key === "subscription"
+                      ? t(
+                          registrationEnabled
+                            ? "landing.faq.subscription.answerTrial"
+                            : "landing.faq.subscription.answer",
+                          { days: TRIAL_DAYS },
+                        )
+                      : t(`landing.faq.${key}.answer`, { days: TRIAL_DAYS })}
                   </p>
                 </details>
               ))}
@@ -437,13 +416,13 @@ export default function LandingPage() {
               className="max-w-2xl text-3xl font-extrabold tracking-tight text-balance sm:text-4xl"
             >
               {registrationEnabled
-                ? "Essayez Stock Master dans votre boutique"
-                : "Retrouvez votre boutique dans Stock Master"}
+                ? t("landing.final.titleOpen")
+                : t("landing.final.titleClosed")}
             </h2>
             <p className="mt-4 max-w-xl leading-relaxed text-white/85">
               {registrationEnabled
-                ? `Créez votre compte, ajoutez quelques produits et enregistrez vos premières ventes. Vous avez ${TRIAL_DAYS} jours gratuits pour vous faire un avis.`
-                : "Connectez-vous pour retrouver votre catalogue, vos ventes et vos analyses."}
+                ? t("landing.final.textOpen", { days: TRIAL_DAYS })
+                : t("landing.final.textClosed")}
             </p>
             <div className="mt-8">
               <SessionCta variant="final" />

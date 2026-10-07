@@ -7,8 +7,11 @@ import {
   Post,
   Put,
   Query,
+  Req,
   UseInterceptors,
 } from '@nestjs/common';
+import type { Request } from 'express';
+import { localeFromRequest } from '../common/i18n/locale';
 import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
 import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
 import { NoStoreInterceptor } from '../subscriptions/payments/subscription-payments.controller';
@@ -22,13 +25,17 @@ import {
   NotificationReaderContext,
 } from './notification-center.service';
 
+// 1-16G : langue de la requête (en-tête Accept-Language) pour les textes
+// génériques des notifications ; droits et filtres inchangés.
 const toContext = (
   context: ResolvedOrganizationContext,
+  request?: Request,
 ): NotificationReaderContext => ({
   userId: context.userId,
   organizationId: context.organizationId,
   role: context.role,
   permissions: context.permissions,
+  ...(request ? { locale: localeFromRequest(request) } : {}),
 });
 
 /**
@@ -51,8 +58,9 @@ export class NotificationsController {
   list(
     @CurrentOrganization() context: ResolvedOrganizationContext,
     @Query() query: ListNotificationsQueryDto,
+    @Req() request: Request,
   ) {
-    return this.center.list(toContext(context), {
+    return this.center.list(toContext(context, request), {
       unreadOnly: query.status === 'unread',
       limit: query.limit ?? 20,
       before: query.before,
@@ -90,8 +98,9 @@ export class NotificationsController {
   open(
     @CurrentOrganization() context: ResolvedOrganizationContext,
     @Param('id') id: string,
+    @Req() request: Request,
   ) {
-    return this.center.open(toContext(context), id);
+    return this.center.open(toContext(context, request), id);
   }
 
   @Post(':id/read')
@@ -99,8 +108,9 @@ export class NotificationsController {
   read(
     @CurrentOrganization() context: ResolvedOrganizationContext,
     @Param('id') id: string,
+    @Req() request: Request,
   ) {
-    return this.center.markRead(toContext(context), id);
+    return this.center.markRead(toContext(context, request), id);
   }
 
   @Get(':id/report/unsold')

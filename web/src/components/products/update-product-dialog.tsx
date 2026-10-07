@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
+import { getApiErrorMessage } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,7 +14,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { fmtXof } from "@/lib/currency";
 import type { ApiProduct } from "@/lib/api";
 
 interface UpdateProductDialogProps {
@@ -43,6 +45,8 @@ export function UpdateProductDialog({
   canAdjustStock,
   onUpdated,
 }: UpdateProductDialogProps) {
+  const { t } = useT("catalog");
+  const format = useFormat();
   const [name, setName] = useState("");
   const [purchasePrice, setPurchasePrice] = useState("");
   const [salePrice, setSalePrice] = useState("");
@@ -101,17 +105,17 @@ export function UpdateProductDialog({
     }
 
     if (Object.keys(payload).length === 0) {
-      toast.error("Aucune modification à enregistrer.");
+      toast.error(t("product.noChange"));
       return;
     }
 
     setLoading(true);
     try {
       await onUpdated(product._id, payload);
-      toast.success("Produit mis à jour");
+      toast.success(t("product.updated"));
       onOpenChange(false);
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Erreur");
+      toast.error(getApiErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -121,18 +125,18 @@ export function UpdateProductDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Modifier le produit</DialogTitle>
+          <DialogTitle>{t("product.updateTitle")}</DialogTitle>
         </DialogHeader>
         {product && !canEditAnything && (
           <p className="text-sm text-muted-foreground">
-            Tu n&apos;as pas la permission de modifier ce produit.
+            {t("product.noPermission")}
           </p>
         )}
         {product && canEditAnything && (
           <form onSubmit={handleSubmit} className="space-y-4 mt-2">
             {canManageDescription && (
               <div className="space-y-2">
-                <Label htmlFor="u-name">Nom</Label>
+                <Label htmlFor="u-name">{t("product.nameShort")}</Label>
                 <Input
                   id="u-name"
                   value={name}
@@ -146,7 +150,9 @@ export function UpdateProductDialog({
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   {purchasePriceVisible && (
                     <div className="space-y-2">
-                      <Label htmlFor="u-buy">Prix d&apos;achat (FCFA)</Label>
+                      <Label htmlFor="u-buy">
+                        {t("product.purchasePrice")}
+                      </Label>
                       <Input
                         id="u-buy"
                         type="number"
@@ -157,12 +163,14 @@ export function UpdateProductDialog({
                         required
                       />
                       <p className="text-xs text-muted-foreground">
-                        Actuel : {fmtXof(product.purchasePrice ?? 0)}
+                        {t("product.current", {
+                          amount: format.fcfa(product.purchasePrice ?? 0),
+                        })}
                       </p>
                     </div>
                   )}
                   <div className="space-y-2">
-                    <Label htmlFor="u-sell">Prix de vente (FCFA)</Label>
+                    <Label htmlFor="u-sell">{t("product.salePrice")}</Label>
                     <Input
                       id="u-sell"
                       type="number"
@@ -173,13 +181,15 @@ export function UpdateProductDialog({
                       required
                     />
                     <p className="text-xs text-muted-foreground">
-                      Actuel : {fmtXof(product.salePrice)}
+                      {t("product.current", {
+                        amount: format.fcfa(product.salePrice),
+                      })}
                     </p>
                   </div>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="u-stock">
-                    Stock supplémentaire à ajouter
+                    {t("product.additionalStock")}
                   </Label>
                   <Input
                     id="u-stock"
@@ -191,15 +201,17 @@ export function UpdateProductDialog({
                     placeholder="0"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Stock restant : {product.remainingQuantity}
+                    {t("product.remaining", {
+                      count: product.remainingQuantity,
+                    })}
                     {product.unitsSold !== undefined &&
-                      ` · Vendu : ${product.unitsSold}`}
+                      ` · ${t("product.sold", { count: product.unitsSold })}`}
                   </p>
                 </div>
               </>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Mise à jour…" : "Enregistrer"}
+              {loading ? t("updating") : t("actions.save")}
             </Button>
           </form>
         )}

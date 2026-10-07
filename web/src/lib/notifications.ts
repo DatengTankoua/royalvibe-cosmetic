@@ -164,38 +164,13 @@ export function badgeLabel(count: number): string {
   return count > 99 ? "99+" : String(count);
 }
 
-export const CATEGORY_LABELS: Record<
-  PushCategory,
-  { key: keyof PushPreferences; label: string; help: string }
-> = {
-  "stock-depleted": {
-    key: "stockDepleted",
-    label: "Stock épuisé",
-    help: "Quand le stock d'un produit passe à zéro.",
-  },
-  "stock-low": {
-    key: "stockLow",
-    label: "Stock presque épuisé",
-    help: "Quand 80 % du stock initial d'un produit est consommé.",
-  },
-  "sale-created": {
-    key: "saleCreated",
-    label: "Nouvelle vente",
-    help: "À chaque vente enregistrée (push regroupés par minute).",
-  },
-  "subscription-ending": {
-    key: "subscriptionEnding",
-    label: "Fin d'essai ou d'abonnement",
-    help: "Un rappel dans les 24 heures précédant l'échéance.",
-  },
-  "payment-succeeded": {
-    key: "paymentSucceeded",
-    label: "Paiement confirmé",
-    help: "Quand un paiement d'abonnement est confirmé.",
-  },
-  "monthly-report": {
-    key: "monthlyReport",
-    label: "Bilan mensuel",
-    help: "Au début de chaque mois, le bilan du mois écoulé.",
-  },
+// 1-16G : libellé et aide de chaque catégorie dans `notifications`
+// (`categories.<clé>.label` / `.help`).
+export const CATEGORY_KEYS: Record<PushCategory, keyof PushPreferences> = {
+  "stock-depleted": "stockDepleted",
+  "stock-low": "stockLow",
+  "sale-created": "saleCreated",
+  "subscription-ending": "subscriptionEnding",
+  "payment-succeeded": "paymentSucceeded",
+  "monthly-report": "monthlyReport",
 };

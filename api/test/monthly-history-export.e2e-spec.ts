@@ -138,9 +138,15 @@ describe('E2E 1-16D — historique mensuel exportable', () => {
 
   const http = () => request(app.getHttpServer());
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
-  const download = (token: string, month: string, format: string) =>
+  const download = (
+    token: string,
+    month: string,
+    format: string,
+    lang?: 'fr' | 'en',
+  ) =>
     http()
       .get(`/reports/monthly/${month}/${format}`)
+      .query(lang ? { lang } : {})
       .set(auth(token))
       .buffer(true)
       .parse((res, done) => {
@@ -474,6 +480,53 @@ describe('E2E 1-16D — historique mensuel exportable', () => {
     expect(text).toContain('Savon « doux »');
     expect(text).not.toContain('Produit secret de B');
     expect(text).toContain(`Page ${pages} / ${pages}`);
+  });
+
+  it('1-16G — anglais : mêmes ventes, mêmes totaux, noms d’origine ; fichiers FR/EN distincts', async () => {
+    // Un rapport à la fois par commerce (limite 1-16D) : téléchargements
+    // successifs ; l'isolement des langues entre requêtes simultanées est
+    // vérifié sur les messages d'erreur (legal-acceptance e2e).
+    const frX = await download(ownerA, MONTH, 'xlsx', 'fr');
+    const enX = await download(ownerA, MONTH, 'xlsx', 'en');
+    const frP = await download(ownerA, MONTH, 'pdf', 'fr');
+    const enP = await download(ownerA, MONTH, 'pdf', 'en');
+    for (const res of [frX, enX, frP, enP]) expect(res.status).toBe(200);
+    expect(enX.headers['content-disposition']).toBe(
+      `attachment; filename="sales-history-boutique-a-16d-${MONTH}.xlsx"`,
+    );
+    expect(frX.headers['content-disposition']).toBe(
+      `attachment; filename="historique-boutique-a-16d-${MONTH}.xlsx"`,
+    );
+    const fr = unzip(frX.body as Buffer);
+    const en = unzip(enX.body as Buffer);
+    const numbers = (xml: string) =>
+      [...xml.matchAll(/<v>([^<]*)<\/v>/g)].map((m) => m[1]);
+    for (const sheet of [
+      'xl/worksheets/sheet1.xml',
+      'xl/worksheets/sheet2.xml',
+      'xl/worksheets/sheet3.xml',
+    ]) {
+      const a = fr.get(sheet);
+      const b = en.get(sheet);
+      if (!a) continue;
+      // Mêmes lignes, mêmes valeurs numériques (montants, quantités, dates).
+      expect(sheetRows(b!)).toBe(sheetRows(a));
+      expect(numbers(b!)).toEqual(numbers(a));
+    }
+    const enTexts = [...en.values()].join('');
+    expect(enTexts).toContain('Month summary');
+    expect(enTexts).toContain('Savon « doux »');
+    expect(enTexts).toContain('FCFA');
+    expect(enTexts).not.toContain('Bilan du mois');
+    expect([...fr.values()].join('')).not.toContain('Month summary');
+
+    const frPdf = pdfText(frP.body as Buffer);
+    const enPdf = pdfText(enP.body as Buffer);
+    expect(enPdf.pages).toBe(frPdf.pages);
+    expect(enPdf.text).toContain('Monthly sales history');
+    expect(enPdf.text).toContain('Savon « doux »');
+    expect(enPdf.text).not.toContain('Historique mensuel des ventes');
+    expect(frPdf.text).toContain('Historique mensuel des ventes');
   });
 
   it('toutes les ventes d’un gros mois, PDF sur plusieurs pages avec en-tête répété', async () => {

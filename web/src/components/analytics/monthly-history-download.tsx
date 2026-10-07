@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useMessage } from "@/i18n/use-message";
+import { useAnalytics } from "./use-analytics";
 import { DownloadIcon, FileSpreadsheetIcon, FileTextIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,20 +16,7 @@ import {
   type MonthlyHistoryMonths,
 } from "@/lib/monthly-history";
 
-// "2025-03" → "mars 2025"
-function monthLabel(period: string): string {
-  const [year, month] = period.split("-");
-  return new Date(Number(year), Number(month) - 1).toLocaleDateString("fr-FR", {
-    month: "long",
-    year: "numeric",
-  });
-}
-
-function salesLabel(count: number): string {
-  if (count === 0) return "aucune vente";
-  return `${count} vente${count > 1 ? "s" : ""}`;
-}
-
+// Noms de format : identiques dans toutes les langues.
 const FORMAT_LABEL: Record<MonthlyHistoryFormat, string> = {
   xlsx: "Excel",
   pdf: "PDF",
@@ -39,17 +28,23 @@ const FORMAT_LABEL: Record<MonthlyHistoryFormat, string> = {
  * l'API refuse de toute façon tout autre compte.
  */
 export function MonthlyHistoryDownload() {
+  const a = useAnalytics();
+  const { t, monthLabel } = a;
+  const salesLabel = (count: number) =>
+    count === 0
+      ? t("monthly.noSales")
+      : t("monthly.salesCount", { count, n: a.number(count) });
   const online = useOnlineStatus();
   const { unfinalizedCount } = useOfflineSales();
   const [months, setMonths] = useState<MonthlyHistoryMonths | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useMessage("analytics");
   const [reloadKey, setReloadKey] = useState(0);
   const [month, setMonth] = useState("");
   const [busy, setBusy] = useState<MonthlyHistoryFormat | null>(null);
-  const [message, setMessage] = useState<{
-    kind: "error" | "success";
-    text: string;
-  } | null>(null);
+  const [message, setMessageText] = useMessage("analytics");
+  const [messageKind, setMessageKind] = useState<"error" | "success">(
+    "success",
+  );
   const lock = useRef(false);
 
   useEffect(() => {
@@ -68,12 +63,13 @@ export function MonthlyHistoryDownload() {
         );
       })
       .catch(async (error: unknown) => {
-        if (!cancelled) setLoadError(await describeMonthlyHistoryError(error));
+        const described = await describeMonthlyHistoryError(error);
+        if (!cancelled) setLoadError(described);
       });
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [reloadKey, setLoadError]);
 
   const selected = months?.months.find((m) => m.month === month);
 
@@ -81,18 +77,20 @@ export function MonthlyHistoryDownload() {
     if (!months || !month || lock.current) return;
     lock.current = true;
     setBusy(format);
-    setMessage(null);
+    setMessageText(null);
     try {
       await downloadMonthlyHistory(month, format, months.filenamePrefix);
-      setMessage({
-        kind: "success",
-        text: `Fichier ${FORMAT_LABEL[format]} de ${monthLabel(month)} téléchargé.`,
-      });
+      setMessageKind("success");
+      const downloadedMonth = month;
+      setMessageText((tr) =>
+        tr("monthly.downloaded", {
+          format: FORMAT_LABEL[format],
+          month: monthLabel(downloadedMonth),
+        }),
+      );
     } catch (error) {
-      setMessage({
-        kind: "error",
-        text: await describeMonthlyHistoryError(error),
-      });
+      setMessageKind("error");
+      setMessageText(await describeMonthlyHistoryError(error));
     } finally {
       lock.current = false;
       setBusy(null);
@@ -110,11 +108,10 @@ export function MonthlyHistoryDownload() {
             />
             <div className="min-w-0">
               <h2 id="monthly-history-title" className="font-semibold">
-                Historique mensuel
+                {t("monthly.title")}
               </h2>
               <p className="text-sm text-muted-foreground">
-                Téléchargez toutes les ventes d&apos;un mois, avec un bilan et
-                des récapitulatifs par produit et par vendeur.
+                {t("monthly.text")}
               </p>
             </div>
           </div>
@@ -131,33 +128,37 @@ export function MonthlyHistoryDownload() {
                   setReloadKey((k) => k + 1);
                 }}
               >
-                Réessayer
+                {t("retry")}
               </Button>
             </div>
           ) : !months ? (
             <p role="status" className="text-sm text-muted-foreground">
-              Chargement des mois disponibles…
+              {t("monthly.loading")}
             </p>
           ) : (
             <>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                 <label className="flex min-w-0 flex-col gap-1 text-sm sm:w-72">
-                  <span className="font-medium">Mois</span>
+                  <span className="font-medium">{t("monthly.month")}</span>
                   <select
                     value={month}
                     onChange={(e) => {
                       setMonth(e.target.value);
-                      setMessage(null);
+                      setMessageText(null);
                     }}
                     disabled={busy !== null}
                     className="h-9 w-full rounded-md border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                   >
                     {months.months.map((m) => (
                       <option key={m.month} value={m.month}>
-                        {monthLabel(m.month)}
-                        {m.month === months.currentMonth
-                          ? " (en cours)"
-                          : ""} — {salesLabel(m.salesCount)}
+                        {t("monthly.option", {
+                          month: monthLabel(m.month),
+                          inProgress:
+                            m.month === months.currentMonth
+                              ? t("monthly.inProgress")
+                              : "",
+                          sales: salesLabel(m.salesCount),
+                        })}
                       </option>
                     ))}
                   </select>
@@ -181,8 +182,10 @@ export function MonthlyHistoryDownload() {
                         <FileTextIcon className="mr-1.5 h-4 w-4" aria-hidden />
                       )}
                       {busy === format
-                        ? "Préparation…"
-                        : `Télécharger en ${FORMAT_LABEL[format]}`}
+                        ? t("monthly.preparing")
+                        : t("monthly.download", {
+                            format: FORMAT_LABEL[format],
+                          })}
                     </Button>
                   ))}
                 </div>
@@ -190,42 +193,41 @@ export function MonthlyHistoryDownload() {
 
               {selected?.salesCount === 0 && (
                 <p className="text-sm text-muted-foreground">
-                  Aucune vente enregistrée pour ce mois : le fichier contiendra
-                  seulement le bilan, à zéro.
+                  {t("monthly.emptyMonth")}
                 </p>
               )}
               {month === months.currentMonth && (
                 <p className="text-sm text-muted-foreground">
-                  Mois en cours : le fichier reflète la situation au moment du
-                  téléchargement.
+                  {t("monthly.currentMonth")}
                 </p>
               )}
               {!online && (
                 <p role="status" className="text-sm text-muted-foreground">
-                  Le téléchargement nécessite une connexion Internet.
+                  {t("monthly.offline")}
                 </p>
               )}
               <div aria-live="polite">
                 {message && (
                   <p
-                    role={message.kind === "error" ? "alert" : "status"}
+                    role={messageKind === "error" ? "alert" : "status"}
                     className={
-                      message.kind === "error"
+                      messageKind === "error"
                         ? "text-sm text-destructive"
                         : "text-sm text-green-700 dark:text-green-500"
                     }
                   >
-                    {message.text}
+                    {message}
                   </p>
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
-                Les ventes encore en attente de synchronisation sur un appareil
-                ne figurent pas dans le rapport.
+                {t("monthly.pendingNote")}
                 {unfinalizedCount > 0 &&
-                  ` Cet appareil en a ${unfinalizedCount} : synchronisez-les avant de télécharger.`}{" "}
-                Dates et limites du mois : fuseau {months.timeZone}, comme dans
-                les analyses.
+                  ` ${t("monthly.pendingDevice", {
+                    count: unfinalizedCount,
+                    n: a.number(unfinalizedCount),
+                  })}`}{" "}
+                {t("monthly.timeZone", { timeZone: months.timeZone })}
               </p>
             </>
           )}

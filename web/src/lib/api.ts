@@ -7,6 +7,7 @@ import type {
   OrganizationRole,
 } from "./organization-permissions";
 import type { LegalAcceptancePayload } from "./legal/acceptance";
+import { clientT, currentLocale } from "@/i18n/client-t";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -291,6 +292,10 @@ apiClient.interceptors.request.use((config) => {
   if (token && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // 1-16G : langue des messages d'erreur renvoyés par l'API (codes et
+  // statuts inchangés). En-tête « simple » au sens CORS : aucune requête
+  // préalable ajoutée. Jamais une préférence enregistrée côté serveur.
+  config.headers["Accept-Language"] = currentLocale();
   return config;
 });
 
@@ -457,6 +462,19 @@ export async function confirmPasswordReset(
   password: string,
 ): Promise<void> {
   await apiClient.post("/auth/password-reset/confirm", { token, password });
+}
+
+// 1-16G : langue du compte (e-mails et notifications push). Aucune autre
+// donnée modifiée ; refus sans effet (réessayé à la session suivante).
+export async function updateAccountLocale(
+  locale: "fr" | "en",
+  token: string,
+): Promise<void> {
+  await apiClient.put(
+    "/auth/me/locale",
+    { locale },
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
 }
 
 export async function fetchMe(token?: string): Promise<ApiUser> {
@@ -1053,32 +1071,34 @@ export function isNetworkError(error: unknown): boolean {
   return axios.isAxiosError(error) && !error.response;
 }
 
+// 1-16G : messages génériques dans la langue de l'interface ; un message
+// 4xx de l'API est déjà dans la langue demandée (`Accept-Language`). Les
+// mêmes protections s'appliquent : jamais le détail d'un 403/404/5xx.
 export function getApiErrorMessage(error: unknown): string {
+  const t = clientT();
   if (axios.isAxiosError(error)) {
     if (!error.response) {
-      return "Impossible de joindre le serveur. Vérifiez votre connexion.";
+      return t("errors.network");
     }
     const status = error.response.status;
     const body = error.response.data as
       { message?: string | string[] } | undefined;
 
     const code = (body as { code?: unknown } | undefined)?.code;
-    if (code === SUBSCRIPTION_INACTIVE)
-      return "L'abonnement de ce commerce n'est pas actif.";
+    if (code === SUBSCRIPTION_INACTIVE) return t("errors.subscriptionInactive");
     if (code === SUBSCRIPTION_STATUS_UNAVAILABLE)
-      return "Vérification momentanément indisponible. Réessayez.";
-    if (status === 403) return "Accès refusé.";
-    if (status === 404) return "Ressource introuvable.";
-    if (status >= 500)
-      return "Erreur serveur. Réessayez dans quelques instants.";
+      return t("errors.statusUnavailable");
+    if (status === 403) return t("errors.forbidden");
+    if (status === 404) return t("errors.notFound");
+    if (status >= 500) return t("errors.server");
     if (body?.message) {
       return Array.isArray(body.message)
         ? body.message.join(", ")
         : body.message;
     }
-    return `Erreur ${status}.`;
+    return t("errors.status", { status });
   }
-  return "Une erreur inattendue s'est produite.";
+  return t("errors.unexpected");
 }
 
 // Code d'erreur stable (ex. REGISTRATION_DISABLED, ACCOUNT_DETAILS_REQUIRED) —

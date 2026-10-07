@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ChevronRightIcon, ClockIcon } from "lucide-react";
+import { useT } from "next-i18next/client";
 import { useAuth } from "@/contexts/auth-context";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
 import {
@@ -22,6 +23,9 @@ import { firstNameOf, fullNameOf } from "@/lib/display-names";
 // attente déjà fournis par le shell), aucun chiffre ni graphique inventé.
 // Hors ligne : le message unique du shell suffit (aucun second bandeau).
 export default function AppHomePage() {
+  const { t } = useT("catalog");
+  const { t: tc } = useT("common");
+  const { t: ts } = useT("sales");
   const { user } = useAuth();
   const { authContext } = useOrganizationShell();
   const { offline, unfinalizedCount } = useOfflineSales();
@@ -32,7 +36,7 @@ export default function AppHomePage() {
 
   if (!user) return null;
 
-  const pendingLabel = `${unfinalizedCount} vente${unfinalizedCount > 1 ? "s" : ""} en attente`;
+  const pendingLabel = ts("nav.pendingCount", { count: unfinalizedCount });
 
   return (
     <div
@@ -48,11 +52,11 @@ export default function AppHomePage() {
           className="truncate text-2xl font-semibold"
           title={fullNameOf(user.name) ?? undefined}
         >
-          Bonjour, {firstNameOf(user.name)}
+          {t("home.greeting", {
+            name: firstNameOf(user.name) ?? tc("shell.myAccount"),
+          })}
         </h1>
-        <p className="mt-1 text-sm text-foreground">
-          Que souhaitez-vous faire aujourd&apos;hui ?
-        </p>
+        <p className="mt-1 text-sm text-foreground">{t("home.question")}</p>
       </section>
 
       {/* Ventes locales non finalisées de la partition courante : en ligne
@@ -61,7 +65,7 @@ export default function AppHomePage() {
       {unfinalizedCount > 0 && (
         <section aria-labelledby="home-pending">
           <h2 id="home-pending" className="sr-only">
-            Ventes en attente
+            {ts("pendingPage.title")}
           </h2>
           <PendingSalesAnchor
             href={pendingLink.href}
@@ -80,8 +84,8 @@ export default function AppHomePage() {
               </span>
               <span className="text-sm">
                 {pendingLink.offline
-                  ? "Elles seront envoyées au retour de la connexion."
-                  : "Voir et suivre leur envoi."}
+                  ? t("home.pendingOffline")
+                  : t("home.pendingOnline")}
               </span>
             </span>
             <ChevronRightIcon className="h-5 w-5 shrink-0" aria-hidden />
@@ -94,7 +98,7 @@ export default function AppHomePage() {
         className="flex flex-col gap-3"
       >
         <h2 id="home-quick-actions" className="text-base font-semibold">
-          Accès rapides
+          {t("home.quickActions")}
         </h2>
         <HomeQuickActions
           actions={actions}

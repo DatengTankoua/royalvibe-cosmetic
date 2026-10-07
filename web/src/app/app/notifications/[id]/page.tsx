@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
 import { getToken } from "@/lib/auth";
-import { fmtXof } from "@/lib/currency";
 import {
   AppNotification,
   MonthlyReportDetails,
@@ -15,15 +16,18 @@ import {
   openNotification,
 } from "@/lib/notifications";
 
-const dateTime = new Intl.DateTimeFormat("fr-FR", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-const dateOnly = new Intl.DateTimeFormat("fr-FR", { dateStyle: "long" });
-const monthName = new Intl.DateTimeFormat("fr-FR", {
-  month: "long",
-  year: "numeric",
-});
+// 1-16G : textes dans `notifications` (`detail.*`), dates selon la langue.
+function useDetailFormat() {
+  const format = useFormat();
+  return {
+    ...format,
+    dateTime: (v: string | Date) =>
+      format.dateWith(v, { dateStyle: "medium", timeStyle: "short" }),
+    dateOnly: (v: string | Date) => format.dateWith(v, { dateStyle: "long" }),
+    monthName: (v: string | Date) =>
+      format.dateWith(v, { month: "long", year: "numeric" }),
+  };
+}
 
 type State =
   | { status: "loading" }
@@ -39,6 +43,8 @@ type State =
 // relit les détails avec les droits actuels (404 si la catégorie n'est plus
 // autorisée : rien n'est affiché).
 export default function NotificationDetailPage() {
+  const { t } = useT("notifications");
+  const f = useDetailFormat();
   const { id } = useParams<{ id: string }>();
   const [state, setState] = useState<State>({ status: "loading" });
 
@@ -65,20 +71,20 @@ export default function NotificationDetailPage() {
         href="/app/notifications"
         className="text-sm text-muted-foreground hover:text-foreground"
       >
-        ← Notifications
+        ← {t("title")}
       </Link>
       {state.status === "loading" ? (
-        <p className="mt-4 text-sm text-muted-foreground">Chargement…</p>
+        <p className="mt-4 text-sm text-muted-foreground">{t("loading")}</p>
       ) : state.status === "missing" ? (
         <p className="mt-4 text-sm text-muted-foreground">
-          Notification introuvable ou plus disponible.
+          {t("detail.missing")}
         </p>
       ) : (
         <article className="mt-4 space-y-4">
           <header>
             <h1 className="text-lg font-semibold">{state.notification.body}</h1>
             <p className="text-xs text-muted-foreground">
-              {dateTime.format(new Date(state.notification.createdAt))}
+              {f.dateTime(state.notification.createdAt)}
             </p>
           </header>
           <Details id={id} details={state.details} />
@@ -87,7 +93,7 @@ export default function NotificationDetailPage() {
               nativeButton={false}
               render={<Link prefetch={false} href={state.notification.link} />}
             >
-              Ouvrir
+              {t("detail.open")}
             </Button>
           )}
         </article>
@@ -103,20 +109,24 @@ function Details({
   id: string;
   details: NotificationDetails;
 }) {
+  const { t } = useT("notifications");
+  const f = useDetailFormat();
   switch (details.kind) {
     case "stock":
       return details.removed ? (
         <p className="text-sm text-muted-foreground">
-          Ce produit a été supprimé définitivement.
+          {t("detail.productRemoved")}
         </p>
       ) : (
         <dl className="grid grid-cols-2 gap-2 text-sm">
-          <dt className="text-muted-foreground">Produit</dt>
+          <dt className="text-muted-foreground">{t("detail.product")}</dt>
           <dd>
             {details.productName}
-            {details.inTrash ? " (corbeille)" : ""}
+            {details.inTrash ? ` ${t("detail.inTrash")}` : ""}
           </dd>
-          <dt className="text-muted-foreground">Stock restant</dt>
+          <dt className="text-muted-foreground">
+            {t("detail.remainingStock")}
+          </dt>
           <dd>
             {details.remainingQuantity} / {details.initialQuantity}
           </dd>
@@ -125,22 +135,22 @@ function Details({
     case "sale":
       return details.cancelled ? (
         <p className="text-sm text-muted-foreground">
-          Cette vente a été annulée depuis.
+          {t("detail.saleCancelled")}
         </p>
       ) : (
         <dl className="grid grid-cols-2 gap-2 text-sm">
-          <dt className="text-muted-foreground">Produit</dt>
+          <dt className="text-muted-foreground">{t("detail.product")}</dt>
           <dd>{details.productName ?? "—"}</dd>
-          <dt className="text-muted-foreground">Quantité</dt>
+          <dt className="text-muted-foreground">{t("detail.quantity")}</dt>
           <dd>{details.quantity}</dd>
-          <dt className="text-muted-foreground">Montant</dt>
-          <dd>{fmtXof(details.total ?? 0)}</dd>
-          <dt className="text-muted-foreground">Vendeur</dt>
+          <dt className="text-muted-foreground">{t("detail.amount")}</dt>
+          <dd>{f.fcfa(details.total ?? 0)}</dd>
+          <dt className="text-muted-foreground">{t("detail.seller")}</dt>
           <dd>{details.sellerName ?? "—"}</dd>
           {details.occurredAt && (
             <>
-              <dt className="text-muted-foreground">Date</dt>
-              <dd>{dateTime.format(new Date(details.occurredAt))}</dd>
+              <dt className="text-muted-foreground">{t("detail.date")}</dt>
+              <dd>{f.dateTime(details.occurredAt)}</dd>
             </>
           )}
         </dl>
@@ -148,25 +158,28 @@ function Details({
     case "subscription-ending":
       return (
         <p className="text-sm">
-          {details.trial ? "Fin de l'essai" : "Fin de l'abonnement"} :{" "}
-          {details.coverageEndsAt
-            ? dateTime.format(new Date(details.coverageEndsAt))
-            : "—"}
+          {t(details.trial ? "detail.trialEnd" : "detail.subscriptionEnd", {
+            date: details.coverageEndsAt
+              ? f.dateTime(details.coverageEndsAt)
+              : "—",
+          })}
         </p>
       );
     case "payment":
       return (
         <p className="text-sm">
-          Paiement confirmé
           {details.confirmedAt
-            ? ` le ${dateTime.format(new Date(details.confirmedAt))}`
-            : ""}
-          .
+            ? t("detail.paymentConfirmedOn", {
+                date: f.dateTime(details.confirmedAt),
+              })
+            : t("detail.paymentConfirmed")}
         </p>
       );
     case "monthly-report":
       return details.missing ? (
-        <p className="text-sm text-muted-foreground">Bilan indisponible.</p>
+        <p className="text-sm text-muted-foreground">
+          {t("detail.reportUnavailable")}
+        </p>
       ) : (
         <MonthlyReport id={id} report={details as MonthlyReportDetails} />
       );
@@ -180,6 +193,8 @@ function MonthlyReport({
   id: string;
   report: MonthlyReportDetails;
 }) {
+  const { t } = useT("notifications");
+  const f = useDetailFormat();
   const [unsold, setUnsold] = useState<UnsoldPage>(report.unsold);
   const [loading, setLoading] = useState(false);
   const lastDay = new Date(new Date(report.periodEnd).getTime() - 1);
@@ -197,24 +212,27 @@ function MonthlyReport({
   return (
     <div className="space-y-5 text-sm">
       <p className="text-muted-foreground">
-        Bilan de {monthName.format(new Date(report.periodStart))} (du{" "}
-        {dateOnly.format(new Date(report.periodStart))} au{" "}
-        {dateOnly.format(lastDay)}, fuseau {report.timeZone}) — calculé le{" "}
-        {dateTime.format(new Date(report.computedAt))}. {report.salesCount}{" "}
-        vente{report.salesCount > 1 ? "s" : ""}.
+        {t("report.summary", {
+          count: report.salesCount,
+          month: f.monthName(report.periodStart),
+          from: f.dateOnly(report.periodStart),
+          to: f.dateOnly(lastDay),
+          timeZone: report.timeZone,
+          computedAt: f.dateTime(report.computedAt),
+        })}
       </p>
 
       <section>
-        <h2 className="font-semibold">Produits les plus vendus</h2>
+        <h2 className="font-semibold">{t("report.topProducts")}</h2>
         {report.topProducts.length === 0 ? (
-          <p className="text-muted-foreground">Aucune vente ce mois-ci.</p>
+          <p className="text-muted-foreground">{t("report.noSales")}</p>
         ) : (
           <ol className="mt-1 list-decimal pl-5">
             {report.topProducts.map((p) => (
               <li key={p.productId}>
-                {p.name ?? "Produit inconnu"}
-                {p.deleted ? " (supprimé)" : ""} — {p.units} vendu
-                {p.units > 1 ? "s" : ""}
+                {p.name ?? t("report.unknownProduct")}
+                {p.deleted ? ` ${t("report.deleted")}` : ""} —{" "}
+                {t("report.unitsSold", { count: p.units })}
               </li>
             ))}
           </ol>
@@ -222,16 +240,14 @@ function MonthlyReport({
       </section>
 
       <section>
-        <h2 className="font-semibold">Vendeur du mois</h2>
+        <h2 className="font-semibold">{t("report.sellerOfMonth")}</h2>
         {report.sellersOfMonth.length === 0 ? (
-          <p className="text-muted-foreground">
-            Aucun vendeur du mois n&apos;est désigné (aucune vente).
-          </p>
+          <p className="text-muted-foreground">{t("report.noSeller")}</p>
         ) : (
           <ul className="mt-1">
             {report.sellersOfMonth.map((s) => (
               <li key={s.sellerId}>
-                {s.name} — {fmtXof(s.revenue)}
+                {s.name} — {f.fcfa(s.revenue)}
               </li>
             ))}
           </ul>
@@ -239,18 +255,20 @@ function MonthlyReport({
       </section>
 
       <section>
-        <h2 className="font-semibold">Produits sans vente ({unsold.total})</h2>
+        <h2 className="font-semibold">
+          {t("report.unsold", { count: unsold.total })}
+        </h2>
         {unsold.total === 0 ? (
-          <p className="text-muted-foreground">
-            Tous les produits ont été vendus.
-          </p>
+          <p className="text-muted-foreground">{t("report.allSold")}</p>
         ) : (
           <ul className="mt-1">
             {unsold.items.map((p) => (
               <li key={p.productId}>
                 {p.name}
-                {p.introducedDuringMonth ? " — ajouté pendant le mois" : ""}
-                {p.inTrash ? " (corbeille)" : ""}
+                {p.introducedDuringMonth
+                  ? ` — ${t("report.addedDuringMonth")}`
+                  : ""}
+                {p.inTrash ? ` ${t("detail.inTrash")}` : ""}
               </li>
             ))}
           </ul>
@@ -263,12 +281,11 @@ function MonthlyReport({
             onClick={() => void more()}
             disabled={loading}
           >
-            Afficher plus
+            {t("showMore")}
           </Button>
         )}
         <p className="mt-2 text-xs text-muted-foreground">
-          Produits supprimés définitivement sans vente pendant le mois : non
-          listés (aucune trace conservée).
+          {t("report.purgedNote")}
         </p>
       </section>
     </div>

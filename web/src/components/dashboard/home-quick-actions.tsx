@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useT } from "next-i18next/client";
 import {
   ArrowLeftRightIcon,
   BarChart3Icon,
@@ -27,8 +28,6 @@ const ICONS: Record<QuickActionId, typeof LayoutGridIcon> = {
   converter: ArrowLeftRightIcon,
 };
 
-const OFFLINE_UNAVAILABLE_LABEL = "Indisponible hors connexion";
-
 const FOCUS =
   "outline-none focus-visible:ring-2 focus-visible:ring-(--tenant-accent-ring) focus-visible:ring-offset-2";
 const CARD =
@@ -47,7 +46,18 @@ function CardBody({
   action: QuickAction;
   variant: "primary" | "default" | "unavailable";
 }) {
+  const { t } = useT("catalog");
+  const { t: tc } = useT("common");
   const Icon = ICONS[action.id];
+  const description =
+    action.description === "organization"
+      ? (() => {
+          const text = (action.parts ?? [])
+            .map((part) => t(`home.parts.${part}`))
+            .join(", ");
+          return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+        })()
+      : t(`home.descriptions.${action.description}`);
   const iconBlock =
     variant === "primary"
       ? "bg-(--tenant-accent-foreground)/15"
@@ -64,7 +74,7 @@ function CardBody({
       </span>
       <span className="flex min-w-0 flex-col gap-0.5">
         <span className="text-base font-semibold leading-tight">
-          {action.title}
+          {t(`home.titles.${action.id}`)}
         </span>
         <span
           className={`line-clamp-2 text-sm ${
@@ -72,8 +82,8 @@ function CardBody({
           }`}
         >
           {variant === "unavailable"
-            ? OFFLINE_UNAVAILABLE_LABEL
-            : action.description}
+            ? tc("shell.offlineUnavailable")
+            : description}
         </span>
       </span>
     </>

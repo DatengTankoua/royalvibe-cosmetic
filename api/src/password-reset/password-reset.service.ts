@@ -1,3 +1,4 @@
+import { recipientLocale, type AppLocale } from '../common/i18n/locale';
 import {
   BadRequestException,
   Inject,
@@ -49,6 +50,7 @@ interface ResetClaim {
   userId: string;
   email: string;
   name: string;
+  locale: AppLocale;
   rawToken: string;
   idempotencyKey: string;
 }
@@ -163,6 +165,7 @@ export class PasswordResetService {
       candidate.email,
       candidate.name,
       version + 1,
+      recipientLocale(candidate.locale),
     );
   }
 
@@ -226,6 +229,8 @@ export class PasswordResetService {
       userId,
       email: user.email,
       name: user.name,
+      // 1-16G : langue du titulaire du compte, jamais celle du demandeur.
+      locale: recipientLocale(user.locale),
       rawToken,
       idempotencyKey: `password-reset-${userId}-${now.getTime()}`,
     };
@@ -240,6 +245,7 @@ export class PasswordResetService {
     const content = buildPasswordResetEmail(
       claim.name,
       buildPasswordResetUrl(origin, claim.rawToken),
+      claim.locale,
     );
     await this.send(
       {
@@ -256,6 +262,7 @@ export class PasswordResetService {
     email: string,
     name: string,
     version: number,
+    locale: AppLocale,
   ): Promise<void> {
     if (!this.sender.isConfigured()) {
       this.logger.warn('Password reset: notification not configured');
@@ -264,7 +271,7 @@ export class PasswordResetService {
     await this.send(
       {
         to: email,
-        ...buildPasswordChangedEmail(name),
+        ...buildPasswordChangedEmail(name, locale),
         idempotencyKey: `password-changed-${userId}-${version}`,
       },
       'change notification',

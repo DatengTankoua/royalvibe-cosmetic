@@ -4,6 +4,10 @@ import { useState } from "react";
 import axios from "axios";
 import { ArrowLeftRightIcon, PlusIcon } from "lucide-react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
+import { rich } from "@/i18n/rich";
+import { getApiErrorMessage } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { EUR_TO_XOF, fmtEur } from "@/lib/currency";
+import { EUR_TO_XOF } from "@/lib/currency";
 import { CurrencyConverter } from "@/components/currency/currency-converter";
 import {
   DuplicateWarningDialog,
@@ -36,6 +40,8 @@ export function CreateProductDialog({
   sectionId,
   onCreated,
 }: CreateProductDialogProps) {
+  const { t } = useT("catalog");
+  const format = useFormat();
   const [open, setOpen] = useState(false);
   const [converterOpen, setConverterOpen] = useState(false);
   const [name, setName] = useState("");
@@ -57,7 +63,7 @@ export function CreateProductDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!image) {
-      toast.error("Photo requise");
+      toast.error(t("product.photoRequired"));
       return;
     }
     setLoading(true);
@@ -70,7 +76,7 @@ export function CreateProductDialog({
         initialQuantity: parseInt(quantity, 10),
         image,
       });
-      toast.success("Produit ajouté");
+      toast.success(t("product.added"));
       setOpen(false);
       resetForm();
     } catch (err: unknown) {
@@ -85,7 +91,7 @@ export function CreateProductDialog({
           return;
         }
       }
-      toast.error(err instanceof Error ? err.message : "Erreur");
+      toast.error(getApiErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -95,13 +101,13 @@ export function CreateProductDialog({
     <>
       <Button size="sm" onClick={() => setOpen(true)}>
         <PlusIcon className="mr-1 h-4 w-4" />
-        Ajouter un produit
+        {t("product.add")}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between">
-              Nouveau produit
+              {t("product.newTitle")}
               <button
                 type="button"
                 onClick={() => setConverterOpen(true)}
@@ -114,7 +120,7 @@ export function CreateProductDialog({
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4 mt-2">
             <div className="space-y-2">
-              <Label htmlFor="p-name">Nom du produit</Label>
+              <Label htmlFor="p-name">{t("product.name")}</Label>
               <Input
                 id="p-name"
                 value={name}
@@ -124,7 +130,7 @@ export function CreateProductDialog({
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="p-buy">Prix d&apos;achat (FCFA)</Label>
+                <Label htmlFor="p-buy">{t("product.purchasePrice")}</Label>
                 <Input
                   id="p-buy"
                   type="number"
@@ -136,12 +142,12 @@ export function CreateProductDialog({
                 />
                 {purchasePrice && !isNaN(parseFloat(purchasePrice)) && (
                   <p className="text-xs text-muted-foreground">
-                    ≈ {fmtEur(parseFloat(purchasePrice) / EUR_TO_XOF)}
+                    ≈ {format.eur(parseFloat(purchasePrice) / EUR_TO_XOF)}
                   </p>
                 )}
               </div>
               <div className="space-y-2">
-                <Label htmlFor="p-sell">Prix de vente (FCFA)</Label>
+                <Label htmlFor="p-sell">{t("product.salePrice")}</Label>
                 <Input
                   id="p-sell"
                   type="number"
@@ -153,17 +159,18 @@ export function CreateProductDialog({
                 />
                 {salePrice && !isNaN(parseFloat(salePrice)) && (
                   <p className="text-xs text-muted-foreground">
-                    ≈ {fmtEur(parseFloat(salePrice) / EUR_TO_XOF)}
+                    ≈ {format.eur(parseFloat(salePrice) / EUR_TO_XOF)}
                   </p>
                 )}
               </div>
             </div>
             <p className="text-xs text-muted-foreground bg-muted rounded px-2 py-1">
-              💡 Entrez les prix en FCFA. Cliquez sur <strong>EUR ↔ CFA</strong>{" "}
-              en haut pour convertir.
+              {rich(t("product.priceHint"), {
+                b: (chunk) => <strong>{chunk}</strong>,
+              })}
             </p>
             <div className="space-y-2">
-              <Label htmlFor="p-qty">Quantité initiale</Label>
+              <Label htmlFor="p-qty">{t("product.initialQuantity")}</Label>
               <Input
                 id="p-qty"
                 type="number"
@@ -175,7 +182,7 @@ export function CreateProductDialog({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="p-img">Photo du produit</Label>
+              <Label htmlFor="p-img">{t("product.photo")}</Label>
               <Input
                 id="p-img"
                 type="file"
@@ -185,7 +192,7 @@ export function CreateProductDialog({
               />
             </div>
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Enregistrement…" : "Ajouter"}
+              {loading ? t("saving") : t("actions.add")}
             </Button>
           </form>
         </DialogContent>

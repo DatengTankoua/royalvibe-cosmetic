@@ -97,8 +97,52 @@ describe('archive juridique (manifeste et textes)', () => {
       expect(doc).not.toBeNull();
       expect(archive.text(doc!)).toContain(`Version ${doc!.version}`);
     }
-    // Aucune traduction n'existe encore : jamais résolue.
-    expect(archive.current(TERMS_OF_USE, 'en')).toBeNull();
+    // Langue sans document archivé : jamais résolue.
+    expect(archive.current(TERMS_OF_USE, 'de')).toBeNull();
+  });
+
+  it('1-16G : traductions anglaises archivées, même version que le français', () => {
+    for (const id of [TERMS_OF_USE, SUBSCRIPTION_TERMS, PRIVACY_NOTICE]) {
+      const fr = archive.current(id, 'fr')!;
+      const en = archive.current(id, 'en');
+      expect(en).not.toBeNull();
+      expect(en!.version).toBe(fr.version);
+      expect(en!.sha256).not.toBe(fr.sha256);
+      expect(archive.text(en!)).toContain(`Version ${en!.version}`);
+    }
+  });
+
+  it('1-16G : archives françaises antérieures inchangées, jamais traduites après coup', () => {
+    const frozen: Record<string, Record<string, string>> = {
+      [TERMS_OF_USE]: {
+        '0.3':
+          '5c2e4c36edc0ecbd545659a0e12fcb50c36b543277819629ad5dc33c63dec2c2',
+      },
+      [SUBSCRIPTION_TERMS]: {
+        '0.3':
+          '7efc7db353af8c9b842e798fb810c8b0082f16d9fe2c0bf116e7218c45a50e72',
+        '0.4':
+          'bade5d4650c93eed40481082ce6780f3b99073cd5bfc31bc141ca862b392e4ee',
+      },
+      [PRIVACY_NOTICE]: {
+        '0.3':
+          '941a2c17b62003c13668af353cf262dbc01616aa7a548c590fe5fb7dc841d082',
+      },
+    };
+    for (const [id, versions] of Object.entries(frozen)) {
+      for (const [v, sha256] of Object.entries(versions)) {
+        expect(manifest.documents[id].versions[v].locales.fr.sha256).toBe(
+          sha256,
+        );
+      }
+    }
+    // Versions remplacées avant 1-16G : aucune traduction ajoutée.
+    expect(
+      manifest.documents[SUBSCRIPTION_TERMS].versions['0.3'].locales.en,
+    ).toBeUndefined();
+    expect(
+      manifest.documents[PRIVACY_NOTICE].versions['0.3'].locales.en,
+    ).toBeUndefined();
   });
 
   it('conditions d’abonnement : 0.4 en vigueur, 0.3 conservée telle quelle', () => {
@@ -271,10 +315,18 @@ describe('LegalAcceptanceService.resolveSubmission', () => {
   });
 
   it('traduction inexistante : 400 LEGAL_LOCALE_UNAVAILABLE (rien d’enregistrable)', () => {
-    expect(codeOf(() => resolve(owner({ locale: 'en' })))).toEqual({
+    expect(codeOf(() => resolve(owner({ locale: 'de' })))).toEqual({
       status: 400,
       code: LEGAL_LOCALE_UNAVAILABLE,
     });
+  });
+
+  it('1-16G : acceptation en anglais, empreintes de la version anglaise', () => {
+    const submission = resolve(owner({ locale: 'en' }));
+    for (const doc of [...submission.documents, ...submission.notices]) {
+      expect(doc.locale).toBe('en');
+      expect(doc.sha256).toBe(archive.current(doc.documentId, 'en')!.sha256);
+    }
   });
 
   it('succès : versions, langue et empreintes viennent du manifeste', () => {

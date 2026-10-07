@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { ClockIcon } from "lucide-react";
+import { useT } from "next-i18next/client";
 import {
   OFFLINE_SALES_PANEL_OPEN_EVENT,
   useOfflineSales,
@@ -54,10 +55,11 @@ export function PendingSalesAnchor({
 }
 
 export function PendingSalesHeaderLink() {
+  const { t } = useT("sales");
   const { unfinalizedCount } = useOfflineSales();
   const { href, offline } = usePendingSalesHref();
   if (unfinalizedCount === 0) return null;
-  const label = `${unfinalizedCount} vente${unfinalizedCount > 1 ? "s" : ""} en attente`;
+  const label = t("nav.pendingCount", { count: unfinalizedCount });
   return (
     <PendingSalesAnchor
       href={href}
@@ -69,18 +71,19 @@ export function PendingSalesHeaderLink() {
       <ClockIcon className="h-3.5 w-3.5" aria-hidden />
       <span aria-hidden>{unfinalizedCount}</span>
       <span className="hidden lg:inline" aria-hidden>
-        en attente
+        {t("nav.pendingShort")}
       </span>
     </PendingSalesAnchor>
   );
 }
 
 export function PendingSalesNavBadge() {
+  const { t } = useT("sales");
   const { unfinalizedCount } = useOfflineSales();
   if (unfinalizedCount === 0) return null;
   return (
     <span className="rounded-full bg-destructive px-1.5 text-[10px] font-semibold leading-4 text-destructive-foreground">
-      <span className="sr-only">Ventes en attente : </span>
+      <span className="sr-only">{t("nav.pendingBadge")} </span>
       {unfinalizedCount}
     </span>
   );

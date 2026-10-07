@@ -38,7 +38,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      # 1-16G : ressources FR/EN (clés, variables, pluriels, rendu anglais sans
+      # repli français) et inventaire des textes visibles non traduits.
+      - run: pnpm test:i18n
+      - run: pnpm i18n:coverage
       - run: pnpm build
-      # 1-16C.2 : le texte prérendu des documents soumis à acceptation doit
-      # être identique à l'archive de sa version (api/src/legal/archive).
+      # 1-16C.2 : le texte servi des documents soumis à acceptation doit être
+      # identique à l'archive de sa version (api/src/legal/archive), pour
+      # chaque langue publiée (1-16G : rendu dynamique, `next start` lancé
+      # par le script).
       - run: node scripts/legal-archive.mjs check --next-dir .next

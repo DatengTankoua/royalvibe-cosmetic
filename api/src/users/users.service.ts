@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import type { Connection } from 'mongoose';
 import { User, UserDocument, UserRole } from './schemas/user.schema';
+import { recipientLocale, type AppLocale } from '../common/i18n/locale';
 
 // Session transactionnelle Mongoose (`mongodb.ClientSession`) : même
 // convention que `products.service.ts`/`audit.service.ts` (type dérivé,
@@ -40,11 +41,29 @@ export class UsersService {
       email: string;
       password: string;
       role?: UserRole;
+      locale?: AppLocale;
     },
     session?: MongooseSession,
   ): Promise<UserDocument> {
     const [user] = await this.userModel.create([data], { session });
     return user;
+  }
+
+  /** 1-16G : préférence de langue du compte, seul champ modifié. */
+  async setLocale(userId: Types.ObjectId, locale: AppLocale): Promise<void> {
+    await this.userModel
+      .updateOne({ _id: userId }, { $set: { locale } })
+      .exec();
+  }
+
+  /** 1-16G : langue des envois destinés à ce compte (repli français). */
+  async localeOf(userId: Types.ObjectId | string): Promise<AppLocale> {
+    const user = await this.userModel
+      .findById(userId)
+      .select('locale')
+      .lean()
+      .exec();
+    return recipientLocale(user?.locale);
   }
 
   async findAll(): Promise<UserDocument[]> {

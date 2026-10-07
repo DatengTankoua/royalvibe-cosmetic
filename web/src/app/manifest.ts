@@ -4,7 +4,12 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "Stock Master",
     short_name: "Stock Master",
-    description: "Application de gestion des stocks et des ventes",
+    // 1-16G : le manifeste est exclu du mécanisme de langue (fichier
+    // unique, mis en cache par le navigateur) : description bilingue.
+    description:
+      "Gestion des stocks et des ventes · Stock and sales management",
+    lang: "fr",
+    dir: "ltr",
     start_url: "/app",
     scope: "/",
     display: "standalone",

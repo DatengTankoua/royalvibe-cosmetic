@@ -1,13 +1,22 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useT } from "next-i18next/client";
+import { useLocale } from "@/i18n/locale-provider";
+import { useMessage } from "@/i18n/use-message";
 import axios from "axios";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NewPasswordFields } from "@/components/auth/new-password-fields";
-import { USER_NAME_HINT, USER_NAME_MAX_LENGTH } from "@/lib/name-limits";
-import { validateNewPassword } from "@/lib/password-policy";
+import { USER_NAME_MAX_LENGTH } from "@/lib/name-limits";
+import {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  validateNewPassword,
+} from "@/lib/password-policy";
+
+const PASSWORD_LIMITS = { min: PASSWORD_MIN_LENGTH, max: PASSWORD_MAX_LENGTH };
 import {
   acceptInvitation,
   getApiErrorCode,
@@ -19,14 +28,11 @@ import { Wordmark } from "@/components/brand/wordmark";
 import { TermsAcceptanceField } from "@/components/legal/terms-acceptance-field";
 import {
   buildLegalAcceptance,
-  legalAcceptanceErrorMessage,
+  legalAcceptanceErrorKey,
 } from "@/lib/legal/acceptance";
 import Link from "next/link";
 
 type Step = "loading" | "needsDetails" | "success" | "error";
-
-const MISSING_TOKEN_MESSAGE =
-  "Lien d'invitation incomplet. Ouvre à nouveau le lien reçu, en entier.";
 
 /** Erreur réseau (aucune réponse du serveur) : invitation non consommée. */
 function isNetworkError(err: unknown): boolean {
@@ -39,11 +45,15 @@ export default function AcceptInvitationPage() {
   // d'hydratation et message d'erreur affiché tant que le JS n'a pas pris
   // la main). Lu une seule fois au montage, retiré de l'URL, conservé
   // uniquement en mémoire (ref) — jamais journalisé ni persisté.
+  const { t } = useT("auth");
+  const { t: tc } = useT("common");
+  const { t: tl } = useT("legal");
+  const { locale } = useLocale();
   const tokenRef = useRef<string | null>(null);
   const started = useRef(false);
   const submitting = useRef(false);
   const [step, setStep] = useState<Step>("loading");
-  const [message, setMessage] = useState<string>(MISSING_TOKEN_MESSAGE);
+  const [message, setMessage] = useMessage("auth");
   const [canRetry, setCanRetry] = useState(false);
   const [organizationName, setOrganizationName] = useState<string | null>(null);
   // 1-13A : vérification de l'adresse requise après acceptation (le lien
@@ -52,7 +62,9 @@ export default function AcceptInvitationPage() {
     email: string;
     delivery: AcceptInvitationResult["emailVerification"]["status"];
   } | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [formError, setFormError] = useMessage("auth");
+  // Case non cochée signalée (message dédié, relié à la case).
+  const [termsMissing, setTermsMissing] = useState(false);
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -115,7 +127,7 @@ export default function AcceptInvitationPage() {
     }
     if (!tokenRef.current) {
       // Token absent : aucun appel d'acceptation.
-      setMessage(MISSING_TOKEN_MESSAGE);
+      setMessage((tr) => tr("invitation.missingToken"));
       setStep("error");
       return;
     }
@@ -130,16 +142,19 @@ export default function AcceptInvitationPage() {
     // Contrôles avant soumission : aucune requête si la confirmation diffère.
     const passwordError = validateNewPassword(password, confirmation);
     if (passwordError) {
-      setFormError(passwordError);
+      setTermsMissing(false);
+      setFormError((tr) => tr(passwordError, PASSWORD_LIMITS));
       return;
     }
     if (!termsAccepted) {
-      setFormError(legalAcceptanceErrorMessage("LEGAL_ACCEPTANCE_REQUIRED"));
+      setTermsMissing(true);
+      setFormError(() => tl("acceptance.errors.required"));
       document.getElementById("inv-terms")?.focus();
       return;
     }
     submitting.current = true;
     setLoading(true);
+    setTermsMissing(false);
     setFormError(null);
     try {
       // Seul `password` part à l'API ; la confirmation reste locale.
@@ -147,7 +162,8 @@ export default function AcceptInvitationPage() {
         token,
         name,
         password,
-        legalAcceptance: buildLegalAcceptance("invitation_account"),
+        // 1-16G : langue des documents affichés (celle de l'interface).
+        legalAcceptance: buildLegalAcceptance("invitation_account", locale),
       });
       finish(result);
     } catch (err: unknown) {
@@ -155,9 +171,8 @@ export default function AcceptInvitationPage() {
       if (code === "INVITATION_INVALID_OR_EXPIRED") {
         fail(err);
       } else {
-        setFormError(
-          legalAcceptanceErrorMessage(code) ?? getApiErrorMessage(err),
-        );
+        const legalKey = legalAcceptanceErrorKey(code);
+        setFormError(legalKey ? () => tl(legalKey) : getApiErrorMessage(err));
       }
     } finally {
       submitting.current = false;
@@ -172,7 +187,7 @@ export default function AcceptInvitationPage() {
 
         {step === "loading" && (
           <p role="status" className="text-sm text-muted-foreground">
-            Vérification de l&apos;invitation…
+            {t("invitation.checking")}
           </p>
         )}
 
@@ -184,14 +199,14 @@ export default function AcceptInvitationPage() {
             <div className="flex flex-col items-center gap-2">
               {canRetry && (
                 <Button type="button" onClick={() => void checkInvitation()}>
-                  Réessayer
+                  {tc("actions.retry")}
                 </Button>
               )}
               <Link
                 href="/auth/login"
                 className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
               >
-                Se connecter
+                {t("login.submit")}
               </Link>
             </div>
           </>
@@ -200,30 +215,33 @@ export default function AcceptInvitationPage() {
         {step === "success" && (
           <>
             <div className="space-y-1">
-              <h1 className="text-lg font-semibold">Invitation acceptée</h1>
+              <h1 className="text-lg font-semibold">
+                {t("invitation.acceptedTitle")}
+              </h1>
               <p className="text-sm text-muted-foreground">
                 {verification
                   ? organizationName
-                    ? `Tu as rejoint ${organizationName}.`
-                    : "Invitation acceptée."
+                    ? t("invitation.joined", { organization: organizationName })
+                    : t("invitation.acceptedTitle")
                   : organizationName
-                    ? `Tu as rejoint ${organizationName}. Connecte-toi pour continuer.`
-                    : "Connecte-toi pour continuer."}
+                    ? t("invitation.joinedLogin", {
+                        organization: organizationName,
+                      })
+                    : t("invitation.loginToContinue")}
               </p>
             </div>
             {verification && (
               <div className="space-y-2">
                 <p className="text-sm font-medium">
-                  Confirmez votre adresse email pour accéder à votre compte.
+                  {t("verify.confirmToAccess")}
                 </p>
                 {verification.delivery === "failed" ? (
                   <p role="alert" className="text-sm text-destructive">
-                    L&apos;email de confirmation n&apos;a pas pu être envoyé.
-                    Demande un nouvel envoi ci-dessous.
+                    {t("invitation.deliveryFailed")}
                   </p>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    Un lien de confirmation a été envoyé à {verification.email}.
+                    {t("verify.linkSent", { email: verification.email })}
                   </p>
                 )}
                 <EmailVerificationResend
@@ -236,7 +254,7 @@ export default function AcceptInvitationPage() {
               href="/auth/login"
               className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
             >
-              Se connecter
+              {t("login.submit")}
             </Link>
           </>
         )}
@@ -248,10 +266,10 @@ export default function AcceptInvitationPage() {
             noValidate
           >
             <p className="text-sm text-muted-foreground text-center">
-              Finalise la création de ton compte.
+              {t("invitation.finish")}
             </p>
             <div className="space-y-2">
-              <Label htmlFor="inv-name">Nom</Label>
+              <Label htmlFor="inv-name">{t("fields.name")}</Label>
               <Input
                 id="inv-name"
                 value={name}
@@ -263,7 +281,7 @@ export default function AcceptInvitationPage() {
                 disabled={loading}
               />
               <p id="inv-name-hint" className="text-xs text-muted-foreground">
-                {USER_NAME_HINT}
+                {tc("fields.maxLength", { count: USER_NAME_MAX_LENGTH })}
               </p>
             </div>
             <NewPasswordFields
@@ -282,14 +300,13 @@ export default function AcceptInvitationPage() {
               checked={termsAccepted}
               onCheckedChange={(value) => {
                 setTermsAccepted(value);
-                if (value) setFormError(null);
+                if (value) {
+                  setTermsMissing(false);
+                  setFormError(null);
+                }
               }}
               disabled={loading}
-              invalid={
-                !termsAccepted &&
-                formError ===
-                  legalAcceptanceErrorMessage("LEGAL_ACCEPTANCE_REQUIRED")
-              }
+              invalid={!termsAccepted && termsMissing}
               errorId={formError ? "inv-error" : undefined}
             />
 
@@ -304,7 +321,7 @@ export default function AcceptInvitationPage() {
             )}
 
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Validation…" : "Créer mon compte"}
+              {loading ? t("invitation.submitting") : t("invitation.submit")}
             </Button>
           </form>
         )}

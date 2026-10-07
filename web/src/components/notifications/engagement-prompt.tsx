@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { toast } from "sonner";
+import type { TFunction } from "i18next";
+import { useT } from "next-i18next/client";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -81,6 +83,7 @@ function busyScreen(): boolean {
 // - La permission native n'est demandée qu'au clic sur « Activer ».
 // - Aucun effet sur le hors ligne ni sur l'outbox des ventes.
 export function EngagementPrompt() {
+  const { t } = useT("notifications");
   const pathname = usePathname();
   const [invitation, setInvitation] = useState<Invitation | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -160,12 +163,12 @@ export function EngagementPrompt() {
         await promptInstall();
       } else if (invitation.kind === "push") {
         await enablePushNotifications(invitation.publicKey);
-        toast.success("Notifications activées sur cet appareil.");
+        toast.success(t("push.enabled"));
       }
     } catch (error) {
       toast.error(
         error instanceof PushPermissionDeniedError
-          ? "Notifications refusées par le navigateur."
+          ? t("push.denied")
           : getApiErrorMessage(error),
       );
     } finally {
@@ -181,7 +184,7 @@ export function EngagementPrompt() {
   };
 
   if (!invitation) return null;
-  const text = describe(invitation);
+  const text = describe(invitation, t);
 
   return (
     <>
@@ -200,7 +203,7 @@ export function EngagementPrompt() {
                 hideBanner();
               }}
             >
-              Plus tard
+              {t("engagement.later")}
             </Button>
             {text.action && (
               <Button onClick={() => void act()} disabled={busy}>
@@ -229,7 +232,7 @@ export function EngagementPrompt() {
             </Button>
           )}
           <Button size="sm" variant="ghost" onClick={hideBanner}>
-            Plus tard
+            {t("engagement.later")}
           </Button>
         </div>
       )}
@@ -237,7 +240,10 @@ export function EngagementPrompt() {
   );
 }
 
-function describe(invitation: Invitation): {
+function describe(
+  invitation: Invitation,
+  t: TFunction<"notifications">,
+): {
   title: string;
   body: string;
   help?: string;
@@ -247,26 +253,26 @@ function describe(invitation: Invitation): {
     case "install":
       return invitation.install === "promptable"
         ? {
-            title: "Installer Stock Master",
-            body: "Ouvrez l'application depuis l'écran d'accueil, comme une application.",
-            action: "Installer",
+            title: t("engagement.install.title"),
+            body: t("engagement.install.body"),
+            action: t("engagement.install.action"),
           }
         : {
-            title: "Ajouter Stock Master à l'écran d'accueil",
-            body: "Sur iPhone et iPad, l'application installée peut aussi recevoir des notifications.",
-            help: "Dans Safari, touchez Partager puis « Sur l'écran d'accueil ».",
+            title: t("engagement.ios.title"),
+            body: t("engagement.ios.body"),
+            help: t("engagement.ios.help"),
           };
     case "push":
       return {
-        title: "Activer les notifications",
-        body: "Soyez prévenu des ruptures de stock, des ventes et des échéances, même application fermée.",
-        action: "Activer",
+        title: t("engagement.push.title"),
+        body: t("engagement.push.body"),
+        action: t("engagement.push.action"),
       };
     case "push-denied":
       return {
-        title: "Notifications bloquées",
-        body: "Les notifications sont refusées pour ce site sur cet appareil.",
-        help: "Autorisez-les dans les réglages du navigateur (paramètres du site), puis rechargez la page.",
+        title: t("engagement.denied.title"),
+        body: t("engagement.denied.body"),
+        help: t("engagement.denied.help"),
       };
   }
 }

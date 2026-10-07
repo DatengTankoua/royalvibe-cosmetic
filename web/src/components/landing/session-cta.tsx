@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useT } from "next-i18next/client";
 import { useAuth } from "@/contexts/auth-context";
 
 // Jamais d'appel API ici : useAuth() ne fait que lire le user/token déjà en
@@ -28,6 +29,7 @@ const STYLES: Record<"light" | "dark", { primary: string; secondary: string }> =
   };
 
 export function SessionCta({ variant }: { variant: Variant }) {
+  const { t } = useT("public");
   const { user, isLoading } = useAuth();
   const registrationEnabled =
     process.env.NEXT_PUBLIC_REGISTRATION_ENABLED === "true";
@@ -44,7 +46,9 @@ export function SessionCta({ variant }: { variant: Variant }) {
   if (isLoading) {
     return (
       <div aria-busy="true" className={layout}>
-        <span className={`${styles.secondary} opacity-60`}>Chargement…</span>
+        <span className={`${styles.secondary} opacity-60`}>
+          {t("cta.loading")}
+        </span>
       </div>
     );
   }
@@ -53,7 +57,7 @@ export function SessionCta({ variant }: { variant: Variant }) {
     return (
       <div className={layout}>
         <Link href="/app" className={styles.primary}>
-          Ouvrir l&apos;application
+          {t("cta.openApp")}
         </Link>
       </div>
     );
@@ -61,12 +65,12 @@ export function SessionCta({ variant }: { variant: Variant }) {
 
   const login = (
     <Link key="login" href="/auth/login" className={styles.secondary}>
-      Se connecter
+      {t("cta.login")}
     </Link>
   );
   const register = registrationEnabled && (
     <Link key="register" href="/auth/register" className={styles.primary}>
-      Créer un compte
+      {t("cta.register")}
     </Link>
   );
   // Appel final : l'inscription d'abord (action principale de la section).

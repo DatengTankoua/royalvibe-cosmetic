@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
+import { useT } from "next-i18next/client";
+import { LanguageSwitcher } from "@/components/i18n/language-switcher";
+import { useMessage } from "@/i18n/use-message";
 import { useAuth } from "@/contexts/auth-context";
 import { Wordmark } from "@/components/brand/wordmark";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
@@ -41,11 +44,12 @@ export default function SubscriptionAccessPage() {
     logout,
   } = useAuth();
   const router = useRouter();
+  const { t } = useT("subscription");
   const [context, setContext] = useState<ApiAuthContext | null>(null);
   const [organizationName, setOrganizationName] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [verifying, setVerifying] = useState(false);
-  const [verifyMessage, setVerifyMessage] = useState<string | null>(null);
+  const [verifyMessage, setVerifyMessage] = useMessage("subscription");
   const [reloadKey, setReloadKey] = useState(0);
   const [retryTick, setRetryTick] = useState(0);
   const [online, setOnline] = useState(true);
@@ -132,7 +136,7 @@ export default function SubscriptionAccessPage() {
       // Une période active ne transforme JAMAIS directement ce jeton :
       // seul l'échange serveur délivre un JWT applicatif.
       if (fresh.access?.subscriptionState !== "active") {
-        setVerifyMessage("L'abonnement n'est toujours pas actif.");
+        setVerifyMessage((tr) => tr("verify.stillInactive"));
         return;
       }
       const outcome = await completeRestrictedAccess();
@@ -144,24 +148,24 @@ export default function SubscriptionAccessPage() {
           leaveExpired();
           return;
         case "inactive":
-          setVerifyMessage("L'abonnement n'est toujours pas actif.");
+          setVerifyMessage((tr) => tr("verify.stillInactive"));
           return;
         case "stale":
-          setVerifyMessage("La session a changé : rechargez la page.");
+          setVerifyMessage((tr) => tr("verify.stale"));
           return;
         default:
-          setVerifyMessage("Vérification momentanément indisponible.");
+          setVerifyMessage((tr) => tr("manager.checkUnavailable"));
       }
     } catch (err) {
       if (axios.isAxiosError(err) && err.response?.status === 401) {
         leaveExpired();
         return;
       }
-      setVerifyMessage("Vérification momentanément indisponible.");
+      setVerifyMessage((tr) => tr("manager.checkUnavailable"));
     } finally {
       setVerifying(false);
     }
-  }, [completeRestrictedAccess, leaveExpired, router]);
+  }, [completeRestrictedAccess, leaveExpired, router, setVerifyMessage]);
 
   const handleLogout = useCallback(() => {
     void logout().then(() => router.replace("/auth/login"));
@@ -177,12 +181,16 @@ export default function SubscriptionAccessPage() {
             className="min-w-0 truncate font-semibold"
             title={fullNameOf(organizationName) ?? undefined}
           >
-            {organizationName ?? "Votre commerce"}
+            {organizationName ?? t("access.yourShop")}
           </span>
           <span className="ml-auto hidden sm:block">
             <Wordmark size="small" />
           </span>
-          <ThemeToggle className="ml-auto inline-flex rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:ml-0" />
+          {/* 1-16G : langue puis thème. */}
+          <span className="ml-auto flex items-center gap-1 sm:ml-0">
+            <LanguageSwitcher />
+            <ThemeToggle className="inline-flex rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" />
+          </span>
         </div>
       </header>
       <main className="flex flex-1 flex-col">
@@ -191,20 +199,20 @@ export default function SubscriptionAccessPage() {
             role="status"
             className="mx-auto mt-10 text-sm text-muted-foreground"
           >
-            Chargement…
+            {t("page.loading")}
           </p>
         )}
         {loadState === "unavailable" && (
           <div className="mx-auto mt-10 flex max-w-md flex-col items-center gap-3 px-4 text-center">
             <p role="alert" className="text-sm">
-              Vérification momentanément indisponible.
+              {t("manager.checkUnavailable")}
             </p>
             <button
               type="button"
               className="h-11 rounded-md border px-4 text-sm font-medium hover:bg-muted"
               onClick={() => setRetryTick((v) => v + 1)}
             >
-              Réessayer
+              {t("access.retry")}
             </button>
           </div>
         )}

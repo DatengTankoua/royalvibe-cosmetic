@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SearchIcon } from "lucide-react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
 import { useSections } from "@/hooks/use-sections";
 import { useOfflineCatalog } from "@/hooks/use-offline-catalog";
 import { OfflineCatalogBrowser } from "@/components/catalog/offline-catalog-browser";
@@ -39,6 +41,8 @@ function toOfflineSection(s: ApiSection): OfflineCatalogSection {
 // (/app/catalog/[id], /app/catalog/products/[id]) tant qu'on est hors ligne,
 // pour ne pas dépendre d'un document Next indisponible sans réseau.
 export default function CatalogPage() {
+  const { t } = useT("catalog");
+  const format = useFormat();
   const { authContext } = useOrganizationShell();
   const canManage = hasPermission(authContext, "catalog.manage");
   const [query, setQuery] = useState("");
@@ -117,9 +121,9 @@ export default function CatalogPage() {
   const handleDelete = async (id: string) => {
     try {
       await removeSection(id);
-      toast.success("Section supprimée");
+      toast.success(t("section.deleted"));
     } catch {
-      toast.error("Impossible de supprimer la section");
+      toast.error(t("section.deleteFailed"));
     }
   };
 
@@ -135,10 +139,8 @@ export default function CatalogPage() {
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-8 sm:px-6 sm:py-10">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Catalogue</h1>
-          <p className="text-sm text-muted-foreground">
-            Sélectionne une catégorie pour voir les produits
-          </p>
+          <h1 className="text-2xl font-semibold">{t("root.title")}</h1>
+          <p className="text-sm text-muted-foreground">{t("root.subtitle")}</p>
         </div>
         {canManageNow && (
           <CreateSectionDialog
@@ -155,24 +157,20 @@ export default function CatalogPage() {
               shell ; ici, uniquement la fraîcheur des données locales. */}
           <div className="flex flex-col gap-2 rounded-md border border-dashed p-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs text-muted-foreground">
-              {snapshot ? (
-                <>
-                  Dernière mise à jour :{" "}
-                  {new Date(snapshot.updatedAt).toLocaleString("fr-FR")}.
-                  Certaines informations peuvent ne plus être à jour.
-                </>
-              ) : offlineSnapshot.ready ? (
-                "Aucune donnée de catalogue disponible sur cet appareil."
-              ) : (
-                "Chargement…"
-              )}
+              {snapshot
+                ? t("offline.lastUpdate", {
+                    date: format.dateTime(snapshot.updatedAt),
+                  })
+                : offlineSnapshot.ready
+                  ? t("offline.noData")
+                  : t("loading")}
             </p>
             {online && (
               <button
                 onClick={() => void reload()}
                 className="shrink-0 self-start text-xs text-primary underline underline-offset-2 hover:no-underline sm:self-auto"
               >
-                Réessayer
+                {t("actions.retry")}
               </button>
             )}
           </div>
@@ -185,14 +183,14 @@ export default function CatalogPage() {
             <SearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               className="pl-9"
-              placeholder="Rechercher un catalogue…"
+              placeholder={t("root.search")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
 
           {isLoading && (
-            <p className="text-sm text-muted-foreground">Chargement…</p>
+            <p className="text-sm text-muted-foreground">{t("loading")}</p>
           )}
           {!isLoading && error && (
             <div className="flex items-center gap-3">
@@ -201,14 +199,13 @@ export default function CatalogPage() {
                 onClick={() => void reload()}
                 className="text-sm text-primary underline underline-offset-2 hover:no-underline"
               >
-                Réessayer
+                {t("actions.retry")}
               </button>
             </div>
           )}
           {!isLoading && !error && sections.length === 0 && (
             <p className="text-sm text-muted-foreground">
-              Aucune section.{" "}
-              {canManageNow && "Crée la première section ci-dessus."}
+              {t("root.empty")} {canManageNow && t("root.createFirst")}
             </p>
           )}
           {!isLoading &&
@@ -216,7 +213,7 @@ export default function CatalogPage() {
             sections.length > 0 &&
             filtered.length === 0 && (
               <p className="text-sm text-muted-foreground">
-                Aucun résultat pour « {query} ».
+                {t("noResults", { query })}
               </p>
             )}
           {!isLoading && !error && filtered.length > 0 && (

@@ -2,13 +2,16 @@ import Link from "next/link";
 import { PublicFooter } from "@/components/public/public-footer";
 import { PublicHeader } from "@/components/public/public-header";
 import type { PublicDocument } from "@/lib/legal/site-identity";
+import { getServerT } from "@/i18n/server";
+import { rich } from "@/i18n/rich";
 
 // 1-16C — Gabarit des textes longs publics (juridiques et guide) : en-tête
 // et pied communs, sommaire généré depuis les sections (un seul niveau
 // d'ancres, titres h2 hiérarchisés), lien d'évitement. 1-16C.1 : plus de
 // bandeau « projet » affiché ; le statut reste dans `site-identity.ts`
 // (documents non indexés tant qu'ils ne sont pas validés).
-// Rendu serveur, aucune donnée de session.
+// Rendu serveur, aucune donnée de session. 1-16G : textes du gabarit dans
+// `legal` (`document.*`), contenu fourni dans la langue de la requête.
 
 export interface DocumentSection {
   id: string;
@@ -21,7 +24,7 @@ export interface DocumentSection {
 const bodyClass =
   "doc-body text-base leading-relaxed text-(--public-body) [&_a]:font-medium [&_a]:text-(--brand-ink) [&_a]:underline [&_a]:underline-offset-4 [&_a]:rounded-sm [&_a:focus-visible]:outline-2 [&_a:focus-visible]:outline-offset-2 [&_a:focus-visible]:outline-(--brand-ink) [&_h3]:mt-6 [&_h3]:text-lg [&_h3]:font-bold [&_h3]:text-(--brand-ink) [&_p]:mt-3 [&_ul]:mt-3 [&_ul]:list-disc [&_ul]:space-y-1.5 [&_ul]:pl-5 [&_ol]:mt-3 [&_ol]:list-decimal [&_ol]:space-y-1.5 [&_ol]:pl-5 [&_strong]:font-semibold [&_strong]:text-(--brand-ink) [&_table]:mt-4 [&_table]:w-full [&_table]:border-collapse [&_table]:text-sm [&_th]:border-b [&_th]:border-(--brand-ink)/20 [&_th]:py-2 [&_th]:pr-3 [&_th]:text-left [&_th]:align-top [&_th]:font-semibold [&_td]:border-b [&_td]:border-(--brand-ink)/10 [&_td]:py-2 [&_td]:pr-3 [&_td]:align-top";
 
-export function DocumentPage({
+export async function DocumentPage({
   title,
   intro,
   doc,
@@ -33,13 +36,14 @@ export function DocumentPage({
   doc?: PublicDocument;
   sections: DocumentSection[];
 }) {
+  const { t, lng } = await getServerT("legal");
   return (
     <div className="flex flex-1 flex-col bg-(--public-bg) text-(--brand-ink)">
       <a
         href="#contenu"
         className="sr-only z-40 rounded-md bg-(--public-bg) px-4 py-3 font-semibold text-(--brand-ink) focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:outline-2 focus:outline-(--brand-ink)"
       >
-        Aller au contenu
+        {t("document.skipToContent")}
       </a>
       <PublicHeader />
 
@@ -60,7 +64,10 @@ export function DocumentPage({
           </h1>
           {doc && (
             <p className="mt-3 text-sm text-(--public-muted)">
-              Version {doc.version}, mise à jour le {doc.updatedAt}.
+              {t("document.version", {
+                version: doc.version,
+                date: doc.updatedAt[lng],
+              })}
             </p>
           )}
           <div className="mt-5 text-lg leading-relaxed text-pretty text-(--public-body)">
@@ -74,7 +81,7 @@ export function DocumentPage({
             className="h-fit rounded-xl border border-(--brand-ink)/10 bg-(--public-surface) p-4 lg:sticky lg:top-24"
           >
             <h2 id="sommaire-titre" className="text-sm font-bold">
-              Sommaire
+              {t("document.toc")}
             </h2>
             <ol className="mt-2 space-y-0.5 text-sm">
               {sections.map((section, index) => (
@@ -117,13 +124,16 @@ export function DocumentPage({
               ))}
             </div>
             <p className="mt-10 text-sm text-(--public-muted)">
-              Une question sur ce texte ?{" "}
-              <Link
-                href="/contact"
-                className="font-medium text-(--brand-ink) underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-ink)"
-              >
-                Contacter Stock Master
-              </Link>
+              {rich(t("document.question"), {
+                contact: (chunk) => (
+                  <Link
+                    href="/contact"
+                    className="font-medium text-(--brand-ink) underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-ink)"
+                  >
+                    {chunk}
+                  </Link>
+                ),
+              })}
             </p>
           </div>
         </div>

@@ -107,25 +107,36 @@ export const PROVIDERS: ReadonlyArray<{
 
 export type DocumentStatus = "projet" | "en-vigueur";
 
+export type LegalDocumentId =
+  | "mentions-legales"
+  | "conditions-utilisation"
+  | "conditions-abonnement"
+  | "confidentialite"
+  | "cookies"
+  | "traitement-donnees";
+
+// 1-16G : titres et libellés courts dans `legal` (`documents.<id>.*`), dans
+// chaque langue ; le registre ne garde que l'identité et la version.
 export interface PublicDocument {
   /** Identifiant stable, partagé avec l'API (archive des versions). */
-  id: string;
+  id: LegalDocumentId;
   href: string;
-  title: string;
-  /** Libellé court pour les listes de liens. */
-  short: string;
   status: DocumentStatus;
   /** Version affichée ; « projet » tant que non validée. */
   version: string;
-  updatedAt: string;
+  /** Date de mise à jour affichée, écrite dans chaque langue (1-16G). */
+  updatedAt: { fr: string; en: string };
 }
+
+const OCTOBER_7_2026 = { fr: "7 octobre 2026", en: "7 October 2026" };
+const OCTOBER_8_2026 = { fr: "8 octobre 2026", en: "8 October 2026" };
 
 // Statut « projet » conservé (non indexé) tant que les validations
 // juridiques manquent ; la version affichée reste 0.x.
 const DRAFT = {
   status: "projet",
   version: "0.2",
-  updatedAt: "7 octobre 2026",
+  updatedAt: OCTOBER_7_2026,
 } as const;
 
 // 1-16C.2 — Documents soumis à acceptation (ou présentés à l'inscription) :
@@ -135,10 +146,14 @@ const DRAFT = {
 // NOUVELLE version ici, puis son archivage : `web/scripts/legal-archive.mjs`
 // refuse sinon le build vérifié (texte ≠ archive de la version déclarée).
 // Une version archivée n'est jamais réécrite.
+//
+// 1-16G : la traduction anglaise d'une version porte le MÊME numéro (même
+// texte, autre langue) ; elle est archivée comme `<version>.en.txt`. Une
+// version déjà archivée n'est jamais traduite après coup (ex. CGA 0.3).
 const DRAFT_0_3 = {
   status: "projet",
   version: "0.3",
-  updatedAt: "7 octobre 2026",
+  updatedAt: OCTOBER_7_2026,
 } as const;
 
 // 1-16C.2 (finalisation) — Conditions d'abonnement 0.4 : le paiement en
@@ -147,7 +162,7 @@ const DRAFT_0_3 = {
 const DRAFT_0_4 = {
   status: "projet",
   version: "0.4",
-  updatedAt: "7 octobre 2026",
+  updatedAt: OCTOBER_7_2026,
 } as const;
 
 // Cookies et accord de traitement : textes modifiés par 03f5459
@@ -156,7 +171,23 @@ const DRAFT_0_4 = {
 const DRAFT_COOKIES_DPA = {
   status: "projet",
   version: "0.3",
-  updatedAt: "7 octobre 2026",
+  updatedAt: OCTOBER_7_2026,
+} as const;
+
+// 1-16G — Confidentialité 0.4 : la langue choisie rejoint les données du
+// compte (préférence utilisée pour les e-mails et notifications). La 0.3,
+// archivée en français, reste inchangée et n'est jamais traduite.
+const DRAFT_PRIVACY_0_4 = {
+  status: "projet",
+  version: "0.4",
+  updatedAt: OCTOBER_8_2026,
+} as const;
+
+// 1-16G — Cookies 0.4 : ajout du cookie de langue `stockmaster.lang`.
+const DRAFT_COOKIES_0_4 = {
+  status: "projet",
+  version: "0.4",
+  updatedAt: OCTOBER_8_2026,
 } as const;
 
 /** Documents juridiques et contractuels, dans l'ordre d'affichage. */
@@ -164,50 +195,39 @@ export const LEGAL_DOCUMENTS: readonly PublicDocument[] = Object.freeze([
   {
     id: "mentions-legales",
     href: "/mentions-legales",
-    title: "Mentions légales",
-    short: "Mentions légales",
     ...DRAFT,
   },
   {
     id: "conditions-utilisation",
     href: "/conditions-utilisation",
-    title: "Conditions d'utilisation",
-    short: "Conditions d'utilisation",
     ...DRAFT_0_3,
   },
   {
     id: "conditions-abonnement",
     href: "/conditions-abonnement",
-    title: "Conditions d'abonnement",
-    short: "Conditions d'abonnement",
     ...DRAFT_0_4,
   },
   {
     id: "confidentialite",
     href: "/confidentialite",
-    title: "Politique de confidentialité",
-    short: "Confidentialité",
-    ...DRAFT_0_3,
+    ...DRAFT_PRIVACY_0_4,
   },
   {
     id: "cookies",
     href: "/cookies",
-    title: "Cookies et stockage sur l'appareil",
-    short: "Cookies et stockage",
-    ...DRAFT_COOKIES_DPA,
+    ...DRAFT_COOKIES_0_4,
   },
   {
     id: "traitement-donnees",
     href: "/traitement-donnees",
-    title: "Accord de traitement des données",
-    short: "Traitement des données",
     ...DRAFT_COOKIES_DPA,
   },
 ]);
 
+// 1-16G : libellés dans `public` (`footer.pages.*`).
 export const HELP_PAGES = Object.freeze([
-  { href: "/guide", short: "Guide d'utilisation" },
-  { href: "/contact", short: "Contact" },
+  { href: "/guide", key: "guide" },
+  { href: "/contact", key: "contact" },
 ] as const);
 
 export function legalDocument(href: string): PublicDocument {
