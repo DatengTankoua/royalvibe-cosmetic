@@ -1,48 +1,30 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  Legend,
-} from "recharts";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  fetchOverview,
-  fetchProducts,
-  fetchProductsRanking,
-  fetchSellersRanking,
+  fetchInsights,
   fetchMonthlyTrend,
   getApiErrorMessage,
-  type AnalyticsOverview,
-  type ApiProduct,
-  type ProductRanking,
-  type SellerRanking,
-  type MonthlyTrend,
+  type AnalyticsInsights,
+  type InsightPriorityKind,
 } from "@/lib/api";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
+import { useOfflineSales } from "@/contexts/offline-sales-context";
 import { hasPermission } from "@/lib/organization-permissions";
-import { fmtXof } from "@/lib/currency";
 import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
 import { SALE_INVALIDATION_EVENTS } from "@/hooks/use-sale-invalidation";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
 import { MonthlyHistoryDownload } from "@/components/analytics/monthly-history-download";
 import { canDownloadMonthlyHistory } from "@/lib/monthly-history";
+import { analyticsLabels } from "@/lib/analytics-labels";
+import {
+  FOCUS,
+  SalesSection,
+  SellsSection,
+  StockDetails,
+  WatchSection,
+} from "@/components/analytics/insights-sections";
+import { AnalyticsDetails } from "@/components/analytics/analytics-details";
 
 // 1-15A : toute vente (création, modification, suppression) et tout
 // changement de produit modifient les indicateurs — relecture silencieuse.
@@ -55,17 +37,8 @@ const ANALYTICS_SIGNALS = [
   "product:purged",
 ] as const;
 
-const fmt = fmtXof;
-const pct = (n: number) => `${n.toFixed(1)}%`;
-// 1-15D : un chiffre inconnu (coût d'achat d'un produit supprimé non
-// conservé, stock d'un produit supprimé) s'affiche « — », jamais 0.
-const UNKNOWN = "—";
-const UNKNOWN_COST_HINT = "Coût d'achat inconnu (produits supprimés)";
-const UNNAMED_PRODUCT = "Nom non conservé";
-// 1-16D : avec un mois choisi, gain du mois seul (même règle que
-// l'historique mensuel exportable), jamais les coûts des autres mois.
-const MONTHLY_GAIN_RULE =
-  "Ventes du mois moins le prix d'achat actuel des produits vendus (prix figé à la suppression d'un produit).";
+const L = analyticsLabels();
+const DETAILS_SUMMARY = `${FOCUS} flex min-h-11 cursor-pointer items-center justify-between gap-2 rounded-2xl px-4 py-3 font-semibold`;
 
 // "2025-03" → "mars 2025"
 function formatMonthLabel(period: string): string {
@@ -76,65 +49,36 @@ function formatMonthLabel(period: string): string {
   });
 }
 
-function StatCard({
-  label,
-  value,
-  sub,
-  onClick,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  onClick?: () => void;
-}) {
-  const inner = (
-    <>
-      <p className="text-xs text-muted-foreground mb-1">{label}</p>
-      <p className="text-2xl font-bold">{value}</p>
-      {sub && <p className="text-xs text-muted-foreground mt-1">{sub}</p>}
-    </>
-  );
-  return (
-    <Card
-      className={
-        onClick ? "cursor-pointer hover:border-primary transition-colors" : ""
-      }
-      onClick={onClick}
-    >
-      <CardContent className="pt-5 pb-4">{inner}</CardContent>
-    </Card>
-  );
-}
-
-// /app/analytics (1-9D, ex "/analytics") : `analytics.read` gate TOUTES les
-// routes du contrôleur — aucun appel n'est déclenché sans cette permission
-// (jamais de requête interdite, jamais `User.role`).
+// /app/analytics (1-9D) — 1-16E : page orientée décisions, dans l'ordre
+// « À surveiller », « Vos ventes », « Ce qui se vend » ; détails repliés.
+// `analytics.read` gate TOUTES les routes : aucun appel sans cette permission.
+// Les droits financiers sont revalidés par le serveur (champs absents).
 export default function AnalyticsPage() {
   const { authContext } = useOrganizationShell();
   const canRead = hasPermission(authContext, "analytics.read");
+  const canAdjustStock = hasPermission(authContext, "stock.adjust");
+  const { unfinalizedCount } = useOfflineSales();
+  const selectId = useId();
 
-  const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
-  const [products, setProducts] = useState<ProductRanking[]>([]);
-  const [sellers, setSellers] = useState<SellerRanking[]>([]);
-  const [monthly, setMonthly] = useState<MonthlyTrend[]>([]);
+  // "" : mois en cours DU SERVEUR (fuseau de l'API, pas du navigateur).
+  const [month, setMonth] = useState<string>("");
+  const [serverCurrentMonth, setServerCurrentMonth] = useState<string | null>(
+    null,
+  );
+  const [months, setMonths] = useState<string[]>([]);
+  const [insights, setInsights] = useState<AnalyticsInsights | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedMonth, setSelectedMonth] = useState<string>(""); // "" = toutes périodes
   const [retryKey, setRetryKey] = useState(0);
-  const [outOfStockProducts, setOutOfStockProducts] = useState<ApiProduct[]>(
-    [],
-  );
-  const [outOfStockOpen, setOutOfStockOpen] = useState(false);
+  const [stockOpen, setStockOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   // 1-15A : début de la dernière lecture réussie (rattrapage après
-  // reconnexion) ; une réponse périmée (autre mois, relecture plus ancienne)
-  // n'écrase jamais une plus récente.
+  // reconnexion) ; une réponse périmée n'écrase jamais une plus récente.
   const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
   const order = useRef(createResponseOrder());
 
   const load = useCallback(
     async (options: { silent?: boolean } = {}) => {
-      // monthly trend and out-of-stock list are always global (no month filter)
-      const month = selectedMonth || undefined;
       if (!options.silent) {
         setLoading(true);
         setError(null);
@@ -142,33 +86,25 @@ export default function AnalyticsPage() {
       const requestedAt = Date.now();
       const ticket = order.current.begin();
       try {
-        const [ov, pr, sr, mt, allProducts] = await Promise.all([
-          fetchOverview(month),
-          fetchProductsRanking(month),
-          fetchSellersRanking(month),
+        const [data, trend] = await Promise.all([
+          fetchInsights(month || undefined),
           fetchMonthlyTrend(),
-          fetchProducts(),
         ]);
         if (!order.current.accept(ticket)) return;
-        setOverview(ov);
-        setProducts(pr);
-        setSellers(sr);
-        setMonthly(mt);
-        setOutOfStockProducts(
-          (allProducts as ApiProduct[]).filter(
-            (p) => p.status === "out_of_stock",
-          ),
-        );
+        setInsights(data);
+        if (data.period.isCurrentMonth)
+          setServerCurrentMonth(data.period.month);
+        setMonths(trend.map((m) => m.period));
         setError(null);
         setLoadedAt(requestedAt);
       } catch (err) {
-        // Une relecture silencieuse en échec conserve les indicateurs affichés.
+        // Une relecture silencieuse en échec conserve les chiffres affichés.
         if (!options.silent) setError(getApiErrorMessage(err));
       } finally {
         if (!options.silent) setLoading(false);
       }
     },
-    [selectedMonth],
+    [month],
   );
 
   useEffect(() => {
@@ -186,350 +122,146 @@ export default function AnalyticsPage() {
   );
   useSocketSignals(ANALYTICS_SIGNALS, scheduleRefresh);
 
+  const seeAll = useCallback((kind: InsightPriorityKind) => {
+    setStockOpen(true);
+    // Après l'ouverture : défilement et focus sur la liste concernée.
+    requestAnimationFrame(() => {
+      const target = document.getElementById(`stock-${kind}`);
+      if (!target) return;
+      target.scrollIntoView({ block: "start" });
+      target.setAttribute("tabindex", "-1");
+      target.focus({ preventScroll: true });
+    });
+  }, []);
+
   if (authContext && !canRead) {
     return (
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 px-4 py-10 sm:px-6">
-        <h1 className="text-2xl font-semibold">Situation du business</h1>
-        <p className="text-sm text-muted-foreground">
-          Tu n&apos;as pas la permission de consulter les analyses.
-        </p>
+        <h1 className="text-2xl font-semibold">{L.title}</h1>
+        <p className="text-sm text-muted-foreground">{L.noPermission}</p>
       </div>
     );
   }
 
+  const current = serverCurrentMonth;
+  const selected = month || insights?.period.month || "";
+  const options = Array.from(
+    new Set([current, ...months, selected].filter((m): m is string => !!m)),
+  )
+    .filter((m) => !current || m <= current)
+    .sort()
+    .reverse();
+  const generatedTime = insights
+    ? new Date(insights.generatedAt).toLocaleTimeString("fr-FR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-6 sm:px-6 sm:py-10">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold">Situation du business</h1>
-          <p className="text-sm text-muted-foreground">
-            {selectedMonth
-              ? `Période : ${formatMonthLabel(selectedMonth)}`
-              : "Vue globale · toutes périodes"}
-          </p>
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold">{L.title}</h1>
+          <p className="text-sm text-muted-foreground">{L.subtitle}</p>
         </div>
-        {monthly.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <label htmlFor={selectId} className="text-xs text-muted-foreground">
+            {L.periodLabel}
+          </label>
           <select
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-            className="rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+            id={selectId}
+            value={selected}
+            disabled={options.length === 0}
+            onChange={(e) => setMonth(e.target.value)}
+            className={`${FOCUS} min-h-10 rounded-lg border bg-background px-3 text-sm`}
           >
-            <option value="">Toutes périodes</option>
-            {[...monthly].reverse().map((m) => (
-              <option key={m.period} value={m.period}>
-                {formatMonthLabel(m.period)}
+            {options.map((m) => (
+              <option key={m} value={m}>
+                {m === current
+                  ? L.currentMonthOption(formatMonthLabel(m))
+                  : formatMonthLabel(m)}
               </option>
             ))}
           </select>
-        )}
+        </div>
+      </header>
+
+      <div
+        aria-live="polite"
+        className="flex flex-col gap-1 text-xs text-muted-foreground"
+      >
+        {generatedTime && <p>{L.freshness(generatedTime)}</p>}
+        <p>
+          {unfinalizedCount > 0
+            ? `${L.unsyncedPending(unfinalizedCount)} ${L.unsyncedNote}`
+            : L.unsyncedNote}
+        </p>
       </div>
 
-      {/* 1-16D : historique mensuel exportable (propriétaire, administrateur). */}
-      {canDownloadMonthlyHistory(authContext) && <MonthlyHistoryDownload />}
-
-      {loading && <p className="text-sm text-muted-foreground">Chargement…</p>}
+      {loading && !insights && (
+        <p className="text-sm text-muted-foreground">{L.loading}</p>
+      )}
       {!loading && error && (
-        <div className="flex items-center gap-3">
+        <div role="alert" className="flex flex-wrap items-center gap-3">
           <p className="text-sm text-destructive">{error}</p>
           <button
+            type="button"
             onClick={() => setRetryKey((k) => k + 1)}
-            className="text-sm text-primary underline underline-offset-2 hover:no-underline"
+            className={`${FOCUS} rounded text-sm text-(--tenant-accent-ink) underline underline-offset-2 hover:no-underline`}
           >
-            Réessayer
+            {L.retry}
           </button>
         </div>
       )}
 
-      {overview && (
-        <>
-          {/* KPIs */}
-          <section>
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground mb-3">
-              Vue d&apos;ensemble
-            </h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-              <StatCard
-                label="Capital investi"
-                value={fmt(overview.totalInvested)}
-              />
-              <StatCard
-                label="Chiffre d'affaires"
-                value={fmt(overview.totalRevenue)}
-              />
-              <StatCard
-                label={selectedMonth ? "Gain estimé du mois" : "Bénéfice net"}
-                value={
-                  overview.netProfit === null
-                    ? UNKNOWN
-                    : fmt(overview.netProfit)
-                }
-                sub={
-                  overview.netProfit === null
-                    ? UNKNOWN_COST_HINT
-                    : selectedMonth
-                      ? MONTHLY_GAIN_RULE
-                      : overview.netProfit >= 0
-                        ? "✓ Positif"
-                        : "⚠ Négatif"
-                }
-              />
-              <StatCard
-                label={
-                  selectedMonth ? "Marge estimée du mois" : "Marge moyenne"
-                }
-                value={
-                  overview.avgMargin === null
-                    ? UNKNOWN
-                    : pct(overview.avgMargin)
-                }
-                sub={
-                  overview.avgMargin === null ? UNKNOWN_COST_HINT : undefined
-                }
-              />
-              <StatCard
-                label="Unités vendues"
-                value={String(overview.unitsSold)}
-              />
-              <StatCard
-                label="Transactions"
-                value={String(overview.totalTransactions)}
-              />
-              <StatCard
-                label="Stock faible"
-                value={String(overview.lowStockCount)}
-                sub="produits"
-              />
-              <StatCard
-                label="Épuisés"
-                value={String(overview.outOfStockCount)}
-                sub={
-                  overview.outOfStockCount > 0
-                    ? "cliquer pour voir"
-                    : "produits"
-                }
-                onClick={
-                  overview.outOfStockCount > 0
-                    ? () => setOutOfStockOpen(true)
-                    : undefined
-                }
-              />
+      {insights && (
+        <div
+          className={`flex flex-col gap-8 ${loading ? "opacity-60" : ""}`}
+          aria-busy={loading}
+        >
+          <WatchSection
+            insights={insights}
+            rights={{ canAdjustStock }}
+            onSeeAll={seeAll}
+          />
+          <SalesSection insights={insights} />
+          <SellsSection insights={insights} />
+          {/* 1-16D : historique mensuel exportable (propriétaire, administrateur). */}
+          {canDownloadMonthlyHistory(authContext) && <MonthlyHistoryDownload />}
+
+          <details
+            id="stock-details"
+            open={stockOpen}
+            onToggle={(e) => setStockOpen(e.currentTarget.open)}
+            className="rounded-2xl border bg-card"
+          >
+            <summary className={DETAILS_SUMMARY}>{L.stock.title}</summary>
+            <div className="px-4 pb-4">
+              <StockDetails insights={insights} rights={{ canAdjustStock }} />
             </div>
-          </section>
+          </details>
 
-          {/* Monthly chart */}
-          {monthly.length > 0 && (
-            <section>
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground mb-3">
-                Évolution mensuelle
-              </h2>
-              <Card>
-                <CardContent className="pt-4 h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={monthly}>
-                      <defs>
-                        <linearGradient
-                          id="gradRevenue"
-                          x1="0"
-                          y1="0"
-                          x2="0"
-                          y2="1"
-                        >
-                          <stop
-                            offset="5%"
-                            stopColor="#6366f1"
-                            stopOpacity={0.3}
-                          />
-                          <stop
-                            offset="95%"
-                            stopColor="#6366f1"
-                            stopOpacity={0}
-                          />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="period" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <Tooltip formatter={(v) => fmt(Number(v ?? 0))} />
-                      <Area
-                        type="monotone"
-                        dataKey="totalRevenue"
-                        name="CA"
-                        stroke="#6366f1"
-                        fill="url(#gradRevenue)"
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </CardContent>
-              </Card>
-            </section>
-          )}
-
-          {/* Products ranking */}
-          {products.length > 0 && (
-            <section>
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground mb-3">
-                Classement produits
-              </h2>
-              <Card>
-                <CardContent className="pt-4 h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={products.slice(0, 8).map((p) => ({
-                        ...p,
-                        productName: p.productName ?? UNNAMED_PRODUCT,
-                      }))}
-                      layout="vertical"
-                    >
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis type="number" tick={{ fontSize: 11 }} />
-                      <YAxis
-                        type="category"
-                        dataKey="productName"
-                        width={100}
-                        tick={{ fontSize: 11 }}
-                      />
-                      <Tooltip formatter={(v) => fmt(Number(v ?? 0))} />
-                      <Legend />
-                      <Bar dataKey="totalRevenue" name="CA" fill="#6366f1" />
-                      <Bar dataKey="netProfit" name="Bénéfice" fill="#10b981" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </CardContent>
-              </Card>
-
-              {/* Table */}
-              <div className="mt-4 overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-xs text-muted-foreground">
-                      <th className="text-left py-2 pr-4">Produit</th>
-                      <th className="text-right py-2 px-2">Vendus</th>
-                      <th className="text-right py-2 px-2">CA</th>
-                      <th className="text-right py-2 px-2">Bénéfice</th>
-                      <th className="text-right py-2">Restant</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {products.map((p, i) => (
-                      <tr
-                        key={p.productId}
-                        className="border-b hover:bg-muted/50"
-                      >
-                        <td className="py-2 pr-4 font-medium">
-                          <span className="text-muted-foreground mr-2">
-                            {i + 1}.
-                          </span>
-                          {p.productName ?? (
-                            <span className="italic text-muted-foreground">
-                              {UNNAMED_PRODUCT}
-                            </span>
-                          )}
-                          {p.productDeleted && (
-                            <Badge variant="secondary" className="ml-2">
-                              supprimé
-                            </Badge>
-                          )}
-                        </td>
-                        <td className="text-right py-2 px-2">
-                          {p.totalUnitsSold}
-                        </td>
-                        <td className="text-right py-2 px-2">
-                          {fmt(p.totalRevenue)}
-                        </td>
-                        <td
-                          className={`text-right py-2 px-2 font-semibold ${p.netProfit === null ? "text-muted-foreground" : p.netProfit >= 0 ? "text-green-600" : "text-red-600"}`}
-                          title={
-                            p.netProfit === null ? UNKNOWN_COST_HINT : undefined
-                          }
-                        >
-                          {p.netProfit === null ? UNKNOWN : fmt(p.netProfit)}
-                        </td>
-                        <td className="text-right py-2">
-                          {p.remainingQuantity ?? UNKNOWN}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          )}
-
-          {/* Sellers ranking */}
-          {sellers.length > 0 && (
-            <section>
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground mb-3">
-                Classement vendeurs
-              </h2>
-              <div className="space-y-2">
-                {sellers.map((s, i) => (
-                  <Card key={s.sellerId}>
-                    <CardContent className="py-3 flex items-center gap-4">
-                      <span className="text-2xl font-bold text-muted-foreground w-8">
-                        {i + 1}
-                      </span>
-                      <div className="flex-1">
-                        <p className="font-semibold">{s.sellerName}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {s.sellerEmail}
-                        </p>
-                      </div>
-                      <div className="text-right text-sm space-y-0.5">
-                        <p className="font-bold">{fmt(s.totalRevenue)}</p>
-                        <p className="text-muted-foreground text-xs">
-                          {s.totalUnitsSold} unités · {s.transactionCount}{" "}
-                          ventes
-                        </p>
-                      </div>
-                      {i === 0 && <Badge>🏆 Top</Badge>}
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </section>
-          )}
-        </>
+          <details
+            id="analytics-details"
+            open={detailsOpen}
+            onToggle={(e) => setDetailsOpen(e.currentTarget.open)}
+            className="rounded-2xl border bg-card"
+          >
+            <summary className={DETAILS_SUMMARY}>
+              {L.details.title} : {L.details.open}
+            </summary>
+            <div className="px-4 pb-4">
+              {detailsOpen && (
+                <AnalyticsDetails
+                  month={insights.period.month}
+                  signals={ANALYTICS_SIGNALS}
+                />
+              )}
+            </div>
+          </details>
+        </div>
       )}
-
-      {/* Modal produits épuisés */}
-      <Dialog open={outOfStockOpen} onOpenChange={setOutOfStockOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              Produits épuisés ({outOfStockProducts.length})
-            </DialogTitle>
-          </DialogHeader>
-          {outOfStockProducts.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4 text-center">
-              Aucun produit épuisé
-            </p>
-          ) : (
-            <ul className="divide-y mt-2 max-h-96 overflow-y-auto">
-              {outOfStockProducts.map((p) => (
-                <li
-                  key={p._id}
-                  className="py-3 flex items-center justify-between gap-3"
-                >
-                  <div>
-                    <p className="font-medium text-sm">{p.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      Prix vente : {fmt(p.salePrice)} · {p.unitsSold} vendu(s)
-                    </p>
-                  </div>
-                  <Link
-                    prefetch={false}
-                    href={`/app/catalog/products/${p._id}`}
-                    onClick={() => setOutOfStockOpen(false)}
-                    className="shrink-0 text-xs text-primary underline underline-offset-2 hover:no-underline"
-                  >
-                    Voir le produit →
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

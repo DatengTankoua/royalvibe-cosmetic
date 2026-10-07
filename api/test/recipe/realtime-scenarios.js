@@ -606,11 +606,49 @@ async function saleCardText(page, buyer) {
   return norm(await card.first().innerText());
 }
 
-/** Ligne du classement produits (`/app/analytics`) : cellules texte. */
+/**
+ * 1-16E : le classement produits et les totaux « depuis le début » sont dans
+ * la section repliée « Détails » de `/app/analytics` (requêtes lancées à
+ * l'ouverture) : l'ouvrir si besoin, puis y limiter la recherche (le tableau
+ * « 5 produits » de l'écran principal porte aussi les noms).
+ */
+async function openAnalyticsDetails(page) {
+  const details = page.locator('#analytics-details');
+  await details.waitFor({ timeout: 15000 });
+  if (!(await details.evaluate((d) => d.open))) {
+    await details.locator('summary').click();
+  }
+  return details;
+}
+
+/** Ligne du classement produits (`/app/analytics`, « Détails ») : cellules texte. */
 async function rankingCells(page, name) {
-  const row = page.locator('tbody tr').filter({ hasText: name }).first();
+  const details = await openAnalyticsDetails(page);
+  const row = details.locator('tbody tr').filter({ hasText: name }).first();
   await row.waitFor({ timeout: 15000 });
   return (await row.locator('td').allInnerTexts()).map(norm);
+}
+
+/** Valeur d'un total « Depuis le début » (`dt` → `dd`, « Détails »). */
+async function overallValue(page, label) {
+  const details = await openAnalyticsDetails(page);
+  const term = details.locator('dt').filter({ hasText: label }).first();
+  await term.waitFor({ timeout: 15000 });
+  return norm(await term.locator('xpath=following-sibling::dd[1]').innerText());
+}
+
+/** « N unité(s) vendue(s) » de « Vos ventes » (`/app/analytics`, 1-16E). */
+async function unitsSoldValue(page) {
+  return page.evaluate(() => {
+    const section = document.querySelector(
+      'section[aria-labelledby=sales-title]',
+    );
+    for (const el of section ? section.querySelectorAll('p') : []) {
+      const m = /^(\d+)\s+unités?\s+vendues?$/.exec(el.textContent.trim());
+      if (m) return m[1];
+    }
+    return null;
+  });
 }
 
 /** Vrai CLI compilé de rattrapage, sur la base de la recette uniquement. */
@@ -1340,14 +1378,12 @@ async function main() {
       await loginUi(owner.page, ownerA.email);
       await loginUi(seller.page, std.email);
       await owner.page.goto(`${WEB}/app/analytics`);
+      // 1-16E : « Vos ventes » (mois en cours) remplace les cartes globales.
       await until(
-        async () => (await infoValue(owner.page, 'Transactions')) === '0',
-        'Transactions 0',
+        async () => (await infoValue(owner.page, 'Nombre de ventes')) === '0',
+        'Nombre de ventes 0',
       );
-      ok(
-        (await infoValue(owner.page, 'Unités vendues')) === '0',
-        'Unités vendues 0',
-      );
+      ok((await unitsSoldValue(owner.page)) === '0', 'Unités vendues 0');
       await seller.page.goto(`${WEB}/app/analytics`);
       await seller.page
         .getByText('pas la permission de consulter les analyses')
@@ -1356,17 +1392,17 @@ async function main() {
       const since = Date.now();
       await apiSale(tStd, p.productId, 2, { buyerName: 'Acheteur RT8' });
       await until(
-        async () => (await infoValue(owner.page, 'Transactions')) === '1',
-        'Transactions 1 sans rechargement',
+        async () => (await infoValue(owner.page, 'Nombre de ventes')) === '1',
+        'Nombre de ventes 1 sans rechargement',
       );
       await until(
-        async () => (await infoValue(owner.page, 'Unités vendues')) === '2',
+        async () => (await unitsSoldValue(owner.page)) === '2',
         'Unités vendues 2',
       );
       await until(
         async () =>
-          (await infoValue(owner.page, "Chiffre d'affaires"))?.includes('800'),
-        "Chiffre d'affaires 800",
+          digitsOf(await infoValue(owner.page, 'Montant des ventes')) === '800',
+        'Montant des ventes 800',
       );
       ok(
         await stillSameDocument(owner.page),
@@ -1375,8 +1411,8 @@ async function main() {
       // Une seconde vente rapprochée : valeurs finales exactes.
       await apiSale(tStd, p.productId, 1);
       await until(
-        async () => (await infoValue(owner.page, 'Transactions')) === '2',
-        'Transactions 2',
+        async () => (await infoValue(owner.page, 'Nombre de ventes')) === '2',
+        'Nombre de ventes 2',
       );
       // Membre sans `analytics.read` : aucune requête d'analyse, même après les ventes.
       await observeFor(1000);
@@ -1385,15 +1421,15 @@ async function main() {
         'vendeur : aucune requête /analytics',
       );
       ok(
-        (await infoValue(seller.page, 'Transactions')) === null,
+        (await infoValue(seller.page, 'Nombre de ventes')) === null,
         'vendeur : aucun indicateur',
       );
       ok(
         (await owner.page.content()).includes('Acheteur RT8') === false,
         'aucune donnée acheteur dans l’analyse',
       );
-      const relus = getsOf(owner, /^\/analytics\/overview$/, since).length;
-      return `Transactions 0→1→2, unités 0→2, CA 800 ; ${relus} relecture(s) overview ; vendeur : 0 requête /analytics`;
+      const relus = getsOf(owner, /^\/analytics\/insights$/, since).length;
+      return `Ventes 0→1→2, unités 0→2, montant 800 ; ${relus} relecture(s) insights ; vendeur : 0 requête /analytics`;
     },
   );
 
@@ -3011,15 +3047,12 @@ async function main() {
         `vente sans nom : ${c2}`,
       );
       await viewer.page.goto(`${WEB}/app/analytics`);
-      const profit = viewer.page
-        .locator('[data-slot=card]')
-        .filter({ hasText: 'Bénéfice net' })
-        .first();
-      await profit.waitFor();
-      ok(
-        /—/.test(await profit.innerText()),
-        `carte bénéfice : ${await profit.innerText()}`,
+      // 1-16E : bénéfice toutes périodes dans « Détails » (« Depuis le début »).
+      const profit = await overallValue(
+        viewer.page,
+        'Bénéfice estimé (toutes périodes)',
       );
+      ok(/—/.test(profit), `bénéfice toutes périodes : ${profit}`);
       ok(
         !(await viewer.page.locator('body').innerText()).includes('Refusé') &&
           !c1.includes('Refusé'),

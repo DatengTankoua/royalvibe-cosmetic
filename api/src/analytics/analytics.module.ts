@@ -7,6 +7,10 @@ import {
 import { MongooseModule } from '@nestjs/mongoose';
 import { Sale, SaleSchema } from '../sales/schemas/sale.schema';
 import { Product, ProductSchema } from '../products/schemas/product.schema';
+import {
+  Organization,
+  OrganizationSchema,
+} from '../organizations/schemas/organization.schema';
 import { AnalyticsService } from './analytics.service';
 import { AnalyticsController } from './analytics.controller';
 
@@ -19,6 +23,8 @@ import { AnalyticsController } from './analytics.controller';
         name: PurgedStockAdjustment.name,
         schema: PurgedStockAdjustmentSchema,
       },
+      // 1-16E : date de création du commerce (début d'observation).
+      { name: Organization.name, schema: OrganizationSchema },
     ]),
   ],
   providers: [AnalyticsService],

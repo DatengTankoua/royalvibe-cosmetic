@@ -6,6 +6,7 @@ import { processTimeZone } from './month-range';
 import { Sale } from '../sales/schemas/sale.schema';
 import { Product } from '../products/schemas/product.schema';
 import { PurgedStockAdjustment } from '../products/schemas/purged-stock-adjustment.schema';
+import { Organization } from '../organizations/schemas/organization.schema';
 
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 
@@ -30,6 +31,7 @@ describe('AnalyticsService — isolation tenant (1-4D)', () => {
           provide: getModelToken(PurgedStockAdjustment.name),
           useValue: stockAdjustmentModel,
         },
+        { provide: getModelToken(Organization.name), useValue: {} },
       ],
     }).compile();
     service = module.get(AnalyticsService);

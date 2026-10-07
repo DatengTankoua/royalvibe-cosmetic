@@ -253,6 +253,27 @@ export default function CatalogSectionPage() {
     setEditOpen(true);
   };
 
+  // 1-16E : « Ajouter du stock » / « Revoir le prix » depuis l'Analyse
+  // (`?modifier=<produit>`) ouvre UNE fois la fenêtre de modification
+  // existante, seulement si ce compte peut modifier et que le produit est
+  // dans ce catalogue. Le serveur revalide chaque champ modifié.
+  const editRequestHandled = useRef(false);
+  useEffect(() => {
+    if (editRequestHandled.current || productsLoading || !canEditProduct) {
+      return;
+    }
+    const requested = new URLSearchParams(window.location.search).get(
+      "modifier",
+    );
+    if (!requested) return;
+    editRequestHandled.current = true;
+    const product = products.find((p) => p._id === requested);
+    if (product) {
+      setEditTarget(product);
+      setEditOpen(true);
+    }
+  }, [products, productsLoading, canEditProduct]);
+
   const handleDeleteSubSection = async (id: string) => {
     try {
       await deleteSection(id);

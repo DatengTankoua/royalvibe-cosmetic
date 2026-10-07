@@ -106,12 +106,13 @@ export interface ApiAuditLog {
 }
 
 export interface AnalyticsOverview {
-  totalInvested: number;
+  // 1-16E : champs financiers ABSENTS sans `products.view_financials`.
+  totalInvested?: number;
   totalRevenue: number;
   // 1-15D : `null` si le coût d'achat de produits supprimés est inconnu.
   // 1-16D : avec `month`, gain estimé du seul mois (classement par produit).
-  netProfit: number | null;
-  avgMargin: number | null;
+  netProfit?: number | null;
+  avgMargin?: number | null;
   unitsSold: number;
   totalTransactions: number;
   productsCount: number;
@@ -129,7 +130,8 @@ export interface ProductRanking {
   remainingQuantity: number | null;
   totalUnitsSold: number;
   totalRevenue: number;
-  netProfit: number | null;
+  // 1-16E : absent sans droit financier.
+  netProfit?: number | null;
   transactionCount: number;
 }
 
@@ -140,6 +142,133 @@ export interface SellerRanking {
   totalUnitsSold: number;
   totalRevenue: number;
   transactionCount: number;
+}
+
+// 1-16E — aide à la décision de la page Analyse (`/analytics/insights`).
+export type SalesRateEstimate =
+  | {
+      estimable: true;
+      observedDays: number;
+      distinctSaleDays: number;
+      unitsSold: number;
+      dailyAverage: number;
+      daysLeft: number | null;
+    }
+  | {
+      estimable: false;
+      reason: "insufficient_history" | "invalid_quantities";
+      observedDays: number;
+      distinctSaleDays: number;
+      unitsSold: number;
+    };
+
+export interface InsightStockItem {
+  productId: string;
+  name: string;
+  sectionId: string;
+  remainingQuantity: number;
+  estimate: SalesRateEstimate;
+}
+
+export interface InsightPriceItem {
+  productId: string;
+  name: string;
+  sectionId: string;
+  revenue: number;
+  unitsSold: number;
+  purchasePrice: number;
+  gain: number;
+}
+
+export type InsightPriorityKind = "out" | "soon" | "price" | "low" | "stale";
+
+// 1-16E : première page d'une liste ; `count` = total réel (priorité
+// unique), la suite se lit par `fetchInsightList`.
+export interface InsightList<T> {
+  count: number;
+  offset: number;
+  limit: number;
+  items: T[];
+}
+
+export type InsightListKind =
+  "out" | "soon" | "price" | "low" | "stale" | "recent";
+
+export interface InsightTotals {
+  revenue: number;
+  salesCount: number;
+  unitsSold: number;
+  // Absent sans droit financier ; `null` : coût inconnu (jamais 0).
+  gain?: number | null;
+}
+
+export interface AnalyticsInsights {
+  generatedAt: string;
+  timeZone: string;
+  rights: { financials: boolean };
+  thresholds: {
+    observationWindowDays: number;
+    minObservationDays: number;
+    minDistinctSaleDays: number;
+    soonStockoutDays: number;
+    listPageSize: number;
+  };
+  period: {
+    month: string;
+    start: string;
+    end: string;
+    inProgress: boolean;
+    isCurrentMonth: boolean;
+  };
+  summary: InsightTotals;
+  comparison:
+    | {
+        available: true;
+        partial: boolean;
+        month: string | null;
+        start: string;
+        end: string;
+        totals: InsightTotals;
+        revenueChange: number | null;
+        salesCountChange: number | null;
+        // Mois terminés seulement : durées réelles et rythme par jour.
+        days?: number;
+        previousDays?: number;
+        revenuePerDayChange?: number | null;
+        salesCountPerDayChange?: number | null;
+      }
+    | {
+        available: false;
+        reason: "before_creation" | "unequal_length" | null;
+        start: string;
+        end: string;
+      };
+  trend: Array<{ date: string; revenue: number; salesCount: number }>;
+  topProducts: Array<{
+    productId: string;
+    name: string | null;
+    productDeleted: boolean;
+    revenue: number;
+    unitsSold: number;
+    remainingQuantity: number | null;
+  }>;
+  priorities: Array<
+    | {
+        kind: Exclude<InsightPriorityKind, "price">;
+        count: number;
+        items: InsightStockItem[];
+      }
+    | { kind: "price"; count: number; items: InsightPriceItem[] }
+  >;
+  stock: {
+    window: { start: string; end: string; days: number };
+    out: InsightList<InsightStockItem>;
+    soon: InsightList<InsightStockItem>;
+    low: InsightList<InsightStockItem>;
+    stale: InsightList<InsightStockItem>;
+    recent: InsightList<InsightStockItem>;
+  };
+  priceChecks?: InsightList<InsightPriceItem>;
 }
 
 export interface MonthlyTrend {
@@ -883,6 +1012,29 @@ export async function fetchSellersRanking(
     {
       params: month ? { month } : {},
     },
+  );
+  return data;
+}
+
+export async function fetchInsightList(
+  kind: InsightListKind,
+  offset: number,
+  month?: string,
+): Promise<InsightList<InsightStockItem | InsightPriceItem>> {
+  const { data } = await apiClient.get<
+    InsightList<InsightStockItem | InsightPriceItem>
+  >("/analytics/insights/list", {
+    params: { kind, offset, ...(month ? { month } : {}) },
+  });
+  return data;
+}
+
+export async function fetchInsights(
+  month?: string,
+): Promise<AnalyticsInsights> {
+  const { data } = await apiClient.get<AnalyticsInsights>(
+    "/analytics/insights",
+    { params: month ? { month } : {} },
   );
   return data;
 }

@@ -17,6 +17,18 @@ export function monthBounds(month: string): { start: Date; end: Date } {
  */
 export function saleMonthMatch(month: string): Record<string, unknown> {
   const { start, end } = monthBounds(month);
+  return saleRangeMatch(start, end);
+}
+
+/**
+ * 1-16E — même filtre sur un intervalle quelconque `[start, end[` (période
+ * de comparaison, fenêtre d'observation). `saleMonthMatch` en est le cas
+ * mensuel : bornes et repli identiques.
+ */
+export function saleRangeMatch(
+  start: Date,
+  end: Date,
+): Record<string, unknown> {
   const range = { $gte: start, $lt: end };
   return {
     $or: [{ occurredAt: range }, { occurredAt: null, createdAt: range }],
