@@ -66,7 +66,7 @@ export default function AppHomePage() {
           <PendingSalesAnchor
             href={pendingLink.href}
             offline={pendingLink.offline}
-            className="flex min-h-14 items-center gap-3 rounded-2xl border border-amber-500/40 bg-amber-50 px-4 py-3 text-amber-900 outline-none hover:bg-amber-100 focus-visible:ring-2 focus-visible:ring-(--tenant-accent-ring) focus-visible:ring-offset-2 motion-safe:transition-colors dark:bg-amber-500/10 dark:text-amber-200"
+            className="flex min-h-14 items-center gap-3 rounded-2xl border border-amber-500/40 bg-amber-50 px-4 py-3 text-amber-900 outline-none hover:bg-amber-100 dark:hover:bg-amber-500/20 focus-visible:ring-2 focus-visible:ring-(--tenant-accent-ring) focus-visible:ring-offset-2 motion-safe:transition-colors dark:bg-amber-500/10 dark:text-amber-200"
           >
             <span
               aria-hidden="true"

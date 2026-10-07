@@ -77,7 +77,7 @@ export function TenantLogo({
   return (
     <span
       aria-hidden="true"
-      className={`${s.box} ${s.text} flex shrink-0 select-none items-center justify-center rounded-md border border-black/10 bg-(--tenant-accent) font-semibold leading-none text-(--tenant-accent-foreground)`}
+      className={`${s.box} ${s.text} flex shrink-0 select-none items-center justify-center rounded-md border border-black/10 bg-(--tenant-accent) dark:border-white/15 font-semibold leading-none text-(--tenant-accent-foreground)`}
       data-tenant-logo="initials"
     >
       {initials || <StoreIcon className={s.icon} />}

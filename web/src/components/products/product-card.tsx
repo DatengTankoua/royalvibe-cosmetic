@@ -134,9 +134,9 @@ export function ProductCard({
                   <span
                     className={`text-right font-medium ${
                       item.tone === "positive"
-                        ? "text-green-600"
+                        ? "text-green-700 dark:text-green-400"
                         : item.tone === "negative"
-                          ? "text-red-600"
+                          ? "text-red-600 dark:text-red-400"
                           : ""
                     }`}
                   >

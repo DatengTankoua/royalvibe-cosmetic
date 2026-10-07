@@ -5,6 +5,8 @@ import { MenuIcon, XIcon } from "lucide-react";
 import { Wordmark } from "@/components/brand/wordmark";
 import { LANDING_NAV } from "@/components/landing/landing-nav";
 import { SessionCta } from "@/components/landing/session-cta";
+import { PUBLIC_THEME_TOGGLE_CLASS } from "@/components/public/public-header";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
 
 // 1-16B — En-tête de l'accueil public : ancres de la page, connexion et
 // inscription (ou « Ouvrir l'application » pour une session déjà ouverte,
@@ -13,7 +15,7 @@ import { SessionCta } from "@/components/landing/session-cta";
 // lien choisi ou au passage en largeur bureau.
 
 const linkClass =
-  "inline-flex min-h-11 items-center rounded-md px-2 text-sm font-medium text-(--brand-navy)/80 hover:text-(--brand-navy) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-navy)";
+  "inline-flex min-h-11 items-center rounded-md px-2 text-sm font-medium text-(--brand-ink)/80 hover:text-(--brand-ink) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-ink)";
 
 export function LandingHeader() {
   const [open, setOpen] = useState(false);
@@ -38,11 +40,11 @@ export function LandingHeader() {
   }, [open]);
 
   return (
-    <header className="sticky top-0 z-30 border-b border-(--brand-navy)/10 bg-white/95 backdrop-blur-sm">
+    <header className="sticky top-0 z-30 border-b border-(--brand-ink)/10 bg-(--public-bg)/95 backdrop-blur-sm">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-4">
         <a
           href="#haut"
-          className="rounded-md focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-(--brand-navy)"
+          className="rounded-md focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-(--brand-ink)"
           aria-label="Stock Master, haut de page"
         >
           <Wordmark size="small" priority />
@@ -60,31 +62,36 @@ export function LandingHeader() {
           </ul>
         </nav>
 
-        <div className="hidden lg:block">
-          <SessionCta variant="header" />
-        </div>
+        {/* 1-16F : thème toujours visible ; sous 1024 px, à côté du bouton
+            de menu (le panneau de navigation reste inchangé). */}
+        <div className="flex items-center gap-1 lg:gap-3">
+          <ThemeToggle className={PUBLIC_THEME_TOGGLE_CLASS} />
+          <div className="hidden lg:block">
+            <SessionCta variant="header" />
+          </div>
 
-        <button
-          ref={buttonRef}
-          type="button"
-          className="inline-flex size-11 items-center justify-center rounded-lg text-(--brand-navy) hover:bg-(--brand-navy)/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-navy) lg:hidden"
-          aria-expanded={open}
-          aria-controls={panelId}
-          aria-label={open ? "Fermer le menu" : "Ouvrir le menu"}
-          onClick={() => setOpen((value) => !value)}
-        >
-          {open ? (
-            <XIcon className="size-6" aria-hidden />
-          ) : (
-            <MenuIcon className="size-6" aria-hidden />
-          )}
-        </button>
+          <button
+            ref={buttonRef}
+            type="button"
+            className="inline-flex size-11 items-center justify-center rounded-lg text-(--brand-ink) hover:bg-(--brand-ink)/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-ink) lg:hidden"
+            aria-expanded={open}
+            aria-controls={panelId}
+            aria-label={open ? "Fermer le menu" : "Ouvrir le menu"}
+            onClick={() => setOpen((value) => !value)}
+          >
+            {open ? (
+              <XIcon className="size-6" aria-hidden />
+            ) : (
+              <MenuIcon className="size-6" aria-hidden />
+            )}
+          </button>
+        </div>
       </div>
 
       <div
         id={panelId}
         hidden={!open}
-        className="border-t border-(--brand-navy)/10 bg-white px-4 pt-2 pb-5 lg:hidden"
+        className="border-t border-(--brand-ink)/10 bg-(--public-bg) px-4 pt-2 pb-5 lg:hidden"
       >
         <nav aria-label="Sections de la page (menu)">
           <ul className="flex flex-col">

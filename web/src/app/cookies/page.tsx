@@ -119,6 +119,12 @@ export default function CookiesPage() {
                   duration: "Jusqu'à la fin du paiement",
                 },
                 {
+                  name: "stockmaster.theme",
+                  purpose:
+                    "Thème d'affichage choisi sur cet appareil (clair ou sombre). Absent en mode automatique, qui suit le réglage de l'appareil.",
+                  duration: "Sans limite, effaçable par vous",
+                },
+                {
                   name: "stockmaster.pwa.installed",
                   purpose:
                     "Retient que l'application a été installée sur l'appareil.",

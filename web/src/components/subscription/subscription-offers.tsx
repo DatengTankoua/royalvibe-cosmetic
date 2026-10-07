@@ -20,7 +20,7 @@ function OfferBody({ offer }: { offer: SubscriptionOffer }) {
       <span className="flex items-center justify-between gap-2">
         <span className="text-sm font-semibold">{offer.label}</span>
         {offer.highlight && (
-          <span className="rounded-full bg-(--brand-orange)/15 px-2 py-0.5 text-[11px] font-semibold text-(--brand-navy)">
+          <span className="rounded-full bg-(--brand-orange)/15 px-2 py-0.5 text-[11px] font-semibold text-(--brand-ink)">
             {offer.highlight}
           </span>
         )}
@@ -68,12 +68,12 @@ export function OfferGrid({ cta }: { cta?: { href: string; label: string } }) {
             key={offer.term}
             className={`relative flex flex-col rounded-2xl border bg-background p-5 shadow-sm transition-shadow hover:shadow-md ${
               recommended
-                ? "border-(--brand-navy) ring-2 ring-(--brand-navy) lg:-my-2 lg:py-7"
+                ? "border-(--brand-ink) ring-2 ring-(--brand-ink) lg:-my-2 lg:py-7"
                 : "border-border"
             }`}
           >
             {recommended && (
-              <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-(--brand-navy) px-3 py-1 text-xs font-semibold whitespace-nowrap text-white">
+              <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-(--brand-solid) px-3 py-1 text-xs font-semibold whitespace-nowrap text-white">
                 Le plus avantageux
               </span>
             )}
@@ -84,7 +84,7 @@ export function OfferGrid({ cta }: { cta?: { href: string; label: string } }) {
               {PUBLIC_INCLUDED.map((item) => (
                 <li key={item} className="flex items-start gap-1.5">
                   <CheckIcon
-                    className="mt-0.5 h-3.5 w-3.5 shrink-0 text-(--brand-navy)"
+                    className="mt-0.5 h-3.5 w-3.5 shrink-0 text-(--brand-ink)"
                     aria-hidden
                   />
                   {item}
@@ -94,10 +94,10 @@ export function OfferGrid({ cta }: { cta?: { href: string; label: string } }) {
             {cta && (
               <Link
                 href={cta.href}
-                className={`mt-auto inline-flex h-11 items-center justify-center rounded-lg px-4 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-navy) ${
+                className={`mt-auto inline-flex h-11 items-center justify-center rounded-lg px-4 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-ink) ${
                   recommended
-                    ? "bg-(--brand-navy) text-white hover:bg-(--brand-navy)/90"
-                    : "border border-(--brand-navy) text-(--brand-navy) hover:bg-(--brand-navy)/5"
+                    ? "bg-(--brand-solid) text-white hover:bg-(--brand-solid)/90"
+                    : "border border-(--brand-ink) text-(--brand-ink) hover:bg-(--brand-ink)/5"
                 }`}
                 aria-label={`${cta.label} — formule ${offer.label}`}
               >

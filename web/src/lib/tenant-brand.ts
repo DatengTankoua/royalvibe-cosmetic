@@ -83,21 +83,41 @@ export function readableForeground(background: string): string {
 }
 
 /**
- * Assombrit `color` par pas de 5 % vers le noir jusqu'à satisfaire `ok`
- * (au pire noir, qui satisfait toujours les critères utilisés ici).
+ * Déplace `color` par pas de 5 % vers `target` (noir pour assombrir, blanc
+ * pour éclaircir) jusqu'à satisfaire `ok` ; au pire `target`, qui satisfait
+ * toujours les critères utilisés ici.
  */
-function darkenUntil(color: string, ok: (c: string) => boolean): string {
+function shiftUntil(
+  color: string,
+  target: string,
+  ok: (c: string) => boolean,
+): string {
   let current = color;
   for (let step = 1; step <= 20 && !ok(current); step++) {
-    current = mix(color, "#000000", step * 0.05);
+    current = mix(color, target, step * 0.05);
   }
   return current;
 }
 
-export interface TenantAccentTokens {
-  /** Couleur validée du commerce (repli navy Stock Master). */
-  brand: string;
-  /** Fond plein des éléments porteurs de texte (pastille, CTA). */
+const darkenUntil = (color: string, ok: (c: string) => boolean) =>
+  shiftUntil(color, "#000000", ok);
+const lightenUntil = (color: string, ok: (c: string) => boolean) =>
+  shiftUntil(color, WHITE, ok);
+
+// 1-16F : surfaces du thème sombre (globals.css, .dark) en sRGB —
+// --background oklch(0.145) ≈ #0a0a0a, --card/--popover oklch(0.205)
+// ≈ #171717, --muted oklch(0.269) ≈ #262626 (surface la plus claire sur
+// laquelle un accent peut apparaître, survol compris).
+export const DARK_BACKGROUND = "#0a0a0a";
+export const DARK_SURFACE = "#171717";
+export const DARK_MUTED = "#262626";
+/** WCAG 2.x 1.4.11 : éléments graphiques et contours de contrôles. */
+export const AA_NON_TEXT_CONTRAST = 3;
+/** Filets décoratifs : simplement perceptibles (aucune exigence WCAG). */
+const BORDER_VISIBILITY = 1.5;
+
+export interface TenantAccentVariant {
+  /** Fond plein des éléments porteurs de texte (pastille, CTA, barres). */
   accent: string;
   /** Texte sur `accent` : navy ou blanc, contraste ≥ 4,5:1 garanti. */
   accentForeground: string;
@@ -105,21 +125,31 @@ export interface TenantAccentTokens {
   accentSoft: string;
   /** Bordures et filets décoratifs. */
   accentBorder: string;
-  /** Accent utilisé comme couleur de TEXTE sur fond blanc/léger (≥ 4,5:1). */
+  /** Accent utilisé comme couleur de TEXTE sur les surfaces (≥ 4,5:1). */
   accentInk: string;
-  /** Anneau de focus (non-texte, ≥ 3:1 sur fond blanc). */
+  /** Anneau de focus (non-texte, ≥ 3:1 sur les surfaces). */
   accentRing: string;
 }
 
-export function computeTenantAccent(brandColor: unknown): TenantAccentTokens {
-  const brand = normalizeBrandColor(brandColor) ?? DEFAULT_TENANT_BRAND_COLOR;
+export interface TenantAccentTokens extends TenantAccentVariant {
+  /** Couleur validée du commerce (repli navy Stock Master), jamais modifiée. */
+  brand: string;
+  /** 1-16F : mêmes rôles pour le thème sombre. Les champs de premier niveau
+   *  restent la variante claire. */
+  dark: TenantAccentVariant;
+}
+
+function lightVariant(brand: string): TenantAccentVariant {
   // Couleurs moyennes (ni navy ni blanc n'atteignent 4,5:1, pire cas
   // ≈ 3,7:1) : le fond est légèrement assombri, le texte devient blanc.
+  // 1-16F : une couleur très claire est aussi assombrie jusqu'à 3:1 contre
+  // le fond blanc (bouton/barre de graphique visibles).
   const accent = darkenUntil(
     brand,
-    (c) => contrastRatio(c, readableForeground(c)) >= AA_TEXT_CONTRAST,
+    (c) =>
+      contrastRatio(c, readableForeground(c)) >= AA_TEXT_CONTRAST &&
+      contrastRatio(c, WHITE) >= AA_NON_TEXT_CONTRAST,
   );
-  const accentForeground = readableForeground(accent);
   const accentSoft = mix(brand, WHITE, 0.9);
   // Texte accentué lisible sur blanc ET sur le fond léger.
   const accentInk = darkenUntil(
@@ -129,25 +159,76 @@ export function computeTenantAccent(brandColor: unknown): TenantAccentTokens {
       contrastRatio(c, accentSoft) >= AA_TEXT_CONTRAST,
   );
   return {
-    brand,
     accent,
-    accentForeground,
+    accentForeground: readableForeground(accent),
     accentSoft,
-    accentBorder: mix(brand, WHITE, 0.6),
+    accentBorder: darkenUntil(
+      mix(brand, WHITE, 0.6),
+      (c) => contrastRatio(c, WHITE) >= BORDER_VISIBILITY,
+    ),
     accentInk,
     accentRing: accentInk,
   };
 }
 
-/** Variables CSS posées sur la racine du shell /app (jamais sur :root). */
+function darkVariant(brand: string): TenantAccentVariant {
+  // Couleur sombre (navy, noir…) : éclaircie jusqu'à 3:1 contre la carte
+  // sombre ; couleur moyenne : éclaircie jusqu'à un texte navy à 4,5:1.
+  const accent = lightenUntil(
+    brand,
+    (c) =>
+      contrastRatio(c, readableForeground(c)) >= AA_TEXT_CONTRAST &&
+      contrastRatio(c, DARK_SURFACE) >= AA_NON_TEXT_CONTRAST,
+  );
+  const accentSoft = mix(brand, DARK_BACKGROUND, 0.82);
+  const accentInk = lightenUntil(
+    brand,
+    (c) =>
+      contrastRatio(c, DARK_MUTED) >= AA_TEXT_CONTRAST &&
+      contrastRatio(c, accentSoft) >= AA_TEXT_CONTRAST,
+  );
+  return {
+    accent,
+    accentForeground: readableForeground(accent),
+    accentSoft,
+    accentBorder: lightenUntil(
+      mix(brand, DARK_BACKGROUND, 0.45),
+      (c) => contrastRatio(c, DARK_BACKGROUND) >= BORDER_VISIBILITY,
+    ),
+    accentInk,
+    accentRing: accentInk,
+  };
+}
+
+export function computeTenantAccent(brandColor: unknown): TenantAccentTokens {
+  const brand = normalizeBrandColor(brandColor) ?? DEFAULT_TENANT_BRAND_COLOR;
+  return { brand, ...lightVariant(brand), dark: darkVariant(brand) };
+}
+
+function variantStyle(
+  prefix: "light" | "dark",
+  v: TenantAccentVariant,
+): Record<string, string> {
+  return {
+    [`--tenant-${prefix}-accent`]: v.accent,
+    [`--tenant-${prefix}-accent-foreground`]: v.accentForeground,
+    [`--tenant-${prefix}-accent-soft`]: v.accentSoft,
+    [`--tenant-${prefix}-accent-border`]: v.accentBorder,
+    [`--tenant-${prefix}-accent-ink`]: v.accentInk,
+    [`--tenant-${prefix}-accent-ring`]: v.accentRing,
+  };
+}
+
+/**
+ * Variables CSS posées sur la racine du shell /app (jamais sur :root).
+ * 1-16F : les deux variantes sont posées ; globals.css associe
+ * --tenant-accent* à l'une ou l'autre selon le thème affiché, sans
+ * nouveau calcul ni rendu lors d'un changement de thème.
+ */
 export function tenantAccentStyle(tokens: TenantAccentTokens): CSSProperties {
   return {
     "--tenant-brand": tokens.brand,
-    "--tenant-accent": tokens.accent,
-    "--tenant-accent-foreground": tokens.accentForeground,
-    "--tenant-accent-soft": tokens.accentSoft,
-    "--tenant-accent-border": tokens.accentBorder,
-    "--tenant-accent-ink": tokens.accentInk,
-    "--tenant-accent-ring": tokens.accentRing,
+    ...variantStyle("light", tokens),
+    ...variantStyle("dark", tokens.dark),
   } as CSSProperties;
 }

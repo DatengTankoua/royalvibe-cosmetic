@@ -51,13 +51,13 @@ const AUDIT_LABELS: Record<string, string> = {
 function ProfitIndicator({ profit }: { profit: number }) {
   if (profit > 0)
     return (
-      <span className="flex items-center gap-1 text-green-600 font-semibold">
+      <span className="flex items-center gap-1 text-green-700 dark:text-green-400 font-semibold">
         <TrendingUpIcon className="h-4 w-4" /> Rentable
       </span>
     );
   if (profit < 0)
     return (
-      <span className="flex items-center gap-1 text-red-600 font-semibold">
+      <span className="flex items-center gap-1 text-red-600 dark:text-red-400 font-semibold">
         <TrendingDownIcon className="h-4 w-4" /> À perte
       </span>
     );
@@ -336,9 +336,9 @@ export default function ProductDetailPage() {
                   <p
                     className={`text-lg font-bold ${
                       m.tone === "positive"
-                        ? "text-green-600"
+                        ? "text-green-700 dark:text-green-400"
                         : m.tone === "negative"
-                          ? "text-red-600"
+                          ? "text-red-600 dark:text-red-400"
                           : ""
                     }`}
                   >

@@ -18,12 +18,12 @@ const base =
 const STYLES: Record<"light" | "dark", { primary: string; secondary: string }> =
   {
     light: {
-      primary: `${base} bg-(--brand-navy) text-white hover:bg-(--brand-navy)/90 focus-visible:outline-(--brand-navy)`,
-      secondary: `${base} border border-(--brand-navy)/40 text-(--brand-navy) hover:border-(--brand-navy) hover:bg-(--brand-navy)/5 focus-visible:outline-(--brand-navy)`,
+      primary: `${base} bg-(--brand-solid) text-white hover:bg-(--brand-solid)/90 focus-visible:outline-(--brand-ink)`,
+      secondary: `${base} border border-(--brand-ink)/40 text-(--brand-ink) hover:border-(--brand-ink) hover:bg-(--brand-ink)/5 focus-visible:outline-(--brand-ink)`,
     },
     dark: {
       primary: `${base} bg-(--brand-orange) text-(--brand-navy) hover:bg-[#ff8533] focus-visible:outline-white`,
-      secondary: `${base} border border-white/50 text-white hover:border-white hover:bg-white/10 focus-visible:outline-white`,
+      secondary: `${base} border border-white/50 text-white hover:border-white hover:bg-(--public-bg)/10 focus-visible:outline-white`,
     },
   };
 

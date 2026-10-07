@@ -221,7 +221,7 @@ function SupportForm() {
       >
         <div className="flex items-start gap-3">
           <CheckCircle2Icon
-            className="mt-0.5 size-5 shrink-0 text-emerald-700"
+            className="mt-0.5 size-5 shrink-0 text-emerald-700 dark:text-emerald-400"
             aria-hidden
           />
           <div className="min-w-0 space-y-2">

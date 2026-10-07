@@ -40,9 +40,11 @@ export function Wordmark({
   // centralisée + ratio réel). Sans lui, une image `unoptimized` (pas de
   // srcset) prendrait la taille naturelle du PNG source (2172 px de large).
   // max-w-full : réduction proportionnelle si l'espace manque (320 px).
+  // 1-16F : en thème sombre, plaque blanche derrière le logo officiel
+  // (navy sur fond clair) — jamais d'inversion ni de filtre sur l'image.
   return (
     <span
-      className={`block max-w-full shrink-0 ${className ?? ""}`.trim()}
+      className={`block max-w-full shrink-0 dark:rounded-md dark:bg-white ${className ?? ""}`.trim()}
       style={{ width, aspectRatio: `${width} / ${height}` }}
     >
       <Image

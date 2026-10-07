@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import axios from "axios";
 import { useAuth } from "@/contexts/auth-context";
 import { Wordmark } from "@/components/brand/wordmark";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { CommercialBlockScreen } from "@/components/subscription/commercial-block-screen";
 import {
   fetchActiveOrganizations,
@@ -181,6 +182,7 @@ export default function SubscriptionAccessPage() {
           <span className="ml-auto hidden sm:block">
             <Wordmark size="small" />
           </span>
+          <ThemeToggle className="ml-auto inline-flex rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:ml-0" />
         </div>
       </header>
       <main className="flex flex-1 flex-col">

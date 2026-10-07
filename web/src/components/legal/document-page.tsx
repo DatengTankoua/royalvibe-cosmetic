@@ -19,7 +19,7 @@ export interface DocumentSection {
 // Typographie des corps de texte (pas de plugin « typography » dans le
 // projet) : sélecteurs descendants limités au conteneur `.doc-body`.
 const bodyClass =
-  "doc-body text-base leading-relaxed text-[#26364d] [&_a]:font-medium [&_a]:text-(--brand-navy) [&_a]:underline [&_a]:underline-offset-4 [&_a]:rounded-sm [&_a:focus-visible]:outline-2 [&_a:focus-visible]:outline-offset-2 [&_a:focus-visible]:outline-(--brand-navy) [&_h3]:mt-6 [&_h3]:text-lg [&_h3]:font-bold [&_h3]:text-(--brand-navy) [&_p]:mt-3 [&_ul]:mt-3 [&_ul]:list-disc [&_ul]:space-y-1.5 [&_ul]:pl-5 [&_ol]:mt-3 [&_ol]:list-decimal [&_ol]:space-y-1.5 [&_ol]:pl-5 [&_strong]:font-semibold [&_strong]:text-(--brand-navy) [&_table]:mt-4 [&_table]:w-full [&_table]:border-collapse [&_table]:text-sm [&_th]:border-b [&_th]:border-(--brand-navy)/20 [&_th]:py-2 [&_th]:pr-3 [&_th]:text-left [&_th]:align-top [&_th]:font-semibold [&_td]:border-b [&_td]:border-(--brand-navy)/10 [&_td]:py-2 [&_td]:pr-3 [&_td]:align-top";
+  "doc-body text-base leading-relaxed text-(--public-body) [&_a]:font-medium [&_a]:text-(--brand-ink) [&_a]:underline [&_a]:underline-offset-4 [&_a]:rounded-sm [&_a:focus-visible]:outline-2 [&_a:focus-visible]:outline-offset-2 [&_a:focus-visible]:outline-(--brand-ink) [&_h3]:mt-6 [&_h3]:text-lg [&_h3]:font-bold [&_h3]:text-(--brand-ink) [&_p]:mt-3 [&_ul]:mt-3 [&_ul]:list-disc [&_ul]:space-y-1.5 [&_ul]:pl-5 [&_ol]:mt-3 [&_ol]:list-decimal [&_ol]:space-y-1.5 [&_ol]:pl-5 [&_strong]:font-semibold [&_strong]:text-(--brand-ink) [&_table]:mt-4 [&_table]:w-full [&_table]:border-collapse [&_table]:text-sm [&_th]:border-b [&_th]:border-(--brand-ink)/20 [&_th]:py-2 [&_th]:pr-3 [&_th]:text-left [&_th]:align-top [&_th]:font-semibold [&_td]:border-b [&_td]:border-(--brand-ink)/10 [&_td]:py-2 [&_td]:pr-3 [&_td]:align-top";
 
 export function DocumentPage({
   title,
@@ -34,10 +34,10 @@ export function DocumentPage({
   sections: DocumentSection[];
 }) {
   return (
-    <div className="flex flex-1 flex-col bg-white text-(--brand-navy)">
+    <div className="flex flex-1 flex-col bg-(--public-bg) text-(--brand-ink)">
       <a
         href="#contenu"
-        className="sr-only z-40 rounded-md bg-white px-4 py-3 font-semibold text-(--brand-navy) focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:outline-2 focus:outline-(--brand-navy)"
+        className="sr-only z-40 rounded-md bg-(--public-bg) px-4 py-3 font-semibold text-(--brand-ink) focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:outline-2 focus:outline-(--brand-ink)"
       >
         Aller au contenu
       </a>
@@ -59,11 +59,11 @@ export function DocumentPage({
             {title}
           </h1>
           {doc && (
-            <p className="mt-3 text-sm text-[#3d4e66]">
+            <p className="mt-3 text-sm text-(--public-muted)">
               Version {doc.version}, mise à jour le {doc.updatedAt}.
             </p>
           )}
-          <div className="mt-5 text-lg leading-relaxed text-pretty text-[#26364d]">
+          <div className="mt-5 text-lg leading-relaxed text-pretty text-(--public-body)">
             {intro}
           </div>
         </div>
@@ -71,7 +71,7 @@ export function DocumentPage({
         <div className="mt-10 grid gap-10 lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-14">
           <nav
             aria-labelledby="sommaire-titre"
-            className="h-fit rounded-xl border border-(--brand-navy)/10 bg-[#f5f8fc] p-4 lg:sticky lg:top-24"
+            className="h-fit rounded-xl border border-(--brand-ink)/10 bg-(--public-surface) p-4 lg:sticky lg:top-24"
           >
             <h2 id="sommaire-titre" className="text-sm font-bold">
               Sommaire
@@ -81,7 +81,7 @@ export function DocumentPage({
                 <li key={section.id}>
                   <a
                     href={`#${section.id}`}
-                    className="flex min-h-10 items-start gap-2 rounded-md px-1 py-2 text-[#3d4e66] hover:text-(--brand-navy) focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-(--brand-navy)"
+                    className="flex min-h-10 items-start gap-2 rounded-md px-1 py-2 text-(--public-muted) hover:text-(--brand-ink) focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-(--brand-ink)"
                   >
                     <span
                       className="w-5 shrink-0 text-right tabular-nums"
@@ -103,7 +103,7 @@ export function DocumentPage({
                   key={section.id}
                   id={section.id}
                   aria-labelledby={`${section.id}-titre`}
-                  className="scroll-mt-24 border-t border-(--brand-navy)/10 pt-8 pb-4 first:border-t-0 first:pt-0"
+                  className="scroll-mt-24 border-t border-(--brand-ink)/10 pt-8 pb-4 first:border-t-0 first:pt-0"
                 >
                   <h2
                     id={`${section.id}-titre`}
@@ -116,11 +116,11 @@ export function DocumentPage({
                 </section>
               ))}
             </div>
-            <p className="mt-10 text-sm text-[#3d4e66]">
+            <p className="mt-10 text-sm text-(--public-muted)">
               Une question sur ce texte ?{" "}
               <Link
                 href="/contact"
-                className="font-medium text-(--brand-navy) underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-navy)"
+                className="font-medium text-(--brand-ink) underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-ink)"
               >
                 Contacter Stock Master
               </Link>

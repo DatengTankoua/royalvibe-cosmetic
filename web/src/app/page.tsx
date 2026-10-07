@@ -137,7 +137,7 @@ const faq = [
 const primaryCta =
   "inline-flex min-h-12 items-center justify-center rounded-lg bg-(--brand-orange) px-6 text-base font-semibold text-(--brand-navy) hover:bg-[#ff8533] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white";
 const primaryCtaOnLight =
-  "inline-flex min-h-12 items-center justify-center rounded-lg bg-(--brand-navy) px-6 text-base font-semibold text-white hover:bg-(--brand-navy)/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-navy)";
+  "inline-flex min-h-12 items-center justify-center rounded-lg bg-(--brand-solid) px-6 text-base font-semibold text-white hover:bg-(--brand-solid)/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-ink)";
 const inlineLink =
   "rounded-sm font-medium underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2";
 
@@ -149,11 +149,11 @@ export default function LandingPage() {
   return (
     <div
       id="haut"
-      className="flex flex-1 touch-manipulation flex-col bg-white text-(--brand-navy) [&_:target]:scroll-mt-20"
+      className="flex flex-1 touch-manipulation flex-col bg-(--public-bg) text-(--brand-ink) [&_:target]:scroll-mt-20"
     >
       <a
         href="#contenu"
-        className="sr-only z-40 rounded-md bg-white px-4 py-3 font-semibold text-(--brand-navy) focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:outline-2 focus:outline-(--brand-navy)"
+        className="sr-only z-40 rounded-md bg-(--public-bg) px-4 py-3 font-semibold text-(--brand-ink) focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:outline-2 focus:outline-(--brand-ink)"
       >
         Aller au contenu
       </a>
@@ -191,7 +191,7 @@ export default function LandingPage() {
                 )}
                 <a
                   href="#tarifs"
-                  className="inline-flex min-h-12 items-center justify-center rounded-lg border border-white/40 px-6 text-base font-semibold text-white hover:border-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                  className="inline-flex min-h-12 items-center justify-center rounded-lg border border-white/40 px-6 text-base font-semibold text-white hover:border-white hover:bg-(--public-bg)/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                 >
                   Voir les tarifs
                 </a>
@@ -245,20 +245,20 @@ export default function LandingPage() {
               <li key={title} className="flex gap-4">
                 <span
                   aria-hidden
-                  className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-(--brand-orange)/12 text-(--brand-navy)"
+                  className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-(--brand-orange)/12 text-(--brand-ink)"
                 >
                   <Icon className="size-5" />
                 </span>
                 <div className="min-w-0">
                   <h3 className="text-lg font-bold">{title}</h3>
-                  <p className="mt-1.5 leading-relaxed text-pretty text-[#3d4e66]">
+                  <p className="mt-1.5 leading-relaxed text-pretty text-(--public-muted)">
                     {text}
                   </p>
                 </div>
               </li>
             ))}
           </ul>
-          <p className="mt-12 max-w-3xl border-t border-(--brand-navy)/10 pt-6 leading-relaxed text-[#3d4e66]">
+          <p className="mt-12 max-w-3xl border-t border-(--brand-ink)/10 pt-6 leading-relaxed text-(--public-muted)">
             Aussi inclus : la corbeille pour récupérer un produit supprimé, le
             convertisseur euro ↔ franc CFA, le logo et la couleur de votre
             commerce, et un centre de notifications dans l&apos;application.
@@ -270,7 +270,7 @@ export default function LandingPage() {
         <section
           id="hors-ligne"
           aria-labelledby="hors-ligne-title"
-          className="bg-[#eef3f9]"
+          className="bg-(--public-surface-2)"
         >
           <div className="mx-auto max-w-6xl px-4 py-16 sm:py-20">
             <h2
@@ -284,20 +284,20 @@ export default function LandingPage() {
                 <li key={title} className="flex gap-4 md:flex-col md:gap-3">
                   <span
                     aria-hidden
-                    className="flex size-9 shrink-0 items-center justify-center rounded-full bg-(--brand-navy) text-sm font-bold text-white tabular-nums"
+                    className="flex size-9 shrink-0 items-center justify-center rounded-full bg-(--brand-solid) text-sm font-bold text-white tabular-nums"
                   >
                     {index + 1}
                   </span>
                   <div className="min-w-0">
                     <h3 className="text-lg font-bold">{title}</h3>
-                    <p className="mt-1.5 leading-relaxed text-pretty text-[#3d4e66]">
+                    <p className="mt-1.5 leading-relaxed text-pretty text-(--public-muted)">
                       {text}
                     </p>
                   </div>
                 </li>
               ))}
             </ol>
-            <p className="mt-10 max-w-3xl text-sm leading-relaxed text-[#3d4e66]">
+            <p className="mt-10 max-w-3xl text-sm leading-relaxed text-(--public-muted)">
               Sans réseau, seule la vente est possible. Ajouter des produits,
               consulter les analyses ou gérer l&apos;équipe demande une
               connexion. Les ventes en attente restent sur l&apos;appareil
@@ -321,7 +321,7 @@ export default function LandingPage() {
               >
                 Un abonnement, la durée de votre choix
               </h2>
-              <p className="mt-4 max-w-md leading-relaxed text-pretty text-[#3d4e66]">
+              <p className="mt-4 max-w-md leading-relaxed text-pretty text-(--public-muted)">
                 Toutes les fonctionnalités, pour tout le commerce. Le montant
                 indiqué est le total payé pour la durée choisie.
               </p>
@@ -333,7 +333,7 @@ export default function LandingPage() {
             </div>
 
             <div>
-              <ul className="divide-y divide-(--brand-navy)/10 overflow-hidden rounded-2xl border border-(--brand-navy)/15">
+              <ul className="divide-y divide-(--brand-ink)/10 overflow-hidden rounded-2xl border border-(--brand-ink)/15">
                 {SUBSCRIPTION_OFFERS.map((offer) => {
                   const recommended = offer.term === bestOffer?.term;
                   return (
@@ -348,7 +348,7 @@ export default function LandingPage() {
                       <p className="flex flex-wrap items-center gap-2 text-lg font-bold">
                         {offer.label}
                         {recommended && (
-                          <span className="rounded-full bg-(--brand-navy) px-2.5 py-0.5 text-xs font-semibold text-white">
+                          <span className="rounded-full bg-(--brand-solid) px-2.5 py-0.5 text-xs font-semibold text-white">
                             Le plus avantageux
                           </span>
                         )}
@@ -356,7 +356,7 @@ export default function LandingPage() {
                       <p className="text-right text-2xl font-extrabold tracking-tight whitespace-nowrap tabular-nums">
                         {formatFcfa(offer.totalXaf)}
                       </p>
-                      <p className="col-span-2 text-sm text-[#3d4e66] tabular-nums">
+                      <p className="col-span-2 text-sm text-(--public-muted) tabular-nums">
                         {offer.months > 1
                           ? `Soit ${formatFcfa(monthlyEquivalentXaf(offer))} par mois et ${formatFcfa(offer.savingXaf)} d'économie par rapport au paiement mensuel${
                               offer.highlight &&
@@ -376,18 +376,18 @@ export default function LandingPage() {
                     Commencer mon essai gratuit
                   </Link>
                 ) : (
-                  <p className="text-sm text-[#3d4e66]">
+                  <p className="text-sm text-(--public-muted)">
                     Les inscriptions sont momentanément fermées.{" "}
                     <Link
                       href="/auth/login"
-                      className={`${inlineLink} focus-visible:outline-(--brand-navy)`}
+                      className={`${inlineLink} focus-visible:outline-(--brand-ink)`}
                     >
                       Se connecter
                     </Link>
                   </p>
                 )}
               </div>
-              <div className="mt-8 border-t border-(--brand-navy)/10 pt-6 text-sm [&_li]:text-[#3d4e66]">
+              <div className="mt-8 border-t border-(--brand-ink)/10 pt-6 text-sm [&_li]:text-(--public-muted)">
                 <OfferConditions />
               </div>
             </div>
@@ -398,7 +398,7 @@ export default function LandingPage() {
         <section
           id="questions"
           aria-labelledby="questions-title"
-          className="border-t border-(--brand-navy)/10"
+          className="border-t border-(--brand-ink)/10"
         >
           <div className="mx-auto max-w-3xl px-4 py-16 sm:py-20">
             <h2
@@ -407,17 +407,17 @@ export default function LandingPage() {
             >
               Questions fréquentes
             </h2>
-            <div className="mt-8 divide-y divide-(--brand-navy)/10 border-y border-(--brand-navy)/10">
+            <div className="mt-8 divide-y divide-(--brand-ink)/10 border-y border-(--brand-ink)/10">
               {faq.map(({ question, answer }) => (
                 <details key={question} className="group">
-                  <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 rounded-md py-4 text-left text-lg font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-navy) [&::-webkit-details-marker]:hidden">
+                  <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 rounded-md py-4 text-left text-lg font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-ink) [&::-webkit-details-marker]:hidden">
                     {question}
                     <ChevronDownIcon
                       aria-hidden
                       className="size-5 shrink-0 motion-safe:transition-transform group-open:rotate-180"
                     />
                   </summary>
-                  <p className="pb-5 leading-relaxed text-pretty text-[#3d4e66]">
+                  <p className="pb-5 leading-relaxed text-pretty text-(--public-muted)">
                     {answer}
                   </p>
                 </details>

@@ -7,7 +7,7 @@ import { HELP_PAGES, LEGAL_DOCUMENTS } from "@/lib/legal/site-identity";
 // ancres de l'accueil sont préfixées par « / » hors de l'accueil. Le lien
 // d'inscription suit le même flag d'affichage que le reste du site.
 const linkClass =
-  "inline-flex min-h-11 items-center rounded-sm text-sm text-[#3d4e66] hover:text-(--brand-navy) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-navy)";
+  "inline-flex min-h-11 items-center rounded-sm text-sm text-(--public-muted) hover:text-(--brand-ink) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--brand-ink)";
 
 function Column({
   title,
@@ -20,7 +20,7 @@ function Column({
 }) {
   return (
     <nav aria-labelledby={id}>
-      <h2 id={id} className="text-sm font-bold text-(--brand-navy)">
+      <h2 id={id} className="text-sm font-bold text-(--brand-ink)">
         {title}
       </h2>
       <ul className="mt-2 flex flex-col">{children}</ul>
@@ -34,11 +34,11 @@ export function PublicFooter({ onHome = false }: { onHome?: boolean }) {
   const anchor = (href: string) => (onHome ? href : `/${href}`);
 
   return (
-    <footer className="border-t border-(--brand-navy)/10 bg-white">
+    <footer className="border-t border-(--brand-ink)/10 bg-(--public-bg)">
       <div className="mx-auto grid max-w-6xl gap-8 px-4 py-10 sm:grid-cols-2 lg:grid-cols-[1.2fr_1fr_1fr_1.3fr]">
         <div>
           <Wordmark size="small" />
-          <p className="mt-3 max-w-xs text-sm leading-relaxed text-[#3d4e66]">
+          <p className="mt-3 max-w-xs text-sm leading-relaxed text-(--public-muted)">
             Stock, ventes et équipe pour les commerces, depuis le téléphone.
           </p>
         </div>

@@ -4,6 +4,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/contexts/auth-context";
 import { PwaRegister } from "@/components/layout/pwa-register";
 import { PushNavigationBridge } from "@/components/layout/push-navigation-bridge";
+import { ThemeSync } from "@/components/theme/use-theme";
+import { THEME_INIT_SCRIPT } from "@/lib/theme";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -63,6 +65,12 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
+      <head>
+        {/* 1-16F : thème posé avant le premier rendu (aucun flash) ; la
+            classe/le style ajoutés sur <html> sont couverts par
+            suppressHydrationWarning. Script statique, sans donnée. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body className="min-h-full flex flex-col">
         <AuthProvider>
           <main className="flex-1 flex flex-col">{children}</main>
@@ -70,6 +78,7 @@ export default function RootLayout({
         </AuthProvider>
         <PwaRegister />
         <PushNavigationBridge />
+        <ThemeSync />
       </body>
     </html>
   );

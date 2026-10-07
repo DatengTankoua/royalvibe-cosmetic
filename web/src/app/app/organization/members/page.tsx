@@ -147,7 +147,7 @@ export default function OrganizationMembersPage() {
                 <p className="truncate font-medium">
                   {member.user.name}
                   {isTargetOwner && (
-                    <Crown className="ml-1 inline h-3.5 w-3.5 text-amber-500" />
+                    <Crown className="ml-1 inline h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
                   )}
                   {isSelf && (
                     <span className="ml-1 text-xs text-muted-foreground">

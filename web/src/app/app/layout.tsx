@@ -30,6 +30,7 @@ import { TenantLogo } from "@/components/brand/tenant-logo";
 import { OnlineStatusIndicator } from "@/components/layout/online-status-indicator";
 import { CurrencyConverter } from "@/components/currency/currency-converter";
 import { NotificationBell } from "@/components/notifications/notification-bell";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { EngagementPrompt } from "@/components/notifications/engagement-prompt";
 import { LegalAcceptancePrompt } from "@/components/legal/legal-acceptance-prompt";
 import {
@@ -825,6 +826,7 @@ export default function AppShellLayout({
               </span>
             </div>
             <OnlineStatusIndicator />
+            <ThemeToggle />
           </div>
         </header>
         <main className="flex flex-1 flex-col pb-10">
@@ -942,6 +944,9 @@ export default function AppShellLayout({
                   >
                     <ArrowLeftRightIcon className="h-4 w-4" />
                   </button>
+                  {/* 1-16F : thème clair/sombre, avant la cloche (qui reste
+                      immédiatement avant le nom). */}
+                  <ThemeToggle />
                   {/* 1-16A.1 : cloche du centre, juste avant le nom ; session
                       applicative avec contexte courant uniquement. */}
                   {contextIsCurrent &&
