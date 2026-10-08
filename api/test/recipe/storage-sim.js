@@ -33,22 +33,34 @@ function parseAmzDate(value) {
 
 /**
  * Vérificateur d'URL signée : mêmes identifiants FICTIFS, région et
- * adressage que l'API de la recette (`recipe-common.apiEnv`).
+ * adressage que l'API de la recette (`recipe-common.apiEnv`). Comme un vrai
+ * S3, la signature est vérifiée pour l'en-tête `Host` REÇU (un relais qui
+ * changerait l'hôte, le chemin ou la requête invalide la signature).
  */
-function createSignatureVerifier({ host, port, bucket }) {
+function createSignatureVerifier({ bucket }) {
   const C = require('./recipe-common');
   const { S3Client, GetObjectCommand } = C.apiRequire('@aws-sdk/client-s3');
   const { getSignedUrl } = C.apiRequire('@aws-sdk/s3-request-presigner');
-  const client = new S3Client({
-    endpoint: `http://${host}:${port}`,
-    region: 'us-east-1',
-    forcePathStyle: true,
-    credentials: {
-      accessKeyId: 'recipe-fictitious',
-      secretAccessKey: 'recipe-fictitious',
-    },
-  });
-  return async (key, url) => {
+  const clients = new Map();
+  const clientFor = (hostHeader) => {
+    if (!clients.has(hostHeader)) {
+      clients.set(
+        hostHeader,
+        new S3Client({
+          endpoint: `http://${hostHeader}`,
+          region: 'us-east-1',
+          forcePathStyle: true,
+          credentials: {
+            accessKeyId: 'recipe-fictitious',
+            secretAccessKey: 'recipe-fictitious',
+          },
+        }),
+      );
+    }
+    return clients.get(hostHeader);
+  };
+  return async (key, url, hostHeader) => {
+    const client = clientFor(hostHeader);
     const signature = url.searchParams.get('X-Amz-Signature');
     const signedAt = parseAmzDate(url.searchParams.get('X-Amz-Date'));
     const expires = Number(url.searchParams.get('X-Amz-Expires'));
@@ -90,8 +102,17 @@ function startStorageSimulator({ host, port, bucket }) {
   const objects = new Map();
   const stats = { puts: 0, deletes: 0, gets: 0, misses: 0, denied: 0 };
   const denials = { unsigned: 0, expired: 0, invalid: 0 };
-  const verify = createSignatureVerifier({ host, port, bucket });
-  const allowedHosts = new Set([`${host}:${port}`, `localhost:${port}`]);
+  const verify = createSignatureVerifier({ bucket });
+  // Hôtes publics supplémentaires (relais type nginx de la recette :
+  // `RECIPE_STORAGE_EXTRA_HOSTS=localhost:4296`).
+  const allowedHosts = new Set([
+    `${host}:${port}`,
+    `localhost:${port}`,
+    ...String(process.env.RECIPE_STORAGE_EXTRA_HOSTS || '')
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean),
+  ]);
 
   const server = http.createServer((req, res) => {
     if (!allowedHosts.has(req.headers.host)) {
@@ -142,7 +163,9 @@ function startStorageSimulator({ host, port, bucket }) {
       }
       if (req.method === 'GET' || req.method === 'HEAD') {
         // Bucket privé : jamais de lecture sans URL signée valide.
-        const verdict = await verify(key, url).catch(() => 'invalid');
+        const verdict = await verify(key, url, req.headers.host).catch(
+          () => 'invalid',
+        );
         if (verdict !== 'valid') {
           stats.denied += 1;
           denials[verdict] += 1;

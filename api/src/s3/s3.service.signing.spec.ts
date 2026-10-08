@@ -88,3 +88,60 @@ describe('S3Service — URL signée réelle (sans réseau)', () => {
     expect(b.searchParams.get('x-amz-checksum-mode')).toBe('ENABLED');
   });
 });
+
+describe('S3Service — endpoint de signature distinct (Docker Compose/MinIO)', () => {
+  const minio = (overrides: Record<string, string> = {}) =>
+    service({
+      S3_ENDPOINT: 'http://minio:9000',
+      S3_BUCKET: 'stockmaster-objects',
+      S3_REGION: 'us-east-1',
+      S3_FORCE_PATH_STYLE: 'true',
+      S3_SIGNING_ENDPOINT: 'https://s3.stock-master.app',
+      ...overrides,
+    });
+
+  it('URL GET signée pour l’hôte du navigateur ; identité durable = endpoint interne', async () => {
+    const s = minio();
+    expect(s.storage).toBe('minio:9000/stockmaster-objects');
+    const url = new URL(
+      (await s.signedReadUrl({ key: KEY, storage: s.storage }, PREFIX))!,
+    );
+    expect(url.origin).toBe('https://s3.stock-master.app');
+    expect(url.pathname).toBe(`/stockmaster-objects/${KEY}`);
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('host');
+  });
+
+  it('l’hôte du navigateur ne change pas l’identité : référence existante toujours lisible', async () => {
+    const withSigning = minio();
+    const internalOnly = minio({ S3_SIGNING_ENDPOINT: '' });
+    expect(withSigning.storage).toBe(internalOnly.storage);
+    expect(
+      await withSigning.signedReadUrl(
+        { key: KEY, storage: internalOnly.storage },
+        PREFIX,
+      ),
+    ).not.toBeNull();
+  });
+
+  it('sans endpoint de signature (R2) : URL sur l’endpoint unique', async () => {
+    const s = service();
+    const url = new URL(
+      (await s.signedReadUrl({ key: KEY, storage: s.storage }, PREFIX))!,
+    );
+    expect(url.host).toBe(
+      'stockmaster-prod.account123.eu.r2.cloudflarestorage.com',
+    );
+  });
+
+  it.each([
+    'pas une url',
+    'ftp://s3.stock-master.app',
+    'https://s3.stock-master.app/chemin',
+    'https://user:pw@s3.stock-master.app',
+    'https://s3.stock-master.app/?x=1',
+  ])('valeur invalide refusée au démarrage : %s', (value) => {
+    expect(() => minio({ S3_SIGNING_ENDPOINT: value })).toThrow(
+      'S3_SIGNING_ENDPOINT',
+    );
+  });
+});

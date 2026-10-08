@@ -94,6 +94,36 @@ function parseChecksumMode(value: string | undefined): ChecksumMode {
   );
 }
 
+/**
+ * Endpoint de SIGNATURE facultatif (`S3_SIGNING_ENDPOINT`) : hôte que le
+ * NAVIGATEUR joint pour lire une URL GET signée, quand l'API joint le
+ * stockage par un nom interne (Docker Compose : `http://minio:9000`,
+ * navigateur : `https://s3.<domaine>` derrière nginx). Absent = même
+ * endpoint (R2). Origine http(s) seule, sans chemin ni identifiants.
+ */
+function parseSigningEndpoint(value: string | undefined): string | undefined {
+  if (value === undefined || value.trim() === '') return undefined;
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new StorageConfigError('S3_SIGNING_ENDPOINT doit être une URL');
+  }
+  if (
+    (url.protocol !== 'https:' && url.protocol !== 'http:') ||
+    url.username ||
+    url.password ||
+    url.pathname !== '/' ||
+    url.search ||
+    url.hash
+  ) {
+    throw new StorageConfigError(
+      'S3_SIGNING_ENDPOINT doit être une origine http(s), sans chemin',
+    );
+  }
+  return url.origin;
+}
+
 function isWithinPrefix(key: string, allowedPrefix: string): boolean {
   const boundedPrefix = allowedPrefix.endsWith('/')
     ? allowedPrefix
@@ -105,6 +135,8 @@ function isWithinPrefix(key: string, allowedPrefix: string): boolean {
 export class S3Service {
   private readonly logger = new Logger('Storage');
   private readonly s3Client: S3Client;
+  /** Client des seules URL GET signées (même client sans endpoint dédié). */
+  private readonly signingClient: S3Client;
   private readonly bucket: string;
   /** Identité du stockage courant ; `null` si endpoint/bucket absents. */
   readonly storage: string | null;
@@ -121,18 +153,33 @@ export class S3Service {
       this.configService.get<string>('S3_CHECKSUM_MODE'),
     );
 
-    this.s3Client = new S3Client({
-      endpoint,
-      region: this.configService.get<string>('S3_REGION'),
-      credentials: {
-        accessKeyId: this.configService.get<string>('S3_ACCESS_KEY') ?? '',
-        secretAccessKey: this.configService.get<string>('S3_SECRET_KEY') ?? '',
-      },
-      forcePathStyle:
-        this.configService.get<string>('S3_FORCE_PATH_STYLE') === 'true',
-      requestChecksumCalculation: checksum,
-      responseChecksumValidation: checksum,
-    });
+    const signingEndpoint = parseSigningEndpoint(
+      this.configService.get<string>('S3_SIGNING_ENDPOINT'),
+    );
+
+    const clientFor = (target: string | undefined) =>
+      new S3Client({
+        endpoint: target,
+        region: this.configService.get<string>('S3_REGION'),
+        credentials: {
+          accessKeyId: this.configService.get<string>('S3_ACCESS_KEY') ?? '',
+          secretAccessKey:
+            this.configService.get<string>('S3_SECRET_KEY') ?? '',
+        },
+        forcePathStyle:
+          this.configService.get<string>('S3_FORCE_PATH_STYLE') === 'true',
+        requestChecksumCalculation: checksum,
+        responseChecksumValidation: checksum,
+      });
+    // Opérations serveur (envoi, suppression) : endpoint interne. L'identité
+    // durable du stockage (`storage`) en dépend SEULE : le nom d'hôte vu par
+    // le navigateur ne la change jamais.
+    this.s3Client = clientFor(endpoint);
+    // URL GET signées : signées DIRECTEMENT pour l'hôte du navigateur (la
+    // signature SigV4 couvre l'hôte) — jamais réécrites après signature.
+    this.signingClient = signingEndpoint
+      ? clientFor(signingEndpoint)
+      : this.s3Client;
   }
 
   /**
@@ -180,7 +227,7 @@ export class S3Service {
     if (!isWithinPrefix(ref.key, allowedPrefix)) return null;
     try {
       return await getSignedUrl(
-        this.s3Client,
+        this.signingClient,
         new GetObjectCommand({ Bucket: this.bucket, Key: ref.key }),
         { expiresIn: this.signedUrlTtlSeconds },
       );

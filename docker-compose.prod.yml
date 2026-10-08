@@ -16,9 +16,11 @@ services:
     container_name: stockmaster-minio
     restart: always
     command: server /data --console-address ":9001"
-    # Expose uniquement la console admin, pas l'API S3 (derrière Nginx)
+    # Console d'administration publiée sur la boucle locale de l'hôte
+    # SEULEMENT (tunnel SSH pour l'administrer) ; l'API S3 n'est jamais
+    # publiée : lecture des images signées via nginx (s3.<domaine>).
     ports:
-      - "9001:9001"
+      - "127.0.0.1:9001:9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
@@ -45,10 +47,11 @@ services:
       S3_SECRET_KEY: ${MINIO_PASSWORD}
       S3_BUCKET: stockmaster-objects
       S3_FORCE_PATH_STYLE: "true"
-      # Stockage privé : les images sont lues par URL signée sur l'hôte de
-      # S3_ENDPOINT. Ici `minio:9000` est interne : cette composition
-      # secondaire n'affiche donc pas les images (limite connue, cf.
-      # docs/architecture/phase-1-17a-r2-private-storage.md).
+      # Stockage privé (1-17A) : envois et suppressions par l'endpoint
+      # INTERNE ci-dessus ; URL GET signées DIRECTEMENT pour l'hôte public
+      # que le navigateur joint (vhost nginx `s3.`, lecture seule). L'identité
+      # durable du stockage reste celle de S3_ENDPOINT.
+      S3_SIGNING_ENDPOINT: https://${S3_HOSTNAME:?S3_HOSTNAME requis (hote public des images)}
       S3_SIGNED_URL_TTL_SECONDS: ${S3_SIGNED_URL_TTL_SECONDS:-}
       # Origine des liens d'invitation (1-12G, aucun email envoyé) : par
       # défaut l'URL publique du frontend, jamais l'en-tête Host.

@@ -1,7 +1,8 @@
 # Lot 1-17A — Stockage privé Cloudflare R2 (photos produit et logos)
 
-État : **implémenté, non commité ; essai R2 réel réussi (11/11, §8)**.
-Aucun commit, push ni déploiement. Railway et MongoDB réels non modifiés ;
+État : **commité (`a7e74f3`) ; essai R2 réel réussi (11/11, §8) ;
+complément §10 (RT7, Compose/MinIO) non commité**. Aucun push ni
+déploiement. Railway et MongoDB réels non modifiés ;
 seul l'essai opérateur a écrit puis supprimé un objet de test dans R2 ; aucun
 `.env` lu ; bucket jamais ouvert au public. Quotas, sauvegardes et protections antibot : lots séparés.
 
@@ -100,6 +101,7 @@ seul l'essai opérateur a écrit puis supprimé un objet de test dans R2 ; aucun
 | `S3_BUCKET` | modifier | `stockmaster-prod` |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | modifier (secrets) | `<R2_ACCESS_KEY_ID>` / `<R2_SECRET_ACCESS_KEY>` |
 | `S3_FORCE_PATH_STYLE` | modifier | `false` — **confirmé par l'essai réel** (virtual-hosted) |
+| `S3_SIGNING_ENDPOINT` | **ne pas définir** (R2) | endpoint unique ; réservé à Docker Compose/MinIO (§10.2) |
 | `S3_SIGNED_URL_TTL_SECONDS` | facultatif | absent = 900 |
 | `S3_CHECKSUM_MODE` | **ne pas définir** | comportement par défaut du SDK **accepté par R2** (essai réel) |
 | `S3_PUBLIC_URL` | **supprimer après la bascule** | n'est plus lue par l'API ; noter sa valeur hors du dépôt (inspection §6 et retour arrière) |
@@ -112,8 +114,7 @@ acceptés** (envoi et lecture signée réussis sans option). Région signée :
 `auto/s3`.
 
 Vercel : rien d'obligatoire (images `unoptimized`, aucune CSP `img-src`).
-Limite : `docker-compose.prod.yml` (MinIO, secondaire) signe sur `minio:9000`,
-injoignable par le navigateur — cette voie n'affiche plus les images.
+Docker Compose/MinIO : endpoint de signature distinct, voir §10.2.
 
 ## 6. Références existantes (lecture seule)
 
@@ -184,12 +185,9 @@ quelles.
 | `r2-operator-trial.js` contre le stockage simulé (mécanique du script) | 11/11 |
 | Inspection §6 sur MongoDB éphémère (données fictives) | classification correcte, données inchangées, aucune URL ni clé affichée |
 
-**RT7 (vente hors connexion)** : instable dans cet environnement —
-2 échecs sur 4 avec ce lot, **4 échecs sur 4 sur le code d'avant le lot**
-(worktree temporaire, même machine), et 2 sur 4 avec ce lot sans aucune image
-(donc sans renouvellement). Échec : « Stockage local indisponible » à l'ajout
-dans la file IndexedDB, code non modifié par ce lot. Non introduit par ce
-lot ; cause non élucidée, à traiter séparément.
+**RT7 (vente hors connexion)** : instabilité initialement constatée, cause
+démontrée et corrigée au §10.1 (défaut de l'utilitaire de test, pas de
+l'application).
 
 **Réel — essai opérateur R2** (`r2-operator-trial.js`, lancé par l'opérateur
 depuis PowerShell, identifiants saisis masqués et retirés de la session
@@ -214,7 +212,8 @@ retenus pour Railway (§5) ; adressage virtual-hosted et certificat de
 **Non exécuté** : inspection des références de production (§6, à faire par
 l'opérateur) ; affichage par un navigateur depuis R2 en production
 (contrôles §7, étape 4) ; aucune connexion à MongoDB de production ;
-campagnes complètes non relancées.
+campagnes complètes non relancées ; Docker Compose/MinIO et nginx réels
+(§10.3).
 
 ## 9. Fichiers
 
@@ -228,8 +227,10 @@ API : `s3/s3.service.ts` (+ specs, dont `s3.service.signing.spec.ts`),
 `analytics/analytics.service.ts`, `common/i18n/error-messages.ts`, specs et
 e2e associés, `package.json`, `pnpm-lock.yaml`.
 
-Recette et outils : `test/recipe/storage-sim.js` (privé),
-`recipe-common.js` (TTL), `realtime-scenarios.js` (clé d'un lien signé),
+Recette et outils : `test/recipe/storage-sim.js` (privé ; vérification
+selon l'en-tête `Host` reçu, §10.2), `recipe-common.js` (TTL, endpoint de
+signature), `realtime-scenarios.js` (clé d'un lien signé), `lib.js`
+(`outboxOps`, §10.1),
 `test/storage/r2-operator-trial.js`,
 `test/storage/inspect-storage-references.mongosh.js`.
 
@@ -241,3 +242,115 @@ pages catalogue/fiche/corbeille/branding, `app/app/layout.tsx`,
 
 Documentation : `README.md`, `api/README.md`, `api/.env.example`,
 `.env.prod.example`, `docker-compose.prod.yml`, ce rapport.
+
+## 10. Complément — RT7 et Docker Compose/MinIO (non commité)
+
+Base : HEAD `a7e74f3` (lot 1-17A commité par l'utilisateur, en avance d'un
+commit sur `origin`), arbre propre, index vide, `stash@{0}` conservé.
+
+### 10.1 RT7 : cause démontrée, défaut du SCÉNARIO
+
+Instrumentation hors dépôt (script d'init Playwright : noms de bases et de
+stores, étapes, erreurs natives `name/message` ; aucun contenu de vente ni
+jeton) puis reproduction déterministe.
+
+- **Mécanisme** : l'utilitaire de test `L.outboxOps(page)` ouvrait
+  `indexedDB.open('stockmaster-offline-sales-outbox')` **sans version**. Si
+  l'application n'avait pas encore créé la file (première vente du
+  contexte), cette ouverture **créait la base en version 1, sans store**.
+  L'application l'ouvrait ensuite en version 1 : succès **sans**
+  `upgradeneeded`, donc sans stores, puis
+  `IDBDatabase.transaction(['operations','meta'])` levait
+  **`NotFoundError` — « One of the specified object stores was not found »**
+  (étape : création de la transaction d'écriture) → « Stockage local
+  indisponible : vente non enregistrée. ». L'utilitaire ne refermait pas non
+  plus sa connexion.
+- **Pourquoi intermittent** : course entre la boucle d'attente du scénario
+  (qui sonde la file juste après « Confirmer la vente ») et la première
+  ouverture par l'application ; l'ordre dépend de la charge de la machine.
+  Les échecs observés (code d'avant et d'après 1-17A) sont groupés dans un
+  même créneau de forte activité ; la mémoire n'est pas en cause (4/4 réussis
+  avec 0,3 Go libres).
+- **Preuve** : sondage de l'utilitaire AVANT la vente → **3/3 échecs**,
+  séquence `open (sans version) → upgrade 0→1 (utilitaire)` puis
+  `open v1 → success (sans upgrade) → tx:create NotFoundError`.
+- **Correctif (cause)** : `api/test/recipe/lib.js`, `outboxOps` — si
+  `upgradeneeded` survient (la base n'existe pas), la transaction de version
+  est **annulée** : la base n'est pas créée et l'utilitaire répond « aucune
+  opération » ; la connexion de lecture est toujours refermée. Aucun code
+  applicatif modifié, aucun retry, délai, effacement ni test désactivé.
+- **Application** : elle ouvre toujours ses bases avec une version ; aucune
+  autre ouverture sans version dans `web/src`. Stockage réellement
+  inutilisable (base vide forcée) : seul « Stockage local indisponible :
+  vente non enregistrée. » s'affiche, jamais « Vente enregistrée ».
+
+Vérifications (recette locale, simulée) :
+
+| Contrôle | Résultat |
+|---|---|
+| Sondage AVANT la vente, après correctif | séquence : `open (sans version) → AbortError` (base non créée), puis l'application crée ses stores (`upgrade 0→1`) |
+| Parcours complet ×4 (sondage avant la vente) : vente hors connexion → rechargement → reconnexion | 4/4 : opération présente après rechargement (même `clientOperationId`), **1** vente serveur, stock 25 → **22**, opération `synced` |
+| RT7 réel | 5/5, plus 3/3 avec CPU ralenti ×12 ; puis 1/1 sur pile à endpoint unique |
+
+Observation sans correction (hors cause) : `openDb` de la file rejette
+après 2 s (`OPEN_TIMEOUT_MS`) sans fermer une ouverture native qui
+aboutirait plus tard ; aucun lien démontré avec RT7.
+
+### 10.2 Docker Compose/MinIO : URL signées pour l'hôte du navigateur
+
+- **API** : `S3_SIGNING_ENDPOINT` (facultatif, origine http(s) sans chemin,
+  sinon refus au démarrage). Envois et suppressions : `S3_ENDPOINT`
+  (interne). URL GET : signées **directement** pour `S3_SIGNING_ENDPOINT`,
+  jamais réécrites. L'identité durable (`storage`) reste calculée sur
+  `S3_ENDPOINT` : changer l'hôte du navigateur ne rend aucune référence
+  illisible. Absent (R2) : un seul client, comportement inchangé.
+- **`docker-compose.prod.yml`** :
+  `S3_SIGNING_ENDPOINT: https://${S3_HOSTNAME:?…}` (variable existante
+  `S3_HOSTNAME`, aucune nouvelle variable de composition ; absente → refus
+  explicite de `docker compose config`). Console MinIO publiée sur
+  `127.0.0.1:9001` seulement (tunnel SSH pour l'administrer) ; API S3 de
+  MinIO jamais publiée.
+- **`nginx/nginx.conf`, vhost `s3.`** : lecture seule
+  (`limit_except GET HEAD { deny all; }`), `proxy_pass http://minio:9000;`
+  sans URI (chemin et requête signés transmis tels quels),
+  `proxy_set_header Host $http_host;` (hôte exact signé),
+  `client_max_body_size 1m`. Bucket privé (aucune politique anonyme).
+- **Configuration exacte** (`.env` de la composition) :
+  `S3_HOSTNAME=s3.<domaine>` (DNS et certificat de ce vhost),
+  `MINIO_USER`/`MINIO_PASSWORD` ; bucket `stockmaster-objects` à créer
+  (console via tunnel, ou `mc mb`).
+
+Vérifications **simulées** (pas de MinIO ni de nginx) : stockage simulé
+vérifiant la signature selon l'en-tête `Host` reçu, relais local imitant le
+vhost (GET/HEAD seulement, `Host` conservé, URI inchangée), recette lancée
+avec un endpoint interne et un endpoint de signature distincts :
+
+| Contrôle | Résultat |
+|---|---|
+| Contrôle navigateur via le relais | **36/36** : lien signé pour l'hôte public ; ce lien présenté à l'hôte interne → 403 ; méthode autre que GET/HEAD → 403 ; sans signature 403 ; isolation entre organisations ; expiration puis lien neuf ; fichier absent sans boucle ; photo et logo affichés ; purge |
+| Endpoint unique (R2) inchangé | navigateur 33/33 ; RT7, RT18, RT22 réussis ; unitaires S3 33/33 (dont 4 nouveaux cas d'endpoint de signature) |
+| `docker compose -f docker-compose.prod.yml config` (client seul) | valide ; `S3_SIGNING_ENDPOINT=https://s3.stock-master.app` ; console `127.0.0.1:9001` |
+
+### 10.3 Limites réellement restantes
+
+- **Docker indisponible** sur cette machine (moteur Docker Desktop : erreur
+  500, puis commandes sans réponse) : MinIO, nginx réel (`nginx -t`), TLS du
+  vhost `s3.`, résolution DNS et vérification de signature par MinIO derrière
+  nginx **non exécutés**. La voie Compose/MinIO n'est **pas validée** ; seule
+  sa logique l'est, par simulation.
+- `docker-compose.yml` (développement) publie toujours la console et l'API
+  MinIO sur l'hôte local (inchangé, usage local).
+- Inspection des références de production et contrôles post-déploiement R2
+  (§6, §7) toujours à faire par l'opérateur.
+- Observation `OPEN_TIMEOUT_MS` (§10.1) non traitée.
+
+### 10.4 Contrôles du complément
+
+Unitaires API (commande CI isolée) : 85/85 suites, **1590/1590** ; e2e
+branding et isolation : 87/87 ; ESLint et `tsc -p tsconfig.build.json` :
+0 erreur ; syntaxe des scripts de recette : OK.
+
+Fichiers : `api/src/s3/s3.service.ts`, `s3.service.signing.spec.ts`,
+`api/test/recipe/lib.js`, `storage-sim.js`, `recipe-common.js`,
+`docker-compose.prod.yml`, `nginx/nginx.conf`, `.env.prod.example`,
+`api/.env.example`, `api/README.md`, ce rapport.

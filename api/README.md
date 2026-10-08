@@ -52,6 +52,7 @@ Toutes les valeurs par défaut du `.env.example` sont compatibles avec le `docke
 | `S3_SECRET_KEY` | `minioadmin123` | Secret S3 |
 | `S3_BUCKET` | `stockmaster-objects` | Nom du bucket |
 | `S3_FORCE_PATH_STYLE` | `true` | Valeur exacte `true` = adressage path-style (MinIO) ; sinon virtual-hosted (exemple officiel R2) |
+| `S3_SIGNING_ENDPOINT` | _(vide)_ | Origine http(s) jointe par le navigateur, utilisée **uniquement** pour signer les URL GET quand l'API joint le stockage par un nom interne (Docker Compose : `https://s3.<domaine>`). Vide pour R2 (endpoint unique). N'affecte pas l'identité du stockage |
 | `S3_SIGNED_URL_TTL_SECONDS` | `900` | Durée des URL GET signées (entier 60–3600). Bucket privé : aucune URL publique ; la clé est stockée, l'URL est signée à chaque lecture |
 | `S3_CHECKSUM_MODE` | `when_supported` | Sommes de contrôle du SDK (`when_supported` ou `when_required`) ; à changer seulement après l'essai R2 opérateur |
 
