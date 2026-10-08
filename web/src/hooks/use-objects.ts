@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { fetchObjects, getApiErrorMessage, type ApiObject } from "@/lib/api";
-import { useSocket } from "@/hooks/use-socket";
+import { useSocket } from "@/contexts/socket-context";
 
 interface UseObjectsResult {
   objects: ApiObject[];

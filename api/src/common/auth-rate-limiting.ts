@@ -8,6 +8,7 @@ import { Reflector } from '@nestjs/core';
 import type {
   ThrottlerLimitDetail,
   ThrottlerModuleOptions,
+  ThrottlerOptions,
 } from '@nestjs/throttler';
 import {
   InjectThrottlerOptions,
@@ -91,23 +92,30 @@ export const LOGIN_LONG_BLOCK = minutes(15);
  * restantes) et le `Retry-After` suffixed ; le garde ci-dessous émet un
  * `Retry-After` propre et le corps stable.
  */
+// Fenêtres exportées séparément (1-10B) : `auth.module.ts` les fusionne avec
+// la fenêtre `invitation-create` dans l'UNIQUE `ThrottlerModule.forRoot()`
+// du projet (`ThrottlerModule` est `@Global()` — un second `forRoot()`
+// créerait une seconde instance de stockage ambiguë). `createAuthThrottlerOptions()`
+// garde sa forme exacte d'origine (testée ci-dessous) pour compatibilité.
+export const AUTH_THROTTLER_WINDOWS: ThrottlerOptions[] = [
+  {
+    name: LOGIN_SHORT_NAME,
+    limit: LOGIN_SHORT_LIMIT,
+    ttl: LOGIN_SHORT_TTL,
+    blockDuration: LOGIN_SHORT_BLOCK,
+  },
+  {
+    name: LOGIN_LONG_NAME,
+    limit: LOGIN_LONG_LIMIT,
+    ttl: LOGIN_LONG_TTL,
+    blockDuration: LOGIN_LONG_BLOCK,
+  },
+];
+
 export function createAuthThrottlerOptions(): ThrottlerModuleOptions {
   return {
     setHeaders: false,
-    throttlers: [
-      {
-        name: LOGIN_SHORT_NAME,
-        limit: LOGIN_SHORT_LIMIT,
-        ttl: LOGIN_SHORT_TTL,
-        blockDuration: LOGIN_SHORT_BLOCK,
-      },
-      {
-        name: LOGIN_LONG_NAME,
-        limit: LOGIN_LONG_LIMIT,
-        ttl: LOGIN_LONG_TTL,
-        blockDuration: LOGIN_LONG_BLOCK,
-      },
-    ],
+    throttlers: AUTH_THROTTLER_WINDOWS,
   };
 }
 

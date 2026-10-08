@@ -31,13 +31,17 @@ interface TimerHandle {
 
 describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
   const USER_ID = '0123456789abcdef01234567'; // ObjectId hex valide
+  const ORG_ID = '0123456789abcdef01234568'; // ObjectId hex valide
   const USER_EMAIL = 'seller@example.com';
   const USER_ROLE = 'seller';
   const VALID_TOKEN = 'valid-jwt-token';
 
   interface Deps {
     jwtService: { verifyAsync: jest.Mock };
-    usersService: { findById: jest.Mock };
+    usersService: { findByIdForAuth: jest.Mock };
+    organizationsService: { resolveActiveContext: jest.Mock };
+    // 1-14C.1 : abonnement actif par défaut (cas inactifs : spec dédiée).
+    subscriptionsService: { getAccessDecision: jest.Mock; now: jest.Mock };
     logger: { warn: jest.Mock; error: jest.Mock };
   }
 
@@ -63,6 +67,8 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
     installSocketAuthMiddleware({ use } as never, {
       jwtService: deps.jwtService,
       usersService: deps.usersService,
+      organizationsService: deps.organizationsService,
+      subscriptionsService: deps.subscriptionsService,
       logger: deps.logger,
     });
     const middleware = use.mock.calls[0][0] as (
@@ -76,9 +82,10 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
     const { use, middleware } = installAndInstall();
     const next = jest.fn();
     middleware(socket, next);
-    // Laisse la promesse interne du handler se résoudre.
-    await Promise.resolve();
-    await Promise.resolve();
+    // Laisse la promesse interne du handler se résoudre (toutes les
+    // micro-tâches en attente, quel que soit le nombre d'`await` internes —
+    // 1-14C.1 ajoute la lecture de l'abonnement).
+    await new Promise((resolve) => setImmediate(resolve));
     return { use, next };
   }
 
@@ -87,22 +94,51 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
       _id: { toString: () => USER_ID },
       email: USER_EMAIL,
       role: USER_ROLE,
+      // 1-13A : seul un compte vérifié se connecte.
+      emailVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
     };
   }
   function validPayload(expOverride?: number) {
     return {
       sub: USER_ID,
-      email: USER_EMAIL,
-      role: USER_ROLE,
+      orgId: ORG_ID,
       // `exp` futur (number fini) : exigence du middleware — sinon refus.
       exp: expOverride ?? Math.floor(Date.now() / 1000) + 3600,
+    };
+  }
+
+  /** Payload comportant en plus des claims email/role (ignores : ils
+   * proviennent exclusivement du document User chargé depuis la base). */
+  function stalePayloadWithClaims(expOverride?: number) {
+    return {
+      ...validPayload(expOverride),
+      email: 'forged@example.com',
+      role: 'admin',
     };
   }
 
   beforeEach(() => {
     deps = {
       jwtService: { verifyAsync: jest.fn() },
-      usersService: { findById: jest.fn() },
+      usersService: { findByIdForAuth: jest.fn() },
+      organizationsService: {
+        resolveActiveContext: jest.fn().mockResolvedValue({
+          userId: USER_ID,
+          organizationId: ORG_ID,
+          membershipId: '0123456789abcdef01234569',
+          role: 'seller',
+          permissions: [],
+        }),
+      },
+      subscriptionsService: {
+        getAccessDecision: jest.fn().mockResolvedValue({
+          state: 'active',
+          active: true,
+          coverageEndsAt: new Date('2099-01-01T00:00:00.000Z'),
+          checkedAt: new Date(),
+        }),
+        now: jest.fn(() => new Date()),
+      },
       logger: { warn: jest.fn(), error: jest.fn() },
     };
   });
@@ -110,24 +146,36 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
   it('installe le middleware EXACTEMENT une fois sur le serveur', async () => {
     const user = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
     deps.jwtService.verifyAsync.mockResolvedValue(validPayload());
-    deps.usersService.findById.mockResolvedValue(validUser());
+    deps.usersService.findByIdForAuth.mockResolvedValue(validUser());
     const { use } = await run(user);
     expect(use).toHaveBeenCalledTimes(1);
   });
 
-  it('un token valide est accepté : principal minimal, next() sans erreur', async () => {
+  it('un token valide est accepté : principal { sub, orgId, email, role }, next() sans erreur', async () => {
     deps.jwtService.verifyAsync.mockResolvedValue(validPayload());
-    deps.usersService.findById.mockResolvedValue(validUser());
+    deps.usersService.findByIdForAuth.mockResolvedValue(validUser());
     const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
     const { next } = await run(socket);
     expect(next).toHaveBeenCalledTimes(1);
     expect(next.mock.calls[0][0]).toBeUndefined();
+    // sub/orgId du JWT vérifié ; email/role DU DOCUMENT USER (pas du token).
     expect(socket.data.user).toEqual({
       sub: USER_ID,
+      orgId: ORG_ID,
       email: USER_EMAIL,
       role: USER_ROLE,
     });
-    // Le principal minimal ne contient ni password, ni token, ni _id.
+    expect(
+      deps.organizationsService.resolveActiveContext,
+    ).toHaveBeenCalledTimes(1);
+    expect(deps.organizationsService.resolveActiveContext).toHaveBeenCalledWith(
+      USER_ID,
+      ORG_ID,
+    );
+    expect(socket.data.organizationContext).toEqual(
+      expect.objectContaining({ organizationId: ORG_ID }),
+    );
+    // Le principal ne contient ni password, ni token, ni _id.
     expect(socket.data.user).not.toHaveProperty('password');
     expect(socket.data.user).not.toHaveProperty('token');
     expect(socket.data.user).not.toHaveProperty('_id');
@@ -210,74 +258,227 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
     expect((next.mock.calls[0][0] as Error).message).toBe('unauthorized');
   });
 
-  it('refuse un payload INCOMPLET (sans `email`) — générique', async () => {
-    deps.jwtService.verifyAsync.mockResolvedValue({
-      sub: USER_ID,
-      role: USER_ROLE,
-    });
-    const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
-    const { next } = await run(socket);
-    expect(next).toHaveBeenCalledTimes(1);
-    expect((next.mock.calls[0][0] as Error).message).toBe('unauthorized');
-  });
-
-  it('refuse un payload INCOMPLET (sans `role`) — générique', async () => {
-    deps.jwtService.verifyAsync.mockResolvedValue({
-      sub: USER_ID,
-      email: USER_EMAIL,
-    });
-    const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
-    const { next } = await run(socket);
-    expect(next).toHaveBeenCalledTimes(1);
-    expect((next.mock.calls[0][0] as Error).message).toBe('unauthorized');
-  });
-
-  it('refuse un payload dont `sub` n’est pas une string non vide — générique', async () => {
-    for (const sub of [42, '', null]) {
-      deps = {
-        jwtService: {
-          verifyAsync: jest.fn().mockResolvedValue({
-            sub,
-            email: USER_EMAIL,
-            role: USER_ROLE,
-          }),
-        },
-        usersService: { findById: jest.fn() },
-        logger: { warn: jest.fn(), error: jest.fn() },
-      };
+  it.each([
+    ['`sub` non-string', 42],
+    ['`sub` vide', ''],
+    ['`sub` null', null],
+  ])(
+    'refuse un payload dont `sub` n’est pas une string non vide (%s) — générique',
+    async (_subLabel, subValue) => {
+      deps.jwtService.verifyAsync.mockResolvedValue({
+        sub: subValue,
+        orgId: ORG_ID,
+      });
       const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
       const { next } = await run(socket);
       expect(next).toHaveBeenCalledTimes(1);
+      expect(next.mock.calls[0][0]).toBeInstanceOf(Error);
       expect((next.mock.calls[0][0] as Error).message).toBe('unauthorized');
-    }
+    },
+  );
+
+  it.each([
+    ['sans `orgId`', undefined],
+    ['`orgId` non-string', 42],
+    ['`orgId` vide', ''],
+    ['`orgId` null', null],
+  ])(
+    'refuse un payload dont `orgId` n’est pas une string non vide (%s) — générique',
+    async (_orgLabel, orgId) => {
+      deps.jwtService.verifyAsync.mockResolvedValue(
+        orgId === undefined ? { sub: USER_ID } : { sub: USER_ID, orgId },
+      );
+      const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
+      const { next } = await run(socket);
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(next.mock.calls[0][0]).toBeInstanceOf(Error);
+      expect((next.mock.calls[0][0] as Error).message).toBe('unauthorized');
+    },
+  );
+
+  // ObjectId STRICT : chaque forme non-canonique (nombre, booléen, objet,
+  // tableau, null/absent, chaîne vide, 12/24 caractères non-hex) sur `sub`
+  // OU `orgId` doit être refusée AVANT toute requête DB (`findByIdForAuth` jamais
+  // appelé) — `isValidObjectId()` (cast) ne suffit pas.
+  const STRICT_REJECTIONS: Array<[string, 'sub' | 'orgId', unknown]> = [
+    ['nombre', 'sub', 1234],
+    ['booléen', 'sub', true],
+    ['objet', 'sub', { _id: ORG_ID }],
+    ['tableau', 'sub', [ORG_ID]],
+    ['null', 'sub', null],
+    ['absent', 'sub', undefined],
+    ['chaîne vide', 'sub', ''],
+    ['12 caractères non-hex', 'sub', 'ghijklmnop'],
+    ['24 caractères dont un non-hex', 'sub', '1122334455667788990011gg'],
+    ['nombre', 'orgId', 1234],
+    ['booléen', 'orgId', true],
+    ['objet', 'orgId', { _id: USER_ID }],
+    ['tableau', 'orgId', [USER_ID]],
+    ['null', 'orgId', null],
+    ['absent', 'orgId', undefined],
+    ['chaîne vide', 'orgId', ''],
+    ['12 caractères non-hex', 'orgId', 'ghijklmnop'],
+    ['24 caractères dont un non-hex', 'orgId', '0123456789abcdef012345gg'],
+  ];
+
+  it.each(STRICT_REJECTIONS)(
+    'ObjectId strict : %s sur %s → refus « unauthorized » AVANT toute requête DB',
+    async (_label, field, value) => {
+      deps.usersService.findByIdForAuth.mockResolvedValue(validUser());
+      const payload: Record<string, unknown> = {
+        ...validPayload(),
+        sub: field === 'sub' ? value : USER_ID,
+        orgId: field === 'orgId' ? value : ORG_ID,
+      };
+      deps.jwtService.verifyAsync.mockResolvedValue(payload);
+      const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
+      const { next } = await run(socket);
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(next.mock.calls[0][0]).toBeInstanceOf(Error);
+      expect((next.mock.calls[0][0] as Error).message).toBe('unauthorized');
+      expect(socket.data.user).toBeUndefined();
+      // Refus AVANT toute requête DB :
+      expect(deps.usersService.findByIdForAuth).not.toHaveBeenCalled();
+    },
+  );
+
+  it('email/role PRÉSENTS dans le token sont IGNORÉS (lu du document User)', async () => {
+    deps.jwtService.verifyAsync.mockResolvedValue(stalePayloadWithClaims());
+    deps.usersService.findByIdForAuth.mockResolvedValue(validUser());
+    const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
+    const { next } = await run(socket);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(next.mock.calls[0][0]).toBeUndefined();
+    expect(socket.data.user).toEqual({
+      sub: USER_ID,
+      orgId: ORG_ID,
+      email: USER_EMAIL,
+      role: USER_ROLE,
+    });
   });
 
   it('refuse un utilisateur INEXISTANT (supprimé, JWT valide) — générique', async () => {
     deps.jwtService.verifyAsync.mockResolvedValue(validPayload());
-    deps.usersService.findById.mockResolvedValue(null);
+    deps.usersService.findByIdForAuth.mockResolvedValue(null);
     const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
     const { next } = await run(socket);
     expect(next).toHaveBeenCalledTimes(1);
     expect((next.mock.calls[0][0] as Error).message).toBe('unauthorized');
     expect(socket.data.user).toBeUndefined();
     // Requête d'existence faite (mêmes politique que JwtStrategy.validate).
-    expect(deps.usersService.findById).toHaveBeenCalledTimes(1);
-    expect(deps.usersService.findById.mock.calls[0][0]).toBe(USER_ID);
+    expect(deps.usersService.findByIdForAuth).toHaveBeenCalledTimes(1);
+    expect(deps.usersService.findByIdForAuth.mock.calls[0][0]).toBe(USER_ID);
     // Le message client reste générique (pas « user not found »).
     expect(String(deps.logger.warn.mock.calls.flat().join(' '))).not.toContain(
       USER_ID,
     );
   });
 
+  it.each([
+    ['claim absent, version 1', {}, 1],
+    ['claim 0, version 1', { ver: 0 }, 1],
+    ['claim invalide', { ver: '1' }, 1],
+  ])(
+    '1-13B : %s → session révoquée, refus générique sans contexte',
+    async (_label, claims, authVersion) => {
+      deps.jwtService.verifyAsync.mockResolvedValue({
+        ...validPayload(),
+        ...claims,
+      });
+      deps.usersService.findByIdForAuth.mockResolvedValue({
+        ...validUser(),
+        authVersion,
+      });
+      const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
+      const { next } = await run(socket);
+      expect((next.mock.calls[0][0] as Error).message).toBe('unauthorized');
+      expect(
+        deps.organizationsService.resolveActiveContext,
+      ).not.toHaveBeenCalled();
+      expect(socket.data.user).toBeUndefined();
+    },
+  );
+
+  it('1-13B : version courante acceptée et mémorisée sur le socket', async () => {
+    deps.jwtService.verifyAsync.mockResolvedValue({
+      ...validPayload(),
+      ver: 2,
+    });
+    deps.usersService.findByIdForAuth.mockResolvedValue({
+      ...validUser(),
+      authVersion: 2,
+    });
+    const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
+    const { next } = await run(socket);
+    expect(next.mock.calls[0][0]).toBeUndefined();
+    expect(socket.data.authVersion).toBe(2);
+    expect(JSON.stringify(socket.data.user)).not.toContain('authVersion');
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['null', null],
+  ])(
+    '1-13A : emailVerifiedAt %s → refus générique, aucun contexte ni timer',
+    async (_label, value) => {
+      deps.jwtService.verifyAsync.mockResolvedValue(validPayload());
+      deps.usersService.findByIdForAuth.mockResolvedValue({
+        ...validUser(),
+        emailVerifiedAt: value,
+      });
+      const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
+      const { next } = await run(socket);
+      expect(next).toHaveBeenCalledTimes(1);
+      expect((next.mock.calls[0][0] as Error).message).toBe('unauthorized');
+      expect(
+        deps.organizationsService.resolveActiveContext,
+      ).not.toHaveBeenCalled();
+      expect(socket.data.user).toBeUndefined();
+      expect(socket.once).not.toHaveBeenCalled();
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    'membership absente',
+    'membership suspendue',
+    'membership révoquée',
+    'organisation absente',
+    'organisation suspendue',
+  ])('%s → refus uniforme, aucun contexte ni timer', async () => {
+    deps.jwtService.verifyAsync.mockResolvedValue(validPayload());
+    deps.usersService.findByIdForAuth.mockResolvedValue(validUser());
+    deps.organizationsService.resolveActiveContext.mockRejectedValue(
+      new Error('organization access denied'),
+    );
+    const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
+
+    const { next } = await run(socket);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect((next.mock.calls[0][0] as Error).message).toBe('unauthorized');
+    expect(
+      deps.organizationsService.resolveActiveContext,
+    ).toHaveBeenCalledTimes(1);
+    expect(deps.organizationsService.resolveActiveContext).toHaveBeenCalledWith(
+      USER_ID,
+      ORG_ID,
+    );
+    expect(socket.data.user).toBeUndefined();
+    expect(socket.data.organizationContext).toBeUndefined();
+    expect(socket.once).not.toHaveBeenCalled();
+    expect(socket.disconnect).not.toHaveBeenCalled();
+  });
+
   it('réutilise le MÊME JwtService / UsersService (pas de re-implémentation JWT)', async () => {
     deps.jwtService.verifyAsync.mockResolvedValue(validPayload());
-    deps.usersService.findById.mockResolvedValue(validUser());
+    deps.usersService.findByIdForAuth.mockResolvedValue(validUser());
     const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
     const { next } = await run(socket);
     expect(deps.jwtService.verifyAsync).toHaveBeenCalledTimes(1);
     // Le token exact est vérifié (et uniquement via le JwtService fourni).
     expect(deps.jwtService.verifyAsync.mock.calls[0][0]).toBe(VALID_TOKEN);
-    expect(deps.usersService.findById).toHaveBeenCalledTimes(1);
+    expect(deps.usersService.findByIdForAuth).toHaveBeenCalledTimes(1);
     expect(next).toHaveBeenCalledTimes(1);
     expect(next.mock.calls[0][0]).toBeUndefined();
   });
@@ -293,15 +494,17 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
   it('n’expose JAMAIS le `password` dans `socket.data.user` (même si le document le porte)', async () => {
     deps.jwtService.verifyAsync.mockResolvedValue(validPayload());
     const secretHash = '$2b$10$abcsecret';
-    deps.usersService.findById.mockResolvedValue({
+    deps.usersService.findByIdForAuth.mockResolvedValue({
       ...validUser(),
       password: secretHash,
     });
     const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
     await run(socket);
-    // Le handler sélectionne explicitement sub/email/role uniquement.
+    // Le handler sélectionne explicitement sub/orgId/email/role
+    // (email/role depuis le document User, jamais du payload).
     expect(socket.data.user).toEqual({
       sub: USER_ID,
+      orgId: ORG_ID,
       email: USER_EMAIL,
       role: USER_ROLE,
     });
@@ -311,7 +514,7 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
   describe('refus au handshake quand `exp` du payload vérifié est invalide', () => {
     // 3 familles exigées : (a) `exp` absent, (b) `exp` non-numérique,
     // (c) `exp` ≤ maintenant. Toutes sont REFUSÉES dès le middleware
-    // (AVANT `findById`, AVANT toute création de timer) :
+    // (AVANT `findByIdForAuth`, AVANT toute création de timer) :
     // `next(Error('unauthorized'))` EXACTEMENT une fois, aucun timer,
     // `socket.disconnect` jamais appelé, `socket.data.user` non attaché
     // (→ namespace Socket.IO non établi).
@@ -334,10 +537,10 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
       async (_label, expValue, absent) => {
         deps.jwtService.verifyAsync.mockResolvedValue(
           absent
-            ? { sub: USER_ID, email: USER_EMAIL, role: USER_ROLE }
+            ? { sub: USER_ID, orgId: ORG_ID }
             : { ...validPayload(), exp: expValue },
         );
-        deps.usersService.findById.mockResolvedValue(validUser());
+        deps.usersService.findByIdForAuth.mockResolvedValue(validUser());
         const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
         const { next } = await run(socket);
         expect(next).toHaveBeenCalledTimes(1);
@@ -353,7 +556,7 @@ describe('socket-auth.middleware (installSocketAuthMiddleware)', () => {
 
     it('payload `exp` DÉJÀ DÉPASSÉE (≤ maintenant) → refus « unauthorized » ; aucun timer ; pas de disconnect', async () => {
       deps.jwtService.verifyAsync.mockResolvedValue(validPayload(PAST_EXP_S()));
-      deps.usersService.findById.mockResolvedValue(validUser());
+      deps.usersService.findByIdForAuth.mockResolvedValue(validUser());
       const socket = makeSocket({ [SOCKET_AUTH_TOKEN_KEY]: VALID_TOKEN });
       const { next } = await run(socket);
       expect(next).toHaveBeenCalledTimes(1);

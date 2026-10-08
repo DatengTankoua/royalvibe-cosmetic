@@ -3,6 +3,10 @@ import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { EventsGateway } from './events.gateway';
 import { UsersService } from '../users/users.service';
+import { OrganizationsService } from '../organizations/organizations.service';
+import { SocketRegistryService } from '../organizations/socket-registry.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { SubscriptionSignalsService } from '../subscriptions/subscription-signals.service';
 
 /**
  * Tests unitaires du `EventsGateway` (phase 0B.3).
@@ -38,6 +42,7 @@ import { UsersService } from '../users/users.service';
  */
 
 const TEST_JWT_SECRET = 'unit-gateway-secret-not-production';
+const NOW = new Date('2026-06-01T00:00:00.000Z');
 
 /** Clés de métadonnées du décorateur `@WebSocketGateway` (valeur réelle —
  *  vérifiée dans @nestjs/websockets/constants : 'websockets:gateway_options'
@@ -47,8 +52,20 @@ const GATEWAY_METADATA_KEY = 'websockets:is_gateway';
 
 describe('EventsGateway (unité)', () => {
   let gateway: EventsGateway;
+  let socketRegistry: {
+    register: jest.Mock;
+    unregister: jest.Mock;
+    attachOrganizationEmitter: jest.Mock;
+  };
+  let subscriptionSignals: { attachEmitter: jest.Mock };
 
   async function compileGateway() {
+    socketRegistry = {
+      register: jest.fn(),
+      unregister: jest.fn(),
+      attachOrganizationEmitter: jest.fn(),
+    };
+    subscriptionSignals = { attachEmitter: jest.fn() };
     const module = await Test.createTestingModule({
       providers: [
         EventsGateway,
@@ -60,6 +77,16 @@ describe('EventsGateway (unité)', () => {
           provide: UsersService,
           useValue: { findById: jest.fn() },
         },
+        {
+          provide: OrganizationsService,
+          useValue: { resolveActiveContext: jest.fn() },
+        },
+        { provide: SocketRegistryService, useValue: socketRegistry },
+        {
+          provide: SubscriptionsService,
+          useValue: { getAccessDecision: jest.fn(), now: () => NOW },
+        },
+        { provide: SubscriptionSignalsService, useValue: subscriptionSignals },
       ],
     }).compile();
     gateway = module.get(EventsGateway);
@@ -136,6 +163,50 @@ describe('EventsGateway (unité)', () => {
       expect(use2).toHaveBeenCalledTimes(1);
     });
 
+    it('1-15C : branche sur le registre un émetteur qui délègue à emitToOrganization (room + couverture)', () => {
+      gateway.afterInit({ use: jest.fn() } as never);
+      expect(socketRegistry.attachOrganizationEmitter).toHaveBeenCalledTimes(1);
+      const emitter = socketRegistry.attachOrganizationEmitter.mock
+        .calls[0][0] as (o: string, e: string, p: unknown) => void;
+      const spy = jest
+        .spyOn(gateway, 'emitToOrganization')
+        .mockImplementation(() => undefined);
+      emitter('org-a', 'members:changed', {});
+      expect(spy).toHaveBeenCalledWith('org-a', 'members:changed', {});
+    });
+
+    it('1-15F : branche les signaux d’abonnement sur emitToMember (propriétaire désigné par le service)', () => {
+      gateway.afterInit({ use: jest.fn() } as never);
+      expect(subscriptionSignals.attachEmitter).toHaveBeenCalledTimes(1);
+      const emitter = subscriptionSignals.attachEmitter.mock.calls[0][0] as {
+        toMember: (o: string, u: string, e: string, p: unknown) => void;
+      };
+      expect(Object.keys(emitter)).toEqual(['toMember']);
+      const toOrganization = jest
+        .spyOn(gateway, 'emitToOrganization')
+        .mockImplementation(() => undefined);
+      const toMember = jest
+        .spyOn(gateway, 'emitToMember')
+        .mockImplementation(() => undefined);
+      emitter.toMember('org-a', 'user-1', 'subscription:changed', {});
+      emitter.toMember('org-a', 'user-1', 'payments:changed', {});
+      expect(toMember).toHaveBeenNthCalledWith(
+        1,
+        'org-a',
+        'user-1',
+        'subscription:changed',
+        {},
+      );
+      expect(toMember).toHaveBeenNthCalledWith(
+        2,
+        'org-a',
+        'user-1',
+        'payments:changed',
+        {},
+      );
+      expect(toOrganization).not.toHaveBeenCalled();
+    });
+
     it('en dev (non-production), `afterInit` ne lève pas même si CORS_ORIGIN est absente', () => {
       const previous = process.env.CORS_ORIGIN;
       const previousNodeEnv = process.env.NODE_ENV;
@@ -179,6 +250,200 @@ describe('EventsGateway (unité)', () => {
         process.env.CORS_ORIGIN = previous;
         process.env.NODE_ENV = previousNodeEnv;
       }
+    });
+  });
+
+  describe('rooms organisationnelles', () => {
+    beforeEach(async () => {
+      await compileGateway();
+    });
+
+    it('joint exactement la room issue du contexte résolu', () => {
+      const client = {
+        data: {
+          organizationContext: {
+            organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+            userId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+          },
+        },
+        join: jest.fn(),
+        disconnect: jest.fn(),
+      };
+
+      gateway.handleConnection(client as never);
+
+      expect(client.join).toHaveBeenCalledWith(
+        'organization:aaaaaaaaaaaaaaaaaaaaaaaa',
+      );
+      expect(client.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('déconnecte défensivement un socket sans contexte et ne joint aucune room', () => {
+      const client = {
+        data: {},
+        join: jest.fn(),
+        disconnect: jest.fn(),
+      };
+
+      gateway.handleConnection(client as never);
+
+      expect(client.join).not.toHaveBeenCalled();
+      expect(client.disconnect).toHaveBeenCalledWith(true);
+    });
+
+    it('déconnecte défensivement un socket avec organizationId mais SANS userId (contexte incomplet)', () => {
+      const client = {
+        data: {
+          organizationContext: { organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+        },
+        join: jest.fn(),
+        disconnect: jest.fn(),
+      };
+
+      gateway.handleConnection(client as never);
+
+      expect(client.join).not.toHaveBeenCalled();
+      expect(client.disconnect).toHaveBeenCalledWith(true);
+      expect(socketRegistry.register).not.toHaveBeenCalled();
+    });
+
+    it('1-7C : enregistre la socket dans le registre (org+user) à la connexion', () => {
+      const client = {
+        data: {
+          organizationContext: {
+            organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+            userId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+          },
+        },
+        join: jest.fn(),
+        disconnect: jest.fn(),
+      };
+
+      gateway.handleConnection(client as never);
+
+      expect(socketRegistry.register).toHaveBeenCalledWith(
+        'aaaaaaaaaaaaaaaaaaaaaaaa',
+        'bbbbbbbbbbbbbbbbbbbbbbbb',
+        client,
+      );
+    });
+
+    it('1-7C : désenregistre la socket du registre à la déconnexion', () => {
+      const client = {
+        data: {
+          organizationContext: {
+            organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+            userId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+          },
+        },
+      };
+
+      gateway.handleDisconnect(client as never);
+
+      expect(socketRegistry.unregister).toHaveBeenCalledWith(
+        'aaaaaaaaaaaaaaaaaaaaaaaa',
+        'bbbbbbbbbbbbbbbbbbbbbbbb',
+        client,
+      );
+    });
+
+    it('1-7C : handleDisconnect sans contexte est un no-op (aucune erreur, aucun appel)', () => {
+      const client = { data: {} };
+      expect(() => gateway.handleDisconnect(client as never)).not.toThrow();
+      expect(socketRegistry.unregister).not.toHaveBeenCalled();
+    });
+
+    it('1-14C.1 : émet uniquement aux sockets de la room dont la couverture n’est pas échue', () => {
+      const live = {
+        data: { subscriptionCoverageEndsAt: NOW.getTime() + 1 },
+        emit: jest.fn(),
+      };
+      const ended = {
+        data: { subscriptionCoverageEndsAt: NOW.getTime() },
+        emit: jest.fn(),
+      };
+      const unknown = { data: {}, emit: jest.fn() };
+      const otherOrg = {
+        data: { subscriptionCoverageEndsAt: NOW.getTime() + 1 },
+        emit: jest.fn(),
+      };
+      const rooms = new Map([
+        [
+          'organization:aaaaaaaaaaaaaaaaaaaaaaaa',
+          new Set(['live', 'ended', 'unknown', 'gone']),
+        ],
+        ['organization:bbbbbbbbbbbbbbbbbbbbbbbb', new Set(['other'])],
+      ]);
+      const sockets = new Map<string, unknown>([
+        ['live', live],
+        ['ended', ended],
+        ['unknown', unknown],
+        ['other', otherOrg],
+      ]);
+      gateway.server = { sockets: { adapter: { rooms }, sockets } } as never;
+
+      gateway.emitToOrganization('aaaaaaaaaaaaaaaaaaaaaaaa', 'sale:created', {
+        id: 'sale-a',
+      });
+
+      expect(live.emit).toHaveBeenCalledWith('sale:created', { id: 'sale-a' });
+      expect(ended.emit).not.toHaveBeenCalled();
+      expect(unknown.emit).not.toHaveBeenCalled();
+      expect(otherOrg.emit).not.toHaveBeenCalled();
+    });
+
+    it('1-15F : emitToMember vise les seules sockets de l’utilisateur dans la room, couverture valide', () => {
+      const org = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+      const live = NOW.getTime() + 1;
+      const socketOf = (
+        userId: string,
+        organizationId: string,
+        end: number,
+      ) => ({
+        data: {
+          subscriptionCoverageEndsAt: end,
+          organizationContext: { organizationId, userId },
+        },
+        emit: jest.fn(),
+      });
+      const ownerTab1 = socketOf('owner', org, live);
+      const ownerTab2 = socketOf('owner', org, live);
+      const ownerEnded = socketOf('owner', org, NOW.getTime());
+      const admin = socketOf('admin', org, live);
+      const ownerElsewhere = socketOf(
+        'owner',
+        'bbbbbbbbbbbbbbbbbbbbbbbb',
+        live,
+      );
+      const rooms = new Map([
+        [`organization:${org}`, new Set(['t1', 't2', 'ended', 'admin'])],
+        ['organization:bbbbbbbbbbbbbbbbbbbbbbbb', new Set(['elsewhere'])],
+      ]);
+      const sockets = new Map<string, unknown>([
+        ['t1', ownerTab1],
+        ['t2', ownerTab2],
+        ['ended', ownerEnded],
+        ['admin', admin],
+        ['elsewhere', ownerElsewhere],
+      ]);
+      gateway.server = { sockets: { adapter: { rooms }, sockets } } as never;
+
+      gateway.emitToMember(org, 'owner', 'payments:changed', {});
+
+      expect(ownerTab1.emit).toHaveBeenCalledWith('payments:changed', {});
+      expect(ownerTab2.emit).toHaveBeenCalledWith('payments:changed', {});
+      expect(ownerEnded.emit).not.toHaveBeenCalled();
+      expect(admin.emit).not.toHaveBeenCalled();
+      expect(ownerElsewhere.emit).not.toHaveBeenCalled();
+    });
+
+    it('1-14C.1 : room absente → aucune émission, aucune erreur', () => {
+      gateway.server = {
+        sockets: { adapter: { rooms: new Map() }, sockets: new Map() },
+      } as never;
+      expect(() =>
+        gateway.emitToOrganization('cccccccccccccccccccccccc', 'x', {}),
+      ).not.toThrow();
     });
   });
 });

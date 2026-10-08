@@ -1,4 +1,32 @@
+# Contexte Docker = racine du dépôt (1-12E). Aucun secret, aucun artefact
+# local (node_modules Windows, builds, caches) ne doit entrer dans une image.
+
+# Secrets et configuration locale
+.env
+.env.*
+**/.env
+**/.env.*
+**/.vercel
+**/.vercel/**
+
+# Dépendances et artefacts de build produits hors Docker
+node_modules
 **/node_modules
+.next
 **/.next
+dist
 **/dist
-**/.git
+coverage
+**/coverage
+*.tsbuildinfo
+**/*.tsbuildinfo
+*.log
+**/*.log
+
+# Outillage du dépôt, inutile aux images
+.git
+.github
+.husky
+.claude
+docs
+nginx

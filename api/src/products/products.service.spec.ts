@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { ProductsService } from './products.service';
@@ -9,9 +9,13 @@ import { Section } from '../sections/schemas/section.schema';
 import { S3Service } from '../s3/s3.service';
 import { EventsGateway } from '../events/events.gateway';
 import { AuditService } from '../audit/audit.service';
+import { PurgedStockAdjustment } from './schemas/purged-stock-adjustment.schema';
 
 const PRODUCT_OBJECT_ID = '112233445566778899001122';
 const UNKNOWN_PRODUCT_ID = '6300000000000000000000f1';
+// Org tenant du bloc 0B.7B (1-4C.1) — `decrementStock` en est désormais
+// le 1er argument obligatoire.
+const TRADE_ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 
 /** Session transactionnelle de test (référence unique, comparée par `toBe`). */
 function makeSession() {
@@ -20,6 +24,47 @@ function makeSession() {
     abortTransaction: jest.fn(),
     commitTransaction: jest.fn(),
   };
+}
+
+/**
+ * 1-15D — connexion de test : `withTransaction` exécute le callback une fois
+ * (le pilote réel peut le rejouer ; voir l'e2e de purge).
+ */
+function makeConnection() {
+  const session = {
+    withTransaction: jest.fn((fn: () => Promise<void>) => fn()),
+    endSession: jest.fn().mockResolvedValue(undefined),
+  };
+  return {
+    session,
+    connection: { startSession: jest.fn().mockResolvedValue(session) },
+  };
+}
+
+/**
+ * 1-15E — équivalent de `Document.getChanges()` pour les documents simulés :
+ * `$set` des champs modifiés depuis la création du mock (stock compris, pour
+ * qu'une écriture absolue du stock soit visible).
+ */
+const TRACKED_PRODUCT_FIELDS = [
+  'name',
+  'imageUrl',
+  'purchasePrice',
+  'salePrice',
+  'sectionId',
+  'initialQuantity',
+  'remainingQuantity',
+  'organizationId',
+];
+function trackChanges(doc: Record<string, unknown>) {
+  const initial = { ...doc };
+  doc.getChanges = jest.fn(() => {
+    const $set: Record<string, unknown> = {};
+    for (const key of TRACKED_PRODUCT_FIELDS) {
+      if (doc[key] !== initial[key]) $set[key] = doc[key];
+    }
+    return Object.keys($set).length ? { $set } : {};
+  });
 }
 
 function makeUpdateChain(result: unknown) {
@@ -40,7 +85,7 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
 
   const baseOpts = {
     s3Service: { uploadFile: jest.fn(), deleteFile: jest.fn() },
-    eventsGateway: { emit: jest.fn() },
+    eventsGateway: { emitToOrganization: jest.fn() },
     auditService: { log: jest.fn(), findByProduct: jest.fn() },
     saleModel: {},
     sectionModel: {},
@@ -57,6 +102,10 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
       providers: [
         ProductsService,
         { provide: getModelToken(Product.name), useValue: productModel },
+        {
+          provide: getModelToken(PurgedStockAdjustment.name),
+          useValue: {},
+        },
         { provide: getModelToken(Sale.name), useValue: baseOpts.saleModel },
         {
           provide: getModelToken(Section.name),
@@ -65,6 +114,10 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
         { provide: S3Service, useValue: baseOpts.s3Service },
         { provide: EventsGateway, useValue: baseOpts.eventsGateway },
         { provide: AuditService, useValue: baseOpts.auditService },
+        {
+          provide: getConnectionToken(),
+          useValue: makeConnection().connection,
+        },
       ],
     }).compile();
     service = module.get(ProductsService);
@@ -84,7 +137,12 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     const { updateChain } = await build();
     updateChain.exec.mockResolvedValue(product);
 
-    const res = await service.decrementStock(PRODUCT_OBJECT_ID, 3, session);
+    const res = await service.decrementStock(
+      TRADE_ORG_A,
+      PRODUCT_OBJECT_ID,
+      3,
+      session,
+    );
 
     expect(res).toBe(product);
     const [filter, update, options] = productModel.findOneAndUpdate.mock
@@ -93,8 +151,10 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
       Record<string, unknown>,
       Record<string, unknown>,
     ];
+    // 1-4C.1 : le filtre atomique porte le tenant (`_id` + `organizationId`).
     expect(filter).toEqual({
       _id: new Types.ObjectId(PRODUCT_OBJECT_ID),
+      organizationId: new Types.ObjectId(TRADE_ORG_A),
       deletedAt: null,
       remainingQuantity: { $gte: 3 },
     });
@@ -109,14 +169,20 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     findChain.exec.mockResolvedValue(null);
 
     const err = await service
-      .decrementStock(PRODUCT_OBJECT_ID, 3, session)
+      .decrementStock(TRADE_ORG_A, PRODUCT_OBJECT_ID, 3, session)
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NotFoundException);
     expect((err as Error).message).toBe(
       `Product ${PRODUCT_OBJECT_ID} not found`,
     );
+    // 1-11C.1 : code stable ajouté, message historique conservé.
+    expect((err as NotFoundException).getResponse()).toEqual({
+      code: 'PRODUCT_NOT_FOUND',
+      message: `Product ${PRODUCT_OBJECT_ID} not found`,
+    });
 
-    // la relecture d'erreur cible UNIQUEMENT un produit actif :
+    // 1-4C.1 : la relecture d'erreur cible UNIQUEMENT un produit actif du
+    // MÊME tenant : `{_id, organizationId, deletedAt:null}`.
     const [filter, projection, opts] = productModel.findOne.mock.calls[0] as [
       Record<string, unknown>,
       unknown,
@@ -124,6 +190,7 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     ];
     expect(filter).toEqual({
       _id: new Types.ObjectId(PRODUCT_OBJECT_ID),
+      organizationId: new Types.ObjectId(TRADE_ORG_A),
       deletedAt: null,
     });
     // la MÊME session est transmise à la mise à jour ET à la relecture :
@@ -147,10 +214,15 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     });
 
     const err = await service
-      .decrementStock(PRODUCT_OBJECT_ID, 3, session)
+      .decrementStock(TRADE_ORG_A, PRODUCT_OBJECT_ID, 3, session)
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BadRequestException);
     expect((err as Error).message).toBe('Not enough stock. Available: 2');
+    expect((err as BadRequestException).getResponse()).toEqual({
+      code: 'INSUFFICIENT_STOCK',
+      message: 'Not enough stock. Available: 2',
+      available: 2,
+    });
     // la relecture d'erreur a bien eu lieu (une fois) :
     expect(productModel.findOne).toHaveBeenCalledTimes(1);
   });
@@ -164,7 +236,7 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     findChain.exec.mockImplementation(() => Promise.resolve(null));
 
     const err = await service
-      .decrementStock(UNKNOWN_PRODUCT_ID, 3, session)
+      .decrementStock(TRADE_ORG_A, UNKNOWN_PRODUCT_ID, 3, session)
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NotFoundException);
     expect((err as Error).message).not.toContain('Not enough stock');
@@ -174,10 +246,1255 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     const { updateChain } = await build();
     updateChain.exec.mockResolvedValue({ remainingQuantity: 1 });
 
-    await service.decrementStock(PRODUCT_OBJECT_ID, 1);
+    await service.decrementStock(TRADE_ORG_A, PRODUCT_OBJECT_ID, 1);
 
     const [, , options] = productModel.findOneAndUpdate.mock
       .calls[0] as unknown as [unknown, unknown, { session?: unknown }];
     expect(options.session).toBeNull();
+  });
+});
+
+/**
+ * Chemin catalogue HTTP (1-4B) — `organizationId` obligatoire, tenant dans
+ * CHAQUE filtre, section validée dans la même org, $set strict, S3 jamais
+ * touché pour un produit étranger. Les chemins transactionnels
+ * `decrementStock`/`adjustStock` (1-4C) ne sont PAS testés ici.
+ */
+describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
+  let service: ProductsService;
+  let productModel: {
+    create: jest.Mock;
+    find: jest.Mock;
+    findOne: jest.Mock;
+    findOneAndUpdate: jest.Mock;
+    findOneAndDelete: jest.Mock;
+  };
+  let sectionModel: { findOne: jest.Mock; countDocuments: jest.Mock };
+  let saleModel: {
+    find: jest.Mock;
+    aggregate: jest.Mock;
+    updateMany: jest.Mock;
+  };
+  let aggregateChain: { session: jest.Mock; exec: jest.Mock };
+  let stockAdjustmentModel: { create: jest.Mock };
+  let updateManyChain: { exec: jest.Mock };
+  let tx: ReturnType<typeof makeConnection>;
+  let s3Service: { deleteFile: jest.Mock; uploadFile: jest.Mock };
+  let auditService: { log: jest.Mock; findByProduct: jest.Mock };
+  let eventsGateway: { emitToOrganization: jest.Mock };
+  let findChain: { sort: jest.Mock; exec: jest.Mock };
+  let updateChain: { exec: jest.Mock };
+  let deleteChain: { exec: jest.Mock };
+  let saleChain: { populate: jest.Mock; sort: jest.Mock; exec: jest.Mock };
+  // Chaînes `findOne(...).exec()` / `countDocuments(...).exec()` (même
+  // pattern que le bloc 0B.7B) : `await Model.findOne()` est une Query
+  // thenable, mais l'idiome du service est explicite sur `.exec()`.
+  let productOneChain: { exec: jest.Mock };
+  let sectionOneChain: { exec: jest.Mock };
+  let countChain: { exec: jest.Mock };
+
+  const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const ORG_B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+  const SECTION_ID = '112233445566778899001122';
+  const FOREIGN_SECTION_ID = 'cccccccccccccccccccccccc';
+  const PRODUCT_ID = '223344556677889900112233';
+
+  const DTO = {
+    sectionId: SECTION_ID,
+    name: 'Prod',
+    purchasePrice: 5,
+    salePrice: 10,
+    initialQuantity: 7,
+  };
+
+  function sectionDoc(org: string = ORG_A) {
+    return {
+      _id: new Types.ObjectId(SECTION_ID),
+      name: 'Sec',
+      deletedAt: null,
+      organizationId: new Types.ObjectId(org),
+    };
+  }
+
+  function productDoc(overrides: Record<string, unknown> = {}) {
+    const doc: Record<string, unknown> = {
+      _id: new Types.ObjectId(PRODUCT_ID),
+      sectionId: new Types.ObjectId(SECTION_ID),
+      name: 'Prod',
+      imageUrl: 'http://s3-e2e/p.png',
+      purchasePrice: 5,
+      salePrice: 10,
+      initialQuantity: 10,
+      remainingQuantity: 10,
+      deletedAt: null,
+      organizationId: new Types.ObjectId(ORG_A),
+      save: jest.fn(),
+      ...overrides,
+    };
+    // Mongoose `save()` renvoie le document hydraté : le mock le mime.
+    (doc.save as jest.Mock).mockResolvedValue(doc);
+    trackChanges(doc);
+    return doc;
+  }
+
+  async function build() {
+    findChain = { sort: jest.fn(), exec: jest.fn() };
+    findChain.sort.mockReturnValue(findChain);
+    updateChain = { exec: jest.fn() };
+    deleteChain = { exec: jest.fn() };
+    productOneChain = { exec: jest.fn() };
+    sectionOneChain = { exec: jest.fn() };
+    countChain = { exec: jest.fn() };
+    saleChain = { populate: jest.fn(), sort: jest.fn(), exec: jest.fn() };
+    saleChain.populate.mockReturnValue(saleChain);
+    saleChain.sort.mockReturnValue(saleChain);
+    saleChain.exec.mockResolvedValue([]);
+    productModel = {
+      create: jest.fn(),
+      find: jest.fn(() => findChain),
+      findOne: jest.fn(() => productOneChain),
+      findOneAndUpdate: jest.fn(() => updateChain),
+      findOneAndDelete: jest.fn(() => deleteChain),
+    };
+    sectionModel = {
+      findOne: jest.fn(() => sectionOneChain),
+      countDocuments: jest.fn(() => countChain),
+    };
+    aggregateChain = {
+      session: jest.fn(),
+      exec: jest.fn().mockResolvedValue([]),
+    };
+    aggregateChain.session.mockReturnValue(aggregateChain);
+    stockAdjustmentModel = { create: jest.fn().mockResolvedValue([]) };
+    updateManyChain = {
+      exec: jest.fn().mockResolvedValue({ modifiedCount: 0 }),
+    };
+    saleModel = {
+      find: jest.fn(() => saleChain),
+      aggregate: jest.fn(() => aggregateChain),
+      updateMany: jest.fn(() => updateManyChain),
+    };
+    tx = makeConnection();
+    s3Service = { deleteFile: jest.fn(), uploadFile: jest.fn() };
+    auditService = { log: jest.fn(), findByProduct: jest.fn() };
+    auditService.findByProduct.mockResolvedValue([]);
+    eventsGateway = { emitToOrganization: jest.fn() };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: getModelToken(Product.name), useValue: productModel },
+        {
+          provide: getModelToken(PurgedStockAdjustment.name),
+          useValue: stockAdjustmentModel,
+        },
+        { provide: getModelToken(Sale.name), useValue: saleModel },
+        { provide: getModelToken(Section.name), useValue: sectionModel },
+        { provide: S3Service, useValue: s3Service },
+        { provide: EventsGateway, useValue: eventsGateway },
+        { provide: AuditService, useValue: auditService },
+        { provide: getConnectionToken(), useValue: tx.connection },
+      ],
+    }).compile();
+    service = module.get(ProductsService);
+  }
+
+  // ---- create ----
+
+  it('create : écrit l’organisation SERVEUR (falsification runtime ignorée), section validée tenant, sous-sections filtrées, unicité tenant', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null); // unicité : absent
+    sectionOneChain.exec.mockResolvedValue(sectionDoc()); // section A active
+    countChain.exec.mockResolvedValue(0); // pas de sous-section
+    productModel.create.mockResolvedValue(productDoc());
+
+    // org d'origine runtime fournie (le DTO whitelisté ne peut pas la porter,
+    // mais le service ne doit PAS non plus copier un tel champ) :
+    const dto = { ...DTO, organizationId: ORG_B };
+    await service.create(ORG_A, dto, 'http://s3/x.png', 'actor');
+
+    const written = productModel.create.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect(String(written.organizationId)).toBe(ORG_A); // jamais B
+    expect(String(written.imageUrl)).toBe('http://s3/x.png');
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
+      ORG_A,
+      'product:created',
+      expect.any(Object),
+    );
+
+    // section validée par filtre composite tenant :
+    expect(sectionModel.findOne).toHaveBeenCalledWith({
+      _id: new Types.ObjectId(SECTION_ID),
+      organizationId: new Types.ObjectId(ORG_A),
+      deletedAt: null,
+    });
+    // recherches de sous-sections filtrées par tenant :
+    expect(sectionModel.countDocuments).toHaveBeenCalledWith({
+      organizationId: new Types.ObjectId(ORG_A),
+      parentId: new Types.ObjectId(SECTION_ID),
+      deletedAt: null,
+    });
+    // unicité de nom filtrée par tenant :
+    expect(productModel.findOne).toHaveBeenCalledWith({
+      name: expect.any(RegExp),
+      organizationId: new Types.ObjectId(ORG_A),
+    });
+  });
+
+  it('create : section étrangère/absente → 404 `Section`, aucune création, pas de sous-section check', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+    sectionOneChain.exec.mockResolvedValue(null); // pas dans A (étrangère)
+    countChain.exec.mockResolvedValue(99);
+
+    const err = await service
+      .create(ORG_A, DTO, 'http://s3/x.png', 'actor')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect((err as Error).message).toBe(`Section ${SECTION_ID} not found`);
+    expect(sectionModel.countDocuments).not.toHaveBeenCalled();
+    expect(productModel.create).not.toHaveBeenCalled();
+    expect(auditService.log).not.toHaveBeenCalled();
+  });
+
+  it('create : sous-sections actives dans l’org → 400 SECTION_HAS_SUBSECTIONS (filtre tenant prouvé)', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+    sectionOneChain.exec.mockResolvedValue(sectionDoc());
+    countChain.exec.mockResolvedValue(3);
+
+    const err = await service
+      .create(ORG_A, DTO, 'http://s3/x.png', 'actor')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect((err as Error).message).toBe('SECTION_HAS_SUBSECTIONS');
+    expect(sectionModel.countDocuments).toHaveBeenCalledWith({
+      organizationId: new Types.ObjectId(ORG_A),
+      parentId: new Types.ObjectId(SECTION_ID),
+      deletedAt: null,
+    });
+    expect(productModel.create).not.toHaveBeenCalled();
+  });
+
+  // ---- findAll / findTrashed ----
+
+  it('findAll : filtre EXACT {organizationId, deletedAt, [sectionId]} (+ tri inchangé)', async () => {
+    await build();
+    findChain.exec.mockResolvedValue([]);
+
+    await service.findAll(ORG_A);
+    expect(productModel.find).toHaveBeenNthCalledWith(1, {
+      organizationId: new Types.ObjectId(ORG_A),
+      deletedAt: null,
+    });
+
+    await service.findAll(ORG_A, SECTION_ID);
+    expect(productModel.find).toHaveBeenNthCalledWith(2, {
+      organizationId: new Types.ObjectId(ORG_A),
+      deletedAt: null,
+      sectionId: new Types.ObjectId(SECTION_ID),
+    });
+    expect(findChain.sort).toHaveBeenCalledWith({ createdAt: -1 });
+  });
+
+  it('findTrashed : filtre EXACT {organizationId, deletedAt:{$ne:null}}', async () => {
+    await build();
+    findChain.exec.mockResolvedValue([]);
+
+    await service.findTrashed(ORG_A);
+
+    expect(productModel.find).toHaveBeenCalledWith({
+      organizationId: new Types.ObjectId(ORG_A),
+      deletedAt: { $ne: null },
+    });
+    expect(findChain.sort).toHaveBeenCalledWith({ deletedAt: -1 });
+  });
+
+  // ---- findOne ----
+
+  const SELLER_ID = 'eeeeeeeeeeeeeeeeeeeeeeee';
+
+  it('findOne : filtre composite {_id, organizationId} puis sales (scope all) + audit inclus', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+
+    const res = await service.findOne(ORG_A, PRODUCT_ID, { kind: 'all' }, true);
+
+    expect(productModel.findOne).toHaveBeenCalledWith({
+      _id: PRODUCT_ID,
+      organizationId: new Types.ObjectId(ORG_A),
+    });
+    expect(res.product.name).toBe('Prod');
+    expect(saleModel.find).toHaveBeenCalledWith({
+      productId: new Types.ObjectId(PRODUCT_ID),
+    });
+    expect(auditService.findByProduct).toHaveBeenCalledWith(ORG_A, PRODUCT_ID);
+  });
+
+  it('findOne (correctif 1-7B) : scope «own» → filtre sales par sellerId, jamais les ventes d’un AUTRE vendeur', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+
+    await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'own', sellerId: SELLER_ID },
+      false,
+    );
+
+    expect(saleModel.find).toHaveBeenCalledWith({
+      productId: new Types.ObjectId(PRODUCT_ID),
+      sellerId: new Types.ObjectId(SELLER_ID),
+    });
+  });
+
+  it('findOne (correctif 1-7B) : scope «none» → AUCUNE lecture de ventes (jamais interrogées)', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+
+    const res = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'none' },
+      false,
+    );
+
+    expect(saleModel.find).not.toHaveBeenCalled();
+    expect(res.sales).toEqual([]);
+    // 1-12H : sans `products.view_financials` (visibilité par défaut), aucun
+    // agrégat n'est lu ni exposé.
+    expect(res).not.toHaveProperty('actualRevenue');
+    expect(saleModel.aggregate).not.toHaveBeenCalled();
+  });
+
+  // ---- 1-12H : agrégats produit indépendants des ventes consultables ----
+
+  const FULL = { stockDetails: true, financials: true };
+  const STANDARD = { stockDetails: false, financials: false };
+  const FINANCIAL_KEYS = [
+    'actualProfit',
+    'actualRevenue',
+    'margin',
+    'totalPurchaseCost',
+  ];
+
+  it('findOne (1-12H) : scope «own» + finances → CA réel = agrégat de TOUTES les ventes du produit dans l’org, jamais la liste filtrée', async () => {
+    await build();
+    // Produit : 10 initial, 5 restants → 5 vendus ; achat 5.
+    productOneChain.exec.mockResolvedValue(
+      productDoc({ initialQuantity: 10, remainingQuantity: 5 }),
+    );
+    // Historique scopé du vendeur A : 2 × 1 500 seulement.
+    saleChain.exec.mockResolvedValue([{ quantity: 2, salePrice: 1500 }]);
+    // Agrégat serveur : A (3 000) + B (6 000).
+    aggregateChain.exec.mockResolvedValue([
+      { _id: new Types.ObjectId(PRODUCT_ID), revenue: 9000 },
+    ]);
+
+    const res = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'own', sellerId: SELLER_ID },
+      false,
+      FULL,
+    );
+
+    expect(saleModel.find).toHaveBeenCalledWith({
+      productId: new Types.ObjectId(PRODUCT_ID),
+      sellerId: new Types.ObjectId(SELLER_ID),
+    });
+    const [pipeline] = saleModel.aggregate.mock.calls[0] as [
+      Record<string, unknown>[],
+    ];
+    expect(pipeline[0]).toEqual({
+      $match: {
+        organizationId: new Types.ObjectId(ORG_A),
+        productId: { $in: [new Types.ObjectId(PRODUCT_ID)] },
+      },
+    });
+    expect(JSON.stringify(pipeline)).not.toContain('sellerId');
+    expect(res.actualRevenue).toBe(9000);
+    expect(res.unitsSold).toBe(5);
+    expect(res.actualProfit).toBe(9000 - 5 * 5);
+    expect(res.margin).toBeCloseTo(((9000 - 25) / 9000) * 100);
+    expect(res.totalPurchaseCost).toBe(5 * 10);
+    expect(res.product.purchasePrice).toBe(5);
+    expect(res.product.initialQuantity).toBe(10);
+    expect(res.sales).toHaveLength(1);
+  });
+
+  it('findOne (1-12H) : sans finances → aucun agrégat lu, champs financiers et prix d’achat ABSENTS (jamais 0)', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+
+    const res = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'own', sellerId: SELLER_ID },
+      false,
+      STANDARD,
+    );
+
+    expect(saleModel.aggregate).not.toHaveBeenCalled();
+    for (const key of [...FINANCIAL_KEYS, 'unitsSold']) {
+      expect(res).not.toHaveProperty(key);
+    }
+    expect(res.product).not.toHaveProperty('purchasePrice');
+    expect(res.product).not.toHaveProperty('initialQuantity');
+    expect(res.product).not.toHaveProperty('organizationId');
+    expect(res.product.salePrice).toBe(10);
+    expect(res.product.remainingQuantity).toBe(10);
+    expect(res.status).toBe('in_stock');
+  });
+
+  it('findOne (1-12H) : détail du stock seul → stock initial et unités vendues, aucune donnée financière', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(
+      productDoc({ initialQuantity: 10, remainingQuantity: 4 }),
+    );
+
+    const res = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'own', sellerId: SELLER_ID },
+      false,
+      { stockDetails: true, financials: false },
+    );
+
+    expect(res.unitsSold).toBe(6);
+    expect(res.product.initialQuantity).toBe(10);
+    for (const key of FINANCIAL_KEYS) expect(res).not.toHaveProperty(key);
+    expect(res.product).not.toHaveProperty('purchasePrice');
+    expect(saleModel.aggregate).not.toHaveBeenCalled();
+  });
+
+  it('findOne (1-12H) : historique d’audit projeté (prix d’achat, stock initial, quantité ajoutée retirés sans droit)', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+    const log = (details: Record<string, unknown>) => ({
+      toObject: () => ({ action: 'x', details }),
+    });
+    auditService.findByProduct.mockResolvedValue([
+      log({ name: 'P', purchasePrice: 5, salePrice: 10, initialQuantity: 3 }),
+      log({ purchasePrice: { from: 5, to: 6 } }),
+      log({ added: 4 }),
+    ]);
+
+    const res = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'all' },
+      true,
+      STANDARD,
+    );
+    expect(res.auditLogs).toEqual([
+      { action: 'x', details: { name: 'P', salePrice: 10 } },
+      { action: 'x', details: {} },
+      { action: 'x', details: {} },
+    ]);
+    const full = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'all' },
+      true,
+      FULL,
+    );
+    expect(full.auditLogs[0]).toEqual({
+      action: 'x',
+      details: {
+        name: 'P',
+        purchasePrice: 5,
+        salePrice: 10,
+        initialQuantity: 3,
+      },
+    });
+  });
+
+  it('findAll (1-12H) : un seul agrégat pour tous les produits listés ; produit sans vente → CA 0, marge null', async () => {
+    await build();
+    const other = '334455667788990011223344';
+    findChain.exec.mockResolvedValue([
+      productDoc({ initialQuantity: 10, remainingQuantity: 5 }),
+      productDoc({
+        _id: new Types.ObjectId(other),
+        initialQuantity: 3,
+        remainingQuantity: 3,
+      }),
+    ]);
+    aggregateChain.exec.mockResolvedValue([
+      { _id: new Types.ObjectId(PRODUCT_ID), revenue: 9000 },
+    ]);
+
+    const res = await service.findAll(ORG_A, undefined, FULL);
+
+    expect(saleModel.aggregate).toHaveBeenCalledTimes(1);
+    expect(res[0].actualRevenue).toBe(9000);
+    expect(res[1].actualRevenue).toBe(0);
+    expect(res[1].actualProfit).toBe(0);
+    expect(res[1].margin).toBeNull();
+
+    const standard = await service.findAll(ORG_A, undefined, STANDARD);
+    expect(saleModel.aggregate).toHaveBeenCalledTimes(1); // pas de 2e lecture
+    for (const key of [...FINANCIAL_KEYS, 'unitsSold']) {
+      expect(standard[0]).not.toHaveProperty(key);
+    }
+  });
+
+  it('diffusions Socket.IO (1-12H) : create/update/restore → champs standard uniquement, quel que soit le demandeur', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+    sectionOneChain.exec.mockResolvedValue(sectionDoc());
+    countChain.exec.mockResolvedValue(0);
+    productModel.create.mockResolvedValue(productDoc());
+    const created = await service.create(
+      ORG_A,
+      DTO,
+      'http://s3/x.png',
+      'actor',
+      FULL,
+    );
+    expect(created.purchasePrice).toBe(5); // réponse du demandeur autorisé
+
+    productOneChain.exec.mockResolvedValue(productDoc());
+    updateChain.exec.mockResolvedValue(productDoc({ name: 'N' }));
+    await service.update(
+      ORG_A,
+      PRODUCT_ID,
+      { name: 'N' },
+      'actor',
+      undefined,
+      FULL,
+    );
+    updateChain.exec.mockResolvedValue(productDoc());
+    await service.restore(ORG_A, PRODUCT_ID, FULL);
+
+    const payloads = eventsGateway.emitToOrganization.mock.calls.map((call) =>
+      JSON.stringify(call[2]),
+    );
+    expect(payloads).toHaveLength(3);
+    for (const payload of payloads) {
+      for (const key of [
+        'purchasePrice',
+        'initialQuantity',
+        'unitsSold',
+        'organizationId',
+        ...FINANCIAL_KEYS,
+      ]) {
+        expect(payload).not.toContain(`"${key}"`);
+      }
+    }
+    expect(saleModel.aggregate).toHaveBeenCalledTimes(1); // update, pour le demandeur
+  });
+
+  it('findOne (correctif 1-7B) : audit.read absent → AUCUNE lecture d’audit (jamais interrogé ni vidé après coup)', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+
+    const res = await service.findOne(
+      ORG_A,
+      PRODUCT_ID,
+      { kind: 'all' },
+      false,
+    );
+
+    expect(auditService.findByProduct).not.toHaveBeenCalled();
+    expect(res.auditLogs).toEqual([]);
+  });
+
+  it('findOne : produit invisible dans l’org → 404 comme l’absent (sales/audit non lus)', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+
+    const err = await service
+      .findOne(ORG_A, PRODUCT_ID, { kind: 'all' }, true)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect((err as Error).message).toBe(`Product ${PRODUCT_ID} not found`);
+    expect(saleModel.find).not.toHaveBeenCalled();
+    expect(auditService.findByProduct).not.toHaveBeenCalled();
+  });
+
+  // ---- update ----
+
+  it('update : relecture composite tenant, nom modifié, organisation jamais altérée, écriture atomique unique', async () => {
+    await build();
+    const doc = productDoc();
+    productOneChain.exec.mockResolvedValue(doc);
+    updateChain.exec.mockResolvedValue(productDoc({ name: 'Nouveau' }));
+
+    const res = await service.update(
+      ORG_A,
+      PRODUCT_ID,
+      { name: 'Nouveau' },
+      'actor',
+    );
+
+    expect(productModel.findOne).toHaveBeenCalledWith({
+      _id: PRODUCT_ID,
+      organizationId: new Types.ObjectId(ORG_A),
+    });
+    // 1-15E : une seule écriture atomique, filtrée par tenant, `$set` des
+    // seuls champs modifiés (jamais `organizationId` ni le stock).
+    expect(doc.save).not.toHaveBeenCalled();
+    expect(productModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    expect(productModel.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: doc._id, organizationId: new Types.ObjectId(ORG_A) },
+      { $set: { name: 'Nouveau' } },
+      { returnDocument: 'after', runValidators: true },
+    );
+    expect(doc.organizationId).toEqual(new Types.ObjectId(ORG_A)); // inchangée
+    expect(auditService.log).toHaveBeenCalled();
+    expect(res.product.name).toBe('Nouveau');
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
+      ORG_A,
+      'product:updated',
+      expect.any(Object),
+    );
+    expect(s3Service.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it("update avec newImageUrl : remplace imageUrl et supprime l'ancienne APRÈS save, sous le préfixe de l'org", async () => {
+    await build();
+    const doc = productDoc();
+    const previousImageUrl = doc.imageUrl as string;
+    productOneChain.exec.mockResolvedValue(doc);
+    updateChain.exec.mockResolvedValue(
+      productDoc({ name: 'Nouveau', imageUrl: 'http://s3-e2e/new.png' }),
+    );
+
+    const res = await service.update(
+      ORG_A,
+      PRODUCT_ID,
+      { name: 'Nouveau' },
+      'actor',
+      'http://s3-e2e/new.png',
+    );
+
+    expect(productModel.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.any(Object),
+      { $set: { name: 'Nouveau', imageUrl: 'http://s3-e2e/new.png' } },
+      expect.any(Object),
+    );
+    // Ancienne image supprimée APRÈS l'écriture réussie.
+    expect(s3Service.deleteFile.mock.invocationCallOrder[0]).toBeGreaterThan(
+      productModel.findOneAndUpdate.mock.invocationCallOrder[0],
+    );
+    expect(s3Service.deleteFile).toHaveBeenCalledTimes(1);
+    expect(s3Service.deleteFile).toHaveBeenCalledWith(
+      previousImageUrl,
+      `organizations/${ORG_A}/products`,
+    );
+    expect(res.product.imageUrl).toBe('http://s3-e2e/new.png');
+  });
+
+  it("update avec newImageUrl identique à l'existante : aucune suppression S3", async () => {
+    await build();
+    const doc = productDoc({ imageUrl: 'http://s3-e2e/same.png' });
+    productOneChain.exec.mockResolvedValue(doc);
+    updateChain.exec.mockResolvedValue(doc);
+
+    await service.update(
+      ORG_A,
+      PRODUCT_ID,
+      { name: 'Nouveau' },
+      'actor',
+      'http://s3-e2e/same.png',
+    );
+
+    expect(s3Service.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('1-15E update : ajout de stock en `$inc` atomique, jamais en valeur absolue', async () => {
+    await build();
+    const doc = productDoc({ initialQuantity: 20, remainingQuantity: 15 });
+    productOneChain.exec.mockResolvedValue(doc);
+    updateChain.exec.mockResolvedValue(
+      productDoc({ initialQuantity: 25, remainingQuantity: 18 }),
+    );
+
+    const res = await service.update(
+      ORG_A,
+      PRODUCT_ID,
+      { additionalStock: 5, salePrice: 12 },
+      'actor',
+    );
+
+    expect(productModel.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: doc._id, organizationId: new Types.ObjectId(ORG_A) },
+      {
+        $set: { salePrice: 12 },
+        $inc: { initialQuantity: 5, remainingQuantity: 5 },
+      },
+      { returnDocument: 'after', runValidators: true },
+    );
+    // Le document lu n'est pas modifié pour le stock.
+    expect(doc.initialQuantity).toBe(20);
+    expect(doc.remainingQuantity).toBe(15);
+    expect(auditService.log).toHaveBeenCalledWith(
+      ORG_A,
+      PRODUCT_ID,
+      'stock_changed',
+      'actor',
+      { added: 5 },
+    );
+    // Réponse et émission : état ENREGISTRÉ (vente concurrente comprise).
+    expect(res.product.remainingQuantity).toBe(18);
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
+      ORG_A,
+      'product:updated',
+      expect.objectContaining({
+        product: expect.objectContaining({ remainingQuantity: 18 }),
+      }),
+    );
+  });
+
+  it('1-15E update : produit disparu à l’écriture → 404, aucune émission ni suppression d’image', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+    updateChain.exec.mockResolvedValue(null);
+
+    const err = await service
+      .update(
+        ORG_A,
+        PRODUCT_ID,
+        { additionalStock: 5 },
+        'actor',
+        'http://s3-e2e/new.png',
+      )
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect(eventsGateway.emitToOrganization).not.toHaveBeenCalled();
+    expect(s3Service.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('1-15E update : aucune modification → aucune écriture', async () => {
+    await build();
+    const doc = productDoc();
+    productOneChain.exec.mockResolvedValue(doc);
+    await service.update(ORG_A, PRODUCT_ID, { name: 'Prod' }, 'actor');
+    expect(productModel.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(doc.save).not.toHaveBeenCalled();
+  });
+
+  it('update : mouvement vers une section étrangère → 404 `Section`, rien sauvegardé', async () => {
+    await build();
+    const doc = productDoc();
+    productOneChain.exec.mockResolvedValue(doc);
+    sectionOneChain.exec.mockResolvedValue(null); // section cible non dans A
+
+    const err = await service
+      .update(ORG_A, PRODUCT_ID, { sectionId: FOREIGN_SECTION_ID }, 'actor')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect((err as Error).message).toBe(
+      `Section ${FOREIGN_SECTION_ID} not found`,
+    );
+    expect(sectionModel.findOne).toHaveBeenCalledWith({
+      _id: new Types.ObjectId(FOREIGN_SECTION_ID),
+      organizationId: new Types.ObjectId(ORG_A),
+      deletedAt: null,
+    });
+    expect(doc.save).not.toHaveBeenCalled();
+    expect(productModel.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('update : produit invisible → 404, aucune écriture', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+
+    const err = await service
+      .update(ORG_A, PRODUCT_ID, { name: 'X' }, 'actor')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+  });
+
+  // ---- remove / restore / permanentDelete ----
+
+  it('remove : filtre {_id, organizationId} + $set deletedAt ; invisible → 404', async () => {
+    await build();
+    updateChain.exec.mockResolvedValue(productDoc());
+    await service.remove(ORG_A, PRODUCT_ID, 'actor');
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
+      ORG_A,
+      'product:deleted',
+      PRODUCT_ID,
+    );
+    expect(productModel.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: PRODUCT_ID, organizationId: new Types.ObjectId(ORG_A) },
+      { $set: { deletedAt: expect.any(Date) } },
+      { returnDocument: 'after' },
+    );
+
+    updateChain.exec.mockResolvedValue(null);
+    const err = await service
+      .remove(ORG_A, PRODUCT_ID, 'actor')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+  });
+
+  it('1-15A : une émission en échec ne transforme jamais une mutation écrite en erreur', async () => {
+    await build();
+    eventsGateway.emitToOrganization.mockImplementation(() => {
+      throw new Error('socket indisponible');
+    });
+    productOneChain.exec.mockResolvedValue(null);
+    sectionOneChain.exec.mockResolvedValue(sectionDoc());
+    countChain.exec.mockResolvedValue(0);
+    productModel.create.mockResolvedValue(productDoc());
+    await expect(
+      service.create(ORG_A, DTO, 'http://s3/x.png', 'actor'),
+    ).resolves.toBeDefined();
+    expect(productModel.create).toHaveBeenCalledTimes(1);
+
+    updateChain.exec.mockResolvedValue(productDoc());
+    await expect(
+      service.remove(ORG_A, PRODUCT_ID, 'actor'),
+    ).resolves.toBeDefined();
+    await expect(service.restore(ORG_A, PRODUCT_ID)).resolves.toBeDefined();
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledTimes(3);
+  });
+
+  it('restore : MÊME filtre + $set deletedAt:null ; invisible → 404', async () => {
+    await build();
+    updateChain.exec.mockResolvedValue(productDoc());
+    await service.restore(ORG_A, PRODUCT_ID);
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
+      ORG_A,
+      'product:created',
+      expect.any(Object),
+    );
+    expect(productModel.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: PRODUCT_ID, organizationId: new Types.ObjectId(ORG_A) },
+      { $set: { deletedAt: null } },
+      { returnDocument: 'after' },
+    );
+
+    updateChain.exec.mockResolvedValue(null);
+    const err = await service
+      .restore(ORG_A, PRODUCT_ID)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+  });
+
+  it('1-15B : suppression définitive → `product:purged` `{ _id }` seul, APRÈS la suppression ; distinct de la corbeille ; rien si rien n’est supprimé', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+    deleteChain.exec.mockResolvedValue(productDoc());
+    await service.permanentDelete(ORG_A, PRODUCT_ID);
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledTimes(1);
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
+      ORG_A,
+      'product:purged',
+      { _id: PRODUCT_ID },
+    );
+    expect(
+      eventsGateway.emitToOrganization.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(
+      productModel.findOneAndDelete.mock.invocationCallOrder[0],
+    );
+
+    // Supprimé entre-temps par une autre requête : aucune émission.
+    eventsGateway.emitToOrganization.mockClear();
+    deleteChain.exec.mockResolvedValue(null);
+    await service.permanentDelete(ORG_A, PRODUCT_ID);
+    // Produit étranger ou absent : 404 sans émission.
+    productOneChain.exec.mockResolvedValue(null);
+    await service.permanentDelete(ORG_A, PRODUCT_ID).catch(() => undefined);
+    expect(eventsGateway.emitToOrganization).not.toHaveBeenCalled();
+
+    // Panne d'émission : la suppression déjà faite reste un succès.
+    productOneChain.exec.mockResolvedValue(productDoc());
+    deleteChain.exec.mockResolvedValue(productDoc());
+    eventsGateway.emitToOrganization.mockImplementation(() => {
+      throw new Error('socket indisponible');
+    });
+    await expect(
+      service.permanentDelete(ORG_A, PRODUCT_ID),
+    ).resolves.toBeDefined();
+  });
+
+  it('permanentDelete : S3 deleteFile puis purge {_id, organizationId} UNIQUEMENT', async () => {
+    await build();
+    const doc = productDoc();
+    productOneChain.exec.mockResolvedValue(doc); // porte imageUrl
+    deleteChain.exec.mockResolvedValue(doc);
+
+    const res = await service.permanentDelete(ORG_A, PRODUCT_ID);
+    // 1-12H : réponse projetée (visibilité standard par défaut).
+    expect(res).toMatchObject({ _id: PRODUCT_ID, name: 'Prod' });
+    expect(res).not.toHaveProperty('purchasePrice');
+    expect(s3Service.deleteFile).toHaveBeenCalledTimes(1);
+    expect(s3Service.deleteFile).toHaveBeenCalledWith(
+      doc.imageUrl,
+      `organizations/${ORG_A}/products`,
+    );
+    expect(productModel.findOneAndDelete).toHaveBeenCalledWith(
+      { _id: PRODUCT_ID, organizationId: new Types.ObjectId(ORG_A) },
+      { session: tx.session },
+    );
+    // Fichier supprimé AVANT et HORS de la transaction (jamais rejoué).
+    expect(s3Service.deleteFile.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.session.withTransaction.mock.invocationCallOrder[0],
+    );
+    expect(tx.session.endSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('1-15D : purge → historique figé sur les ventes du produit, dans la MÊME transaction', async () => {
+    await build();
+    const doc = productDoc({ name: 'Nom final', purchasePrice: 7 });
+    productOneChain.exec.mockResolvedValue(doc);
+    deleteChain.exec.mockResolvedValue(doc);
+
+    await service.permanentDelete(ORG_A, PRODUCT_ID);
+    expect(saleModel.updateMany).toHaveBeenCalledTimes(1);
+    expect(saleModel.updateMany).toHaveBeenCalledWith(
+      {
+        organizationId: new Types.ObjectId(ORG_A),
+        productId: doc._id,
+        // Idempotent : jamais d'écrasement d'un historique déjà posé.
+        lastKnownSource: { $exists: false },
+      },
+      {
+        $set: {
+          lastKnownProductName: 'Nom final',
+          lastKnownUnitCost: 7,
+          lastKnownSource: 'purge',
+        },
+      },
+      { session: tx.session },
+    );
+    // `productName` (nom enregistré à la vente) n'est jamais réécrit.
+    const [, update] = saleModel.updateMany.mock.calls[0] as [
+      unknown,
+      { $set: Record<string, unknown> },
+    ];
+    expect(update.$set).not.toHaveProperty('productName');
+    // Ordre : suppression du document puis historique ; émission après.
+    expect(
+      productModel.findOneAndDelete.mock.invocationCallOrder[0],
+    ).toBeLessThan(saleModel.updateMany.mock.invocationCallOrder[0]);
+    expect(
+      eventsGateway.emitToOrganization.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(tx.session.withTransaction.mock.invocationCallOrder[0]);
+  });
+
+  it('1-15D : document déjà supprimé par une autre requête → aucun historique réécrit ni émission', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+    deleteChain.exec.mockResolvedValue(null);
+    await service.permanentDelete(ORG_A, PRODUCT_ID);
+    expect(saleModel.updateMany).not.toHaveBeenCalled();
+    expect(eventsGateway.emitToOrganization).not.toHaveBeenCalled();
+  });
+
+  it('1-15D : stock et ventes concordants → aucun écart figé', async () => {
+    await build();
+    const doc = productDoc({ initialQuantity: 10, remainingQuantity: 7 });
+    productOneChain.exec.mockResolvedValue(doc);
+    deleteChain.exec.mockResolvedValue(doc);
+    aggregateChain.exec.mockResolvedValue([{ units: 3 }]);
+    await service.permanentDelete(ORG_A, PRODUCT_ID);
+    expect(saleModel.aggregate).toHaveBeenCalledWith([
+      {
+        $match: {
+          organizationId: new Types.ObjectId(ORG_A),
+          productId: doc._id,
+        },
+      },
+      { $group: { _id: null, units: { $sum: '$quantity' } } },
+    ]);
+    expect(aggregateChain.session).toHaveBeenCalledWith(tx.session);
+    expect(stockAdjustmentModel.create).not.toHaveBeenCalled();
+  });
+
+  it('1-15D : stock et ventes divergents → écart figé dans la MÊME transaction', async () => {
+    await build();
+    const doc = productDoc({
+      initialQuantity: 25,
+      remainingQuantity: 23,
+      purchasePrice: 7,
+    });
+    productOneChain.exec.mockResolvedValue(doc);
+    deleteChain.exec.mockResolvedValue(doc);
+    aggregateChain.exec.mockResolvedValue([{ units: 5 }]);
+    await service.permanentDelete(ORG_A, PRODUCT_ID);
+    expect(stockAdjustmentModel.create).toHaveBeenCalledWith(
+      [
+        {
+          organizationId: new Types.ObjectId(ORG_A),
+          productId: doc._id,
+          unitCost: 7,
+          units: -3,
+        },
+      ],
+      { session: tx.session },
+    );
+  });
+
+  it('1-15D : échec de la transaction → erreur propagée, session fermée, aucune émission', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+    deleteChain.exec.mockResolvedValue(productDoc());
+    updateManyChain.exec.mockRejectedValue(new Error('écriture refusée'));
+    await expect(service.permanentDelete(ORG_A, PRODUCT_ID)).rejects.toThrow(
+      'écriture refusée',
+    );
+    expect(tx.session.endSession).toHaveBeenCalledTimes(1);
+    expect(eventsGateway.emitToOrganization).not.toHaveBeenCalled();
+  });
+
+  it('permanentDelete : produit étranger → 404, S3 deleteFile JAMAIS appelé, pas de purge', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+
+    const err = await service
+      .permanentDelete(ORG_A, PRODUCT_ID)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect(s3Service.deleteFile).not.toHaveBeenCalled();
+    expect(productModel.findOneAndDelete).not.toHaveBeenCalled();
+    expect(tx.connection.startSession).not.toHaveBeenCalled();
+    expect(saleModel.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 1-4C.1 — cas 15 : les 6 `AuditService.log` des chemins Produit existants
+ * (`create`, 5 `update`, `remove`) transmettent TOUS leur `organizationId`
+ * comme PREMIER argument. Sans ce changement, le service ne compile plus :
+ * la nouvelle signature d'`AuditService.log` l'exige.
+ */
+describe('ProductsService — appelants AuditService.log portent la tenant (1-4C.1)', () => {
+  let service: ProductsService;
+  let productModel: {
+    create: jest.Mock;
+    find: jest.Mock;
+    findOne: jest.Mock;
+    findOneAndUpdate: jest.Mock;
+  };
+  let sectionModel: { findOne: jest.Mock; countDocuments: jest.Mock };
+  let auditService: { log: jest.Mock; findByProduct: jest.Mock };
+  let productOneChain: { exec: jest.Mock };
+  let sectionOneChain: { exec: jest.Mock };
+  let countChain: { exec: jest.Mock };
+  let updateChain: { exec: jest.Mock };
+  let findChain: { sort: jest.Mock; exec: jest.Mock };
+
+  const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const SECTION_ID = '112233445566778899001122';
+  const PRODUCT_ID = '223344556677889900112233';
+
+  function sectionDoc() {
+    return {
+      _id: new Types.ObjectId(SECTION_ID),
+      name: 'Sec',
+      deletedAt: null,
+      organizationId: new Types.ObjectId(ORG_A),
+    };
+  }
+
+  function productDoc(overrides: Record<string, unknown> = {}) {
+    const doc: Record<string, unknown> = {
+      _id: new Types.ObjectId(PRODUCT_ID),
+      sectionId: new Types.ObjectId(SECTION_ID),
+      name: 'Prod',
+      imageUrl: 'http://s3-e2e/p.png',
+      purchasePrice: 5,
+      salePrice: 10,
+      initialQuantity: 10,
+      remainingQuantity: 10,
+      deletedAt: null,
+      organizationId: new Types.ObjectId(ORG_A),
+      save: jest.fn(),
+      ...overrides,
+    };
+    (doc.save as jest.Mock).mockResolvedValue(doc);
+    trackChanges(doc);
+    return doc;
+  }
+
+  async function build() {
+    findChain = { sort: jest.fn(), exec: jest.fn() };
+    findChain.sort.mockReturnValue(findChain);
+    updateChain = { exec: jest.fn() };
+    productOneChain = { exec: jest.fn() };
+    sectionOneChain = { exec: jest.fn() };
+    countChain = { exec: jest.fn() };
+    productModel = {
+      create: jest.fn(),
+      find: jest.fn(() => findChain),
+      findOne: jest.fn(() => productOneChain),
+      findOneAndUpdate: jest.fn(() => updateChain),
+    };
+    sectionModel = {
+      findOne: jest.fn(() => sectionOneChain),
+      countDocuments: jest.fn(() => countChain),
+    };
+    auditService = { log: jest.fn(), findByProduct: jest.fn() };
+    auditService.findByProduct.mockResolvedValue([]);
+    const saleChain = {
+      populate: jest.fn().mockReturnThis(),
+      sort: jest.fn().mockReturnThis(),
+      exec: jest.fn().mockResolvedValue([]),
+    };
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: getModelToken(Product.name), useValue: productModel },
+        {
+          provide: getModelToken(PurgedStockAdjustment.name),
+          useValue: {},
+        },
+        {
+          provide: getModelToken(Sale.name),
+          useValue: { find: jest.fn(() => saleChain) },
+        },
+        {
+          provide: getModelToken(Section.name),
+          useValue: sectionModel,
+        },
+        {
+          provide: S3Service,
+          useValue: { deleteFile: jest.fn(), uploadFile: jest.fn() },
+        },
+        {
+          provide: EventsGateway,
+          useValue: { emitToOrganization: jest.fn() },
+        },
+        { provide: AuditService, useValue: auditService },
+        {
+          provide: getConnectionToken(),
+          useValue: makeConnection().connection,
+        },
+      ],
+    }).compile();
+    service = module.get(ProductsService);
+  }
+
+  it('create : AuditService.log reçoit l’org SERVEUR en 1er argument', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+    sectionOneChain.exec.mockResolvedValue(sectionDoc());
+    countChain.exec.mockResolvedValue(0);
+    productModel.create.mockResolvedValue(productDoc());
+
+    const DTO = {
+      sectionId: SECTION_ID,
+      name: 'Prod',
+      purchasePrice: 5,
+      salePrice: 10,
+      initialQuantity: 7,
+    };
+    await service.create(ORG_A, DTO, 'http://s3/x.png', 'actor');
+    expect(auditService.log).toHaveBeenCalledTimes(1);
+    const [orgArg] = auditService.log.mock.calls[0] as unknown[];
+    expect(orgArg).toBe(ORG_A);
+  });
+
+  it('update : les 3 audits (NAME/PRICE/SECTION) reçoivent l’org en 1er argument', async () => {
+    await build();
+    const doc = productDoc();
+    productOneChain.exec.mockResolvedValue(doc);
+    updateChain.exec.mockResolvedValue(doc);
+    sectionOneChain.exec.mockResolvedValue(sectionDoc());
+    // 3 changes distinctes : name, price, section.
+    await service.update(
+      ORG_A,
+      PRODUCT_ID,
+      { name: 'N', purchasePrice: 20, salePrice: 30, sectionId: SECTION_ID },
+      'actor',
+    );
+    // NAME_CHANGED + PRICE_CHANGED (+ SECTION_CHANGED si org diff) → au moins 2 audits :
+    expect(auditService.log.mock.calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of auditService.log.mock.calls as unknown[][]) {
+      expect(call[0]).toBe(ORG_A);
+    }
+  });
+
+  it('remove : AuditService.log reçoit l’org en 1er argument', async () => {
+    await build();
+    updateChain.exec.mockResolvedValue(productDoc());
+    await service.remove(ORG_A, PRODUCT_ID, 'actor');
+    expect(auditService.log).toHaveBeenCalledTimes(1);
+    const [orgArg] = auditService.log.mock.calls[0] as unknown[];
+    expect(orgArg).toBe(ORG_A);
+  });
+});
+
+describe('ProductsService.adjustStock — tenant et session (1-4C.2)', () => {
+  let service: ProductsService;
+  let productModel: { findOne: jest.Mock };
+  let findChain: { exec: jest.Mock };
+
+  beforeEach(async () => {
+    findChain = { exec: jest.fn() };
+    productModel = { findOne: jest.fn(() => findChain) };
+    const module = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: getModelToken(Product.name), useValue: productModel },
+        {
+          provide: getModelToken(PurgedStockAdjustment.name),
+          useValue: {},
+        },
+        { provide: getModelToken(Sale.name), useValue: {} },
+        { provide: getModelToken(Section.name), useValue: {} },
+        { provide: S3Service, useValue: {} },
+        { provide: EventsGateway, useValue: {} },
+        { provide: AuditService, useValue: {} },
+        {
+          provide: getConnectionToken(),
+          useValue: makeConnection().connection,
+        },
+      ],
+    }).compile();
+    service = module.get(ProductsService);
+  });
+
+  it('filtre par produit + tenant et utilise la même session pour lire et sauvegarder', async () => {
+    const session = makeSession();
+    const product = {
+      remainingQuantity: 4,
+      deletedAt: new Date(),
+      save: jest.fn().mockResolvedValue(undefined),
+    };
+    findChain.exec.mockResolvedValue(product);
+
+    await service.adjustStock(TRADE_ORG_A, PRODUCT_OBJECT_ID, 2, session);
+
+    expect(productModel.findOne).toHaveBeenCalledWith(
+      {
+        _id: new Types.ObjectId(PRODUCT_OBJECT_ID),
+        organizationId: new Types.ObjectId(TRADE_ORG_A),
+      },
+      null,
+      { session },
+    );
+    expect(product.remainingQuantity).toBe(6);
+    expect(product.save).toHaveBeenCalledWith({ session });
+  });
+
+  it('produit absent ou étranger retourne sans écriture comme avant', async () => {
+    findChain.exec.mockResolvedValue(null);
+
+    await expect(
+      service.adjustStock(TRADE_ORG_A, UNKNOWN_PRODUCT_ID, 2),
+    ).resolves.toBeUndefined();
+  });
+
+  it('stock négatif conserve le message exact et ne sauvegarde pas', async () => {
+    const product = {
+      remainingQuantity: 1,
+      save: jest.fn().mockResolvedValue(undefined),
+    };
+    findChain.exec.mockResolvedValue(product);
+
+    await expect(
+      service.adjustStock(TRADE_ORG_A, PRODUCT_OBJECT_ID, -2),
+    ).rejects.toThrow('Insufficient stock. Available: 1');
+    expect(product.save).not.toHaveBeenCalled();
   });
 });

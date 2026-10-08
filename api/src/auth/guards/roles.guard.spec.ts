@@ -3,6 +3,7 @@ import { ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { RolesGuard } from './roles.guard';
 import { ROLES_KEY } from '../decorators/roles.decorator';
+import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 import { UserRole } from '../../users/schemas/user.schema';
 import { SectionsController } from '../../sections/sections.controller';
 import { ProductsController } from '../../products/products.controller';
@@ -100,92 +101,123 @@ describe('RolesGuard', () => {
     });
   });
 
-  describe('current permission matrix (real @Roles decorators)', () => {
-    const adminOnlyRoutes: [
+  describe('1-7B — @Roles retiré des contrôleurs métier migrés (PermissionGuard prend le relais)', () => {
+    /** Même priorité que `Reflector.getAllAndOverride` : handler puis classe. */
+    function readPermissions(
+      controllerType: object,
+      methodName?: string,
+    ): string[] | undefined {
+      const proto = (controllerType as { prototype: Record<string, unknown> })
+        .prototype;
+      if (methodName) {
+        const handler = proto[methodName];
+        if (typeof handler === 'function') {
+          const onHandler = Reflect.getMetadata(PERMISSIONS_KEY, handler) as
+            string[] | undefined;
+          if (onHandler) return onHandler;
+        }
+      }
+      return Reflect.getMetadata(PERMISSIONS_KEY, controllerType) as
+        string[] | undefined;
+    }
+
+    const migratedRoutes: [
       label: string,
       controller: object,
       method: string,
+      permission: string,
     ][] = [
-      ['sections.create', SectionsController, 'create'],
-      ['sections.update', SectionsController, 'update'],
-      ['sections.restore', SectionsController, 'restore'],
-      ['sections.remove', SectionsController, 'remove'],
-      ['sections.permanentDelete', SectionsController, 'permanentDelete'],
-      ['products.create', ProductsController, 'create'],
-      ['products.update', ProductsController, 'update'],
-      ['products.restore', ProductsController, 'restore'],
-      ['products.remove', ProductsController, 'remove'],
-      ['products.permanentDelete', ProductsController, 'permanentDelete'],
-      ['sales.update', SalesController, 'update'],
-      ['sales.remove', SalesController, 'remove'],
-      ['analytics.getOverview', AnalyticsController, 'getOverview'],
+      ['sections.create', SectionsController, 'create', 'catalog.manage'],
+      ['sections.update', SectionsController, 'update', 'catalog.manage'],
+      ['sections.restore', SectionsController, 'restore', 'trash.manage'],
+      ['sections.remove', SectionsController, 'remove', 'catalog.manage'],
+      [
+        'sections.permanentDelete',
+        SectionsController,
+        'permanentDelete',
+        'trash.manage',
+      ],
+      ['products.create', ProductsController, 'create', 'products.manage'],
+      ['products.restore', ProductsController, 'restore', 'trash.manage'],
+      ['products.remove', ProductsController, 'remove', 'products.manage'],
+      [
+        'products.permanentDelete',
+        ProductsController,
+        'permanentDelete',
+        'trash.manage',
+      ],
+      ['sales.create', SalesController, 'create', 'sales.record'],
+      ['sales.update', SalesController, 'update', 'sales.record'],
+      ['sales.remove', SalesController, 'remove', 'sales.record'],
+      [
+        'analytics.getOverview',
+        AnalyticsController,
+        'getOverview',
+        'analytics.read',
+      ],
       [
         'analytics.getProductsRanking',
         AnalyticsController,
         'getProductsRanking',
+        'analytics.read',
       ],
-      ['analytics.getSellersRanking', AnalyticsController, 'getSellersRanking'],
-      ['analytics.getMonthlyTrend', AnalyticsController, 'getMonthlyTrend'],
-      ['trash.findAll (controller-level @Roles)', TrashController, 'findAll'],
+      [
+        'analytics.getSellersRanking',
+        AnalyticsController,
+        'getSellersRanking',
+        'analytics.read',
+      ],
+      [
+        'analytics.getMonthlyTrend',
+        AnalyticsController,
+        'getMonthlyTrend',
+        'analytics.read',
+      ],
+      ['trash.findAll', TrashController, 'findAll', 'trash.manage'],
     ];
 
-    it.each(adminOnlyRoutes.map(([label]) => [label]))(
-      '%s is declared ADMIN-only',
+    it.each(migratedRoutes.map(([label]) => [label]))(
+      '%s : @Roles absent (RolesGuard non impliqué)',
       (label) => {
-        const entry = adminOnlyRoutes.find((e) => e[0] === label);
-        expect(entry).toBeDefined();
-        expect(readRoles(entry![1], entry![2])).toEqual([UserRole.ADMIN]);
+        const entry = migratedRoutes.find((e) => e[0] === label)!;
+        expect(readRoles(entry[1], entry[2])).toBeUndefined();
       },
     );
 
-    const anyAuthRoute: [label: string, controller: object, method: string][] =
-      [
-        ['sections.findAll', SectionsController, 'findAll'],
-        ['sections.findOne', SectionsController, 'findOne'],
-        ['products.findAll', ProductsController, 'findAll'],
-        ['products.findOne', ProductsController, 'findOne'],
-        ['sales.create', SalesController, 'create'],
-        ['sales.findAll', SalesController, 'findAll'],
-      ];
-
-    it.each(anyAuthRoute.map(([label]) => [label]))(
-      '%s has NO @Roles (any authenticated user, incl. seller)',
+    it.each(migratedRoutes.map(([label]) => [label]))(
+      '%s : @RequirePermissions déclare exactement la permission attendue',
       (label) => {
-        const entry = anyAuthRoute.find((e) => e[0] === label);
-        expect(entry).toBeDefined();
-        expect(readRoles(entry![1], entry![2])).toBeUndefined();
+        const entry = migratedRoutes.find((e) => e[0] === label)!;
+        expect(readPermissions(entry[1], entry[2])).toEqual([entry[3]]);
       },
     );
 
-    it('a seller therefore passes RolesGuard on every route above', () => {
+    const openRoutes: [label: string, controller: object, method: string][] = [
+      ['sections.findAll', SectionsController, 'findAll'],
+      ['sections.findOne', SectionsController, 'findOne'],
+      ['products.findAll', ProductsController, 'findAll'],
+      ['products.findOne', ProductsController, 'findOne'],
+      ['sales.findAll', SalesController, 'findAll'],
+      // Correctif 1-7B : la permission requise dépend des champs touchés
+      // (products.manage / stock.adjust / les deux) — décidée dans le
+      // handler, jamais une métadonnée statique.
+      ['products.update', ProductsController, 'update'],
+    ];
+
+    it.each(openRoutes.map(([label]) => [label]))(
+      '%s : sans @Roles ni @RequirePermissions (ouverte à tout membre actif, §3 audit 1A)',
+      (label) => {
+        const entry = openRoutes.find((e) => e[0] === label)!;
+        expect(readRoles(entry[1], entry[2])).toBeUndefined();
+        expect(readPermissions(entry[1], entry[2])).toBeUndefined();
+      },
+    );
+
+    it('a seller therefore passes RolesGuard on every route above (RolesGuard reste enregistré, mais inerte ici)', () => {
       const guard = makeGuard(null);
       expect(guard.canActivate(makeContext({ role: UserRole.SELLER }))).toBe(
         true,
       );
-    });
-
-    it('SECURITY (C-2, fixed in phase 0B.1): every analytics endpoint requires the ADMIN role — a seller is refused', () => {
-      // The metadata must be declared on (or inherited by) every
-      // analytics handler, and the guard decision must refuse the
-      // seller on top of that.
-      for (const method of [
-        'getOverview',
-        'getProductsRanking',
-        'getSellersRanking',
-        'getMonthlyTrend',
-      ] as const) {
-        expect(readRoles(AnalyticsController, method)).toEqual([
-          UserRole.ADMIN,
-        ]);
-      }
-      const guard = makeGuard([UserRole.ADMIN]);
-      let thrown: unknown;
-      try {
-        guard.canActivate(makeContext({ role: UserRole.SELLER }));
-      } catch (e: unknown) {
-        thrown = e;
-      }
-      expect(thrown).toBeInstanceOf(ForbiddenException);
     });
   });
 });

@@ -1,9 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
 import { JwtService } from '@nestjs/jwt';
 import type { IncomingHttpHeaders, IncomingMessage } from 'http';
-import type { Server } from 'socket.io';
+import type { Server, Socket } from 'socket.io';
 import { UsersService } from '../users/users.service';
+import { OrganizationsService } from '../organizations/organizations.service';
+import { SocketRegistryService } from '../organizations/socket-registry.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { SubscriptionSignalsService } from '../subscriptions/subscription-signals.service';
+import { NotificationSignalsService } from '../notifications/notification-signals.service';
 import {
   buildOriginAllowlist,
   parseCORSOrigin,
@@ -13,6 +18,7 @@ import {
 import {
   createAllowRequest,
   installSocketAuthMiddleware,
+  socketCoverageEndsAt,
 } from './socket-auth.middleware';
 
 /**
@@ -120,6 +126,9 @@ const allowRequestForSocket: (
   }
 };
 
+export const organizationRoom = (organizationId: string): string =>
+  `organization:${organizationId}`;
+
 @Injectable()
 @WebSocketGateway({
   // Options transmises au constructeur Socket.IO (voir
@@ -138,6 +147,13 @@ export class EventsGateway {
   constructor(
     private readonly jwtService: JwtService,
     private readonly usersService: UsersService,
+    private readonly organizationsService: OrganizationsService,
+    private readonly socketRegistry: SocketRegistryService,
+    private readonly subscriptionsService: SubscriptionsService,
+    private readonly subscriptionSignals: SubscriptionSignalsService,
+    // 1-16A.1 : optionnel (specs unitaires construites sans le centre).
+    @Optional()
+    private readonly notificationSignals?: NotificationSignalsService,
   ) {}
 
   /**
@@ -159,20 +175,111 @@ export class EventsGateway {
     installSocketAuthMiddleware(server, {
       jwtService: this.jwtService,
       usersService: this.usersService,
+      organizationsService: this.organizationsService,
+      subscriptionsService: this.subscriptionsService,
       logger: new Logger(EventsGateway.name),
+    });
+    // 1-15C : signaux d'organisation émis par `OrganizationsService` via le
+    // registre partagé, avec la même room et le même filtre de couverture.
+    this.socketRegistry.attachOrganizationEmitter(
+      (organizationId, event, payload) =>
+        this.emitToOrganization(organizationId, event, payload),
+    );
+    // 1-15F : signaux d'abonnement et de paiement au propriétaire réel
+    // seul (désigné par le service), mêmes room et filtre de couverture.
+    this.subscriptionSignals.attachEmitter({
+      toMember: (organizationId, userId, event, payload) =>
+        this.emitToMember(organizationId, userId, event, payload),
+    });
+    // 1-16A.1 : compteur du centre — signal privé au seul destinataire,
+    // mêmes room et filtre de couverture.
+    this.notificationSignals?.attachEmitter({
+      toMember: (organizationId, userId, event, payload) =>
+        this.emitToMember(organizationId, userId, event, payload),
     });
   }
 
-  emit(event: string, payload: unknown): void {
-    this.server.emit(event, payload);
+  handleConnection(client: Socket): void {
+    const organizationContext = client.data.organizationContext as
+      { organizationId?: string; userId?: string } | undefined;
+    const organizationId = organizationContext?.organizationId;
+    const userId = organizationContext?.userId;
+    if (!organizationId || !userId) {
+      client.disconnect(true);
+      return;
+    }
+    void client.join(organizationRoom(organizationId));
+    // 1-7C : registre en mémoire — permet de déconnecter ce membre après
+    // une mutation de membership (suspension/révocation/transfert).
+    this.socketRegistry.register(organizationId, userId, client);
   }
 
-  // Legacy helpers kept for backward compatibility
-  emitObjectCreated(object: unknown) {
-    this.server.emit('object:created', object);
+  handleDisconnect(client: Socket): void {
+    const organizationContext = client.data.organizationContext as
+      { organizationId?: string; userId?: string } | undefined;
+    const organizationId = organizationContext?.organizationId;
+    const userId = organizationContext?.userId;
+    if (!organizationId || !userId) return;
+    this.socketRegistry.unregister(organizationId, userId, client);
   }
 
-  emitObjectDeleted(id: string) {
-    this.server.emit('object:deleted', id);
+  /**
+   * 1-14C.1 — diffusion aux sockets de l'organisation dont la couverture
+   * connue n'est PAS échue (heure serveur) : aucun nouvel événement métier
+   * vers un socket commercialement bloqué, même avant que son contrôle à
+   * l'échéance ne le ferme. Synchrone, sans lecture DB (mono-instance, même
+   * limite que le registre). Les appelants restent en best effort après
+   * commit : une erreur ici ne transforme jamais une mutation en échec.
+   */
+  emitToOrganization(
+    organizationId: string,
+    event: string,
+    payload: unknown,
+  ): void {
+    this.emitInRoom(organizationId, null, event, payload);
+  }
+
+  /**
+   * 1-15F — même diffusion, restreinte aux sockets de `userId` DANS la room
+   * de l'organisation (utilisateur désigné par le serveur au moment de
+   * l'émission, jamais par un rôle figé au handshake).
+   */
+  emitToMember(
+    organizationId: string,
+    userId: string,
+    event: string,
+    payload: unknown,
+  ): void {
+    this.emitInRoom(organizationId, userId, event, payload);
+  }
+
+  private emitInRoom(
+    organizationId: string,
+    userId: string | null,
+    event: string,
+    payload: unknown,
+  ): void {
+    const room = this.server.sockets.adapter.rooms.get(
+      organizationRoom(organizationId),
+    );
+    if (!room) return;
+    const now = this.subscriptionsService.now().getTime();
+    for (const socketId of room) {
+      const socket = this.server.sockets.sockets.get(socketId);
+      if (!socket) continue;
+      if (userId !== null) {
+        const context = socket.data.organizationContext as
+          { organizationId?: string; userId?: string } | undefined;
+        if (
+          context?.userId !== userId ||
+          context.organizationId !== organizationId
+        ) {
+          continue;
+        }
+      }
+      const coverageEndsAt = socketCoverageEndsAt(socket);
+      if (coverageEndsAt === null || coverageEndsAt <= now) continue;
+      socket.emit(event, payload);
+    }
   }
 }

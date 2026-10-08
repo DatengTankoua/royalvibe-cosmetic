@@ -2,13 +2,16 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import type { UpdateQuery } from 'mongoose';
 import type { Connection } from 'mongoose';
 import { Product, ProductDocument } from './schemas/product.schema';
 import { Sale, SaleDocument } from '../sales/schemas/sale.schema';
+import { SALE_ERROR_CODES } from '../sales/sale-error-codes';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { S3Service } from '../s3/s3.service';
@@ -16,30 +19,41 @@ import { EventsGateway } from '../events/events.gateway';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/schemas/audit-log.schema';
 import { Section, SectionDocument } from '../sections/schemas/section.schema';
+import {
+  PurgedStockAdjustment,
+  PurgedStockAdjustmentDocument,
+} from './schemas/purged-stock-adjustment.schema';
+import {
+  COMMON_VISIBILITY,
+  ProductMetricsView,
+  ProductView,
+  ProductVisibility,
+  projectAuditDetails,
+  toProductMetricsView,
+  toProductView,
+} from './product-projection';
 
-export type ProductStatus = 'in_stock' | 'low_stock' | 'out_of_stock';
+export type { ProductStatus } from './product-projection';
 
-export interface ProductWithMetrics {
-  product: ProductDocument;
-  status: ProductStatus;
-  unitsSold: number;
-  totalPurchaseCost: number;
-  estimatedRevenue: number;
-  estimatedProfit: number;
+/** 1-16A.1 — résultat d'un ajustement de stock (détection des seuils). */
+export interface StockAdjustment {
+  initialQuantity: number;
+  remainingBefore: number;
+  remainingAfter: number;
 }
 
-export interface ProductDetail extends ProductWithMetrics {
-  actualRevenue: number;
-  actualProfit: number;
+export interface ProductDetail extends ProductMetricsView {
   sales: SaleDocument[];
   auditLogs: unknown[];
 }
 
-function computeStatus(remaining: number, initial: number): ProductStatus {
-  if (remaining === 0) return 'out_of_stock';
-  if (remaining / initial <= 0.2) return 'low_stock';
-  return 'in_stock';
-}
+/**
+ * 1-7B (correctif) — scope de l'historique des ventes exposé par
+ * `findOne` : décidé par le contrôleur (permissions `sales.view_all` /
+ * `sales.view_own`), jamais par le service.
+ */
+export type SalesHistoryScope =
+  { kind: 'all' } | { kind: 'own'; sellerId: string } | { kind: 'none' };
 
 // Session transactionnelle Mongoose (`mongodb.ClientSession`). Le type est
 // dérivé de `Connection.startSession` car le driver `mongodb` n'est pas
@@ -48,6 +62,8 @@ type MongooseSession = Awaited<ReturnType<Connection['startSession']>>;
 
 @Injectable()
 export class ProductsService {
+  private readonly logger = new Logger(ProductsService.name);
+
   constructor(
     @InjectModel(Product.name) private productModel: Model<ProductDocument>,
     @InjectModel(Sale.name) private saleModel: Model<SaleDocument>,
@@ -55,16 +71,43 @@ export class ProductsService {
     private s3Service: S3Service,
     private eventsGateway: EventsGateway,
     private auditService: AuditService,
+    @InjectConnection() private connection: Connection,
+    @InjectModel(PurgedStockAdjustment.name)
+    private stockAdjustmentModel: Model<PurgedStockAdjustmentDocument>,
   ) {}
 
-  /** Throws 409 if another product shares the same name (active or trashed) */
+  /**
+   * 1-15A — diffusion APRÈS l'écriture, en best effort (comme les ventes) :
+   * une panne d'émission ne transforme jamais une mutation déjà écrite en
+   * erreur (le client pourrait sinon la rejouer). Les autres membres
+   * rattrapent l'état par relecture à leur prochaine connexion du socket.
+   */
+  private emitBestEffort(
+    organizationId: string,
+    event:
+      | 'product:created'
+      | 'product:updated'
+      | 'product:deleted'
+      | 'product:purged',
+    payload: unknown,
+  ): void {
+    try {
+      this.eventsGateway.emitToOrganization(organizationId, event, payload);
+    } catch {
+      this.logger.warn(`${event} non émis (best effort).`);
+    }
+  }
+
+  /** Throws 409 if another product (OF THE SAME TENANT) shares the name */
   private async assertUniqueProductName(
+    organizationId: string,
     name: string,
     excludeId?: string,
   ): Promise<void> {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const query: Record<string, unknown> = {
       name: new RegExp(`^${escaped}$`, 'i'),
+      organizationId: new Types.ObjectId(organizationId),
     };
     if (excludeId) query._id = { $ne: new Types.ObjectId(excludeId) };
     const existing = await this.productModel.findOne(query).exec();
@@ -81,90 +124,233 @@ export class ProductsService {
     }
   }
 
+  /**
+   * 1-12H — CA réel par produit : agrégat serveur sur TOUTES les ventes
+   * existantes du produit dans l'organisation (Σ prix appliqué × quantité),
+   * indépendant du vendeur connecté et de toute liste filtrée ou paginée.
+   * Une vente modifiée compte avec ses valeurs courantes ; une vente
+   * supprimée (suppression physique + stock restauré) n'est plus comptée.
+   */
+  private async actualRevenueByProduct(
+    organizationId: string,
+    productIds: Types.ObjectId[],
+  ): Promise<Map<string, number>> {
+    if (productIds.length === 0) return new Map();
+    const rows = await this.saleModel
+      .aggregate<{ _id: Types.ObjectId; revenue: number }>([
+        {
+          $match: {
+            organizationId: new Types.ObjectId(organizationId),
+            productId: { $in: productIds },
+          },
+        },
+        {
+          $group: {
+            _id: '$productId',
+            revenue: { $sum: { $multiply: ['$salePrice', '$quantity'] } },
+          },
+        },
+      ])
+      .exec();
+    return new Map(rows.map((r) => [r._id.toString(), r.revenue]));
+  }
+
+  /** Projection pour le demandeur ; l'agrégat n'est lu que si `financials`. */
+  private async toMetricsViews(
+    organizationId: string,
+    products: ProductDocument[],
+    visibility: ProductVisibility,
+  ): Promise<ProductMetricsView[]> {
+    const revenues = visibility.financials
+      ? await this.actualRevenueByProduct(
+          organizationId,
+          products.map((p) => p._id),
+        )
+      : new Map<string, number>();
+    return products.map((p) =>
+      toProductMetricsView(
+        p,
+        visibility,
+        visibility.financials
+          ? (revenues.get(p._id.toString()) ?? 0)
+          : undefined,
+      ),
+    );
+  }
+
   async create(
+    organizationId: string,
     dto: CreateProductDto,
     imageUrl: string,
     actorId: string,
-  ): Promise<ProductDocument> {
-    await this.assertUniqueProductName(dto.name);
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductView> {
+    // §5 — la section cible doit être une section ACTIVE de la MÊME
+    // organisation. Filtre composite tenant : une section étrangère/absente
+    // est indistinguable d'une section absente (même 404, pas de fuite).
+    const section = await this.sectionModel
+      .findOne({
+        _id: new Types.ObjectId(dto.sectionId),
+        organizationId: new Types.ObjectId(organizationId),
+        deletedAt: null,
+      })
+      .exec();
+    if (!section) {
+      throw new NotFoundException(`Section ${dto.sectionId} not found`);
+    }
 
-    // Ensure the target section has no active sub-sections
-    const subSectionCount = await this.sectionModel.countDocuments({
-      parentId: new Types.ObjectId(dto.sectionId),
-      deletedAt: null,
-    });
+    // Aucune sous-section active n'autorise un produit (§1-4A inchangé,
+    // désormais filtré par tenant).
+    const subSectionCount = await this.sectionModel
+      .countDocuments({
+        organizationId: new Types.ObjectId(organizationId),
+        parentId: new Types.ObjectId(dto.sectionId),
+        deletedAt: null,
+      })
+      .exec();
     if (subSectionCount > 0) {
       throw new BadRequestException('SECTION_HAS_SUBSECTIONS');
     }
 
+    await this.assertUniqueProductName(organizationId, dto.name);
+
+    // §5 — liste de champs EXPLICITE : jamais un spread du DTO, qui pourrait
+    // porter un `organizationId` falsifié. L'org est imposée par le SERVEUR.
     const product = await this.productModel.create({
-      ...dto,
+      organizationId: new Types.ObjectId(organizationId),
       sectionId: new Types.ObjectId(dto.sectionId),
-      imageUrl,
-      remainingQuantity: dto.initialQuantity,
-    });
-    await this.auditService.log(product._id, AuditAction.CREATED, actorId, {
       name: dto.name,
+      imageUrl,
       purchasePrice: dto.purchasePrice,
       salePrice: dto.salePrice,
       initialQuantity: dto.initialQuantity,
+      remainingQuantity: dto.initialQuantity,
     });
-    this.eventsGateway.emit('product:created', product);
-    return product;
+    await this.auditService.log(
+      organizationId,
+      product._id,
+      AuditAction.CREATED,
+      actorId,
+      {
+        name: dto.name,
+        purchasePrice: dto.purchasePrice,
+        salePrice: dto.salePrice,
+        initialQuantity: dto.initialQuantity,
+      },
+    );
+    // 1-12H — diffusion commune : champs standard uniquement.
+    this.emitBestEffort(
+      organizationId,
+      'product:created',
+      toProductMetricsView(product, COMMON_VISIBILITY),
+    );
+    return toProductView(product, visibility);
   }
 
-  async findAll(sectionId?: string): Promise<ProductWithMetrics[]> {
-    const filter: Record<string, unknown> = { deletedAt: null };
+  async findAll(
+    organizationId: string,
+    sectionId?: string,
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductMetricsView[]> {
+    const filter: Record<string, unknown> = {
+      organizationId: new Types.ObjectId(organizationId),
+      deletedAt: null,
+    };
     if (sectionId) filter.sectionId = new Types.ObjectId(sectionId);
     const products = await this.productModel
       .find(filter)
       .sort({ createdAt: -1 })
       .exec();
-    return products.map((p) => this.withMetrics(p));
+    return this.toMetricsViews(organizationId, products, visibility);
   }
 
-  async findOne(id: string): Promise<ProductDetail> {
-    const product = await this.productModel.findById(id).exec();
+  async findOne(
+    organizationId: string,
+    id: string,
+    salesScope: SalesHistoryScope,
+    includeAudit: boolean,
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductDetail> {
+    // §4 — filtre composite tenant : un produit d'une autre org est
+    // indistinguable d'un produit absent (même 404).
+    const product = await this.productModel
+      .findOne({
+        _id: id,
+        organizationId: new Types.ObjectId(organizationId),
+      })
+      .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
 
-    const sales = await this.saleModel
-      .find({ productId: new Types.ObjectId(id) })
-      .populate('sellerId', 'name email')
-      .sort({ createdAt: -1 })
-      .exec();
+    // Correctif 1-7B — ni interrogé ni exposé hors du scope autorisé :
+    // `none` ne lit AUCUNE vente, `own` filtre par vendeur courant.
+    let sales: SaleDocument[] = [];
+    if (salesScope.kind !== 'none') {
+      const filter: Record<string, Types.ObjectId> = {
+        productId: new Types.ObjectId(id),
+      };
+      if (salesScope.kind === 'own') {
+        filter.sellerId = new Types.ObjectId(salesScope.sellerId);
+      }
+      sales = await this.saleModel
+        .find(filter)
+        .populate('sellerId', 'name email')
+        .sort({ createdAt: -1 })
+        .exec();
+    }
 
-    const auditLogs = await this.auditService.findByProduct(id);
+    // Correctif 1-7B — `audit.read` absent : aucune lecture, jamais un vidage
+    // après coup (l'historique n'est même pas interrogé).
+    // 1-12H — détails d'audit projetés selon la même visibilité.
+    const auditLogs = includeAudit
+      ? (await this.auditService.findByProduct(organizationId, id)).map(
+          (log) => {
+            const plain = log.toObject();
+            return {
+              ...plain,
+              details: projectAuditDetails(plain.details, visibility),
+            };
+          },
+        )
+      : [];
 
-    const actualRevenue = sales.reduce(
-      (sum, s) => sum + s.salePrice * s.quantity,
-      0,
+    // 1-12H (correctif) — les agrégats ne dépendent JAMAIS de `sales`
+    // (historique scopé own/all) : agrégat serveur sur toutes les ventes du
+    // produit, uniquement pour `products.view_financials`.
+    const [metrics] = await this.toMetricsViews(
+      organizationId,
+      [product],
+      visibility,
     );
-    const unitsSold = product.initialQuantity - product.remainingQuantity;
-    const actualProfit = actualRevenue - product.purchasePrice * unitsSold;
 
-    return {
-      ...this.withMetrics(product),
-      actualRevenue,
-      actualProfit,
-      sales,
-      auditLogs,
-    };
+    return { ...metrics, sales, auditLogs };
   }
 
   async update(
+    organizationId: string,
     id: string,
     dto: UpdateProductDto,
     actorId: string,
-  ): Promise<ProductWithMetrics> {
-    const product = await this.productModel.findById(id).exec();
+    newImageUrl?: string,
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductMetricsView> {
+    // §4 — relecture composite tenant : produit étranger = 404, pas de fuite.
+    const product = await this.productModel
+      .findOne({
+        _id: id,
+        organizationId: new Types.ObjectId(organizationId),
+      })
+      .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
 
     const changes: Record<string, unknown> = {};
+    const previousImageUrl = product.imageUrl;
+    if (newImageUrl) product.imageUrl = newImageUrl;
 
     if (dto.name && dto.name !== product.name) {
       changes.name = { from: product.name, to: dto.name };
       product.name = dto.name;
       await this.auditService.log(
+        organizationId,
         id,
         AuditAction.NAME_CHANGED,
         actorId,
@@ -189,6 +375,7 @@ export class ProductsService {
       }
       if (Object.keys(changes).length) {
         await this.auditService.log(
+          organizationId,
           id,
           AuditAction.PRICE_CHANGED,
           actorId,
@@ -197,11 +384,15 @@ export class ProductsService {
       }
     }
 
+    // 1-15E — l'ajout n'est PAS appliqué au document lu (valeurs absolues
+    // périmées si une vente est validée entre-temps) : il est transmis en
+    // `$inc` à l'écriture atomique ci-dessous, comme `decrementStock`.
+    let addedStock = 0;
     if (dto.additionalStock && dto.additionalStock > 0) {
+      addedStock = dto.additionalStock;
       const stockChange = { added: dto.additionalStock };
-      product.initialQuantity += dto.additionalStock;
-      product.remainingQuantity += dto.additionalStock;
       await this.auditService.log(
+        organizationId,
         id,
         AuditAction.STOCK_CHANGED,
         actorId,
@@ -212,9 +403,23 @@ export class ProductsService {
     if (dto.sectionId) {
       const newId = new Types.ObjectId(dto.sectionId);
       if (!product.sectionId.equals(newId)) {
+        // §5 — la section cible doit être ACTIVE de la MÊME organisation.
+        // Un mouvement vers une section étrangère est refusé (même 404 que
+        // l'absente) : aucun état partiel n'est jamais sauvegardé.
+        const target = await this.sectionModel
+          .findOne({
+            _id: newId,
+            organizationId: new Types.ObjectId(organizationId),
+            deletedAt: null,
+          })
+          .exec();
+        if (!target) {
+          throw new NotFoundException(`Section ${dto.sectionId} not found`);
+        }
         changes.sectionId = { from: product.sectionId, to: newId };
         product.sectionId = newId;
         await this.auditService.log(
+          organizationId,
           id,
           AuditAction.SECTION_CHANGED,
           actorId,
@@ -223,59 +428,285 @@ export class ProductsService {
       }
     }
 
-    const saved = await product.save();
-    const enriched = this.withMetrics(saved);
-    this.eventsGateway.emit('product:updated', enriched);
-    return enriched;
+    // 1-15E — UNE écriture atomique d'un seul document, filtrée par tenant :
+    // `$set` des seuls champs mutés ci-dessus (ceux qu'aurait écrits
+    // `save()` ; `organizationId` n'en fait JAMAIS partie) et `$inc` du
+    // stock. Une vente validée pendant la modification n'est donc jamais
+    // écrasée ; aucune relecture ni reprise applicative (un ajout ne peut
+    // être appliqué deux fois). Produit supprimé entre-temps → 404, rien
+    // n'est recréé.
+    const update: UpdateQuery<ProductDocument> = {
+      ...product.getChanges(),
+      ...(addedStock > 0
+        ? {
+            $inc: {
+              initialQuantity: addedStock,
+              remainingQuantity: addedStock,
+            },
+          }
+        : {}),
+    };
+    const saved =
+      Object.keys(update).length === 0
+        ? product
+        : await this.productModel
+            .findOneAndUpdate(
+              { _id: product._id, organizationId: product.organizationId },
+              update,
+              { returnDocument: 'after', runValidators: true },
+            )
+            .exec();
+    if (!saved) throw new NotFoundException(`Product ${id} not found`);
+    // Ancienne image supprimée SEULEMENT après succès de la mutation.
+    if (newImageUrl && previousImageUrl !== newImageUrl) {
+      await this.s3Service.deleteFile(
+        previousImageUrl,
+        `organizations/${organizationId}/products`,
+      );
+    }
+    // 1-12H — diffusion commune (standard seul) ; chaque client recharge
+    // ses champs étendus via l'API selon ses propres permissions.
+    this.emitBestEffort(
+      organizationId,
+      'product:updated',
+      toProductMetricsView(saved, COMMON_VISIBILITY),
+    );
+    const [view] = await this.toMetricsViews(
+      organizationId,
+      [saved],
+      visibility,
+    );
+    return view;
   }
 
-  async remove(id: string, actorId: string): Promise<ProductDocument> {
-    const product = await this.productModel.findById(id).exec();
+  async remove(
+    organizationId: string,
+    id: string,
+    actorId: string,
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductView> {
+    // §4 — suppression douce composite tenant : le filtre inclut l'org ; un
+    // produit étranger est indistinguable d'un produit absent (même 404).
+    const product = await this.productModel
+      .findOneAndUpdate(
+        { _id: id, organizationId: new Types.ObjectId(organizationId) },
+        { $set: { deletedAt: new Date() } },
+        // `returnDocument: 'after'` = l'ancienne option `new: true` (dépréciée).
+        { returnDocument: 'after' },
+      )
+      .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
-    await this.auditService.log(id, AuditAction.DELETED, actorId, {
-      name: product.name,
-    });
-    product.deletedAt = new Date();
-    const saved = await product.save();
-    this.eventsGateway.emit('product:deleted', id);
-    return saved;
+    await this.auditService.log(
+      organizationId,
+      id,
+      AuditAction.DELETED,
+      actorId,
+      {
+        name: product.name,
+      },
+    );
+    this.emitBestEffort(organizationId, 'product:deleted', id);
+    return toProductView(product, visibility);
   }
 
-  async findTrashed(): Promise<ProductDocument[]> {
-    return this.productModel
-      .find({ deletedAt: { $ne: null } })
+  async findTrashed(
+    organizationId: string,
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductView[]> {
+    const products = await this.productModel
+      .find({
+        organizationId: new Types.ObjectId(organizationId),
+        deletedAt: { $ne: null },
+      })
       .sort({ deletedAt: -1 })
       .exec();
+    return products.map((p) => toProductView(p, visibility));
   }
 
-  async restore(id: string): Promise<ProductDocument> {
+  async restore(
+    organizationId: string,
+    id: string,
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductView> {
+    // §4 — MÊME filtre composite que `remove` : seul un produit de l'org
+    // demandée est restaurable ; l'étranger est indistinguable de l'absent.
     const product = await this.productModel
-      .findByIdAndUpdate(id, { deletedAt: null }, { new: true })
+      .findOneAndUpdate(
+        { _id: id, organizationId: new Types.ObjectId(organizationId) },
+        { $set: { deletedAt: null } },
+        // `returnDocument: 'after'` = option `new: true` dépréciée en Mongoose 9.
+        { returnDocument: 'after' },
+      )
       .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
-    this.eventsGateway.emit('product:created', product);
-    return product;
+    this.emitBestEffort(
+      organizationId,
+      'product:created',
+      toProductMetricsView(product, COMMON_VISIBILITY),
+    );
+    return toProductView(product, visibility);
   }
 
-  async permanentDelete(id: string): Promise<ProductDocument> {
-    const product = await this.productModel.findById(id).exec();
+  async permanentDelete(
+    organizationId: string,
+    id: string,
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<ProductView> {
+    const orgOid = new Types.ObjectId(organizationId);
+    // §6 — le produit est d'abord localisé par filtre composite tenant :
+    // un produit étranger/absent provoque un 404 AVANT tout traitement,
+    // donc `s3Service.deleteFile` n'est JAMAIS appelé sur une ressource
+    // non rattachée à l'organisation demandée.
+    const product = await this.productModel
+      .findOne({ _id: id, organizationId: orgOid })
+      .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
-    await this.s3Service.deleteFile(product.imageUrl);
-    await product.deleteOne();
-    return product;
+    // Fichier supprimé AVANT et HORS de la transaction (jamais dans un
+    // callback rejouable) : un échec ultérieur laisse le produit en place et
+    // la purge reste relançable, sans fichier orphelin.
+    await this.s3Service.deleteFile(
+      product.imageUrl,
+      `organizations/${organizationId}/products`,
+    );
+    // 1-15D — suppression du document ET conservation de l'historique de
+    // ses ventes dans la MÊME transaction. Une vente concurrente écrit le
+    // même document produit (décrément du stock) : l'une des deux
+    // transactions est rejouée par le pilote. Toute vente validée avant la
+    // suppression est donc couverte ; aucune ne peut l'être après (produit
+    // introuvable → 404).
+    let removed: ProductDocument | undefined;
+    const session = await this.connection.startSession();
+    try {
+      await session.withTransaction(async () => {
+        removed = undefined;
+        const target = await this.productModel
+          .findOneAndDelete({ _id: id, organizationId: orgOid }, { session })
+          .exec();
+        if (!target) return;
+        await this.preserveSaleHistory(orgOid, target, session);
+        await this.preserveStockContribution(orgOid, target, session);
+        removed = target;
+      });
+    } finally {
+      await session.endSession();
+    }
+    // 1-15B — suppression DÉFINITIVE, distincte de la mise à la corbeille
+    // (`product:deleted`) : le produit n'est plus restaurable. Identifiant
+    // seul, émis seulement si cette requête a réellement supprimé le
+    // document (aucune émission sur 404 ni sur échec), après le commit.
+    if (removed) {
+      this.emitBestEffort(organizationId, 'product:purged', {
+        _id: String(removed._id),
+      });
+    }
+    return toProductView(removed ?? product, visibility);
   }
 
-  /** Adjusts remainingQuantity by delta (positive = restore, negative = consume) */
-  async adjustStock(productId: string, delta: number): Promise<void> {
-    const product = await this.productModel.findById(productId).exec();
+  /**
+   * 1-15D — fige, sur les ventes du produit supprimé, le dernier nom connu
+   * et le prix d'achat unitaire que les analyses utilisaient jusque-là.
+   * Valeurs lues dans le document supprimé (serveur), jamais chez le
+   * client. Idempotent : une vente déjà marquée (`lastKnownSource`) n'est
+   * jamais réécrite ; `productName` (nom enregistré à la vente) n'est
+   * jamais touché. Aucun fichier copié.
+   */
+  private async preserveSaleHistory(
+    organizationOid: Types.ObjectId,
+    product: ProductDocument,
+    session: MongooseSession,
+  ): Promise<void> {
+    await this.saleModel
+      .updateMany(
+        {
+          organizationId: organizationOid,
+          productId: product._id,
+          lastKnownSource: { $exists: false },
+        },
+        {
+          $set: {
+            lastKnownProductName: product.name,
+            lastKnownUnitCost: product.purchasePrice,
+            lastKnownSource: 'purge',
+          },
+        },
+        { session },
+      )
+      .exec();
+  }
+
+  /**
+   * 1-15D — conservation EXACTE de la contribution du produit au coût des
+   * ventes de la vue d'ensemble (règle existante : prix d'achat × (stock
+   * initial − stock restant)). Après la purge, ce coût est porté par les
+   * ventes (prix figé × quantités) ; si les deux quantités ont divergé
+   * (écriture perdue, données anciennes), l'écart est figé dans la même
+   * transaction. Lecture des ventes dans la session : même instantané que
+   * la suppression.
+   */
+  private async preserveStockContribution(
+    organizationOid: Types.ObjectId,
+    product: ProductDocument,
+    session: MongooseSession,
+  ): Promise<void> {
+    const [sold] = await this.saleModel
+      .aggregate<{ units: number }>([
+        { $match: { organizationId: organizationOid, productId: product._id } },
+        { $group: { _id: null, units: { $sum: '$quantity' } } },
+      ])
+      .session(session)
+      .exec();
+    const units =
+      product.initialQuantity - product.remainingQuantity - (sold?.units ?? 0);
+    if (units === 0) return;
+    await this.stockAdjustmentModel.create(
+      [
+        {
+          organizationId: organizationOid,
+          productId: product._id,
+          unitCost: product.purchasePrice,
+          units,
+        },
+      ],
+      { session },
+    );
+  }
+
+  /**
+   * Adjusts remainingQuantity by delta (positive = restore, negative = consume).
+   * 1-16A / 1-16A.1 : renvoie le stock initial et le stock restant avant /
+   * après ajustement (même lecture, même session), ou `undefined` si le
+   * produit n'existe plus (aucun ajustement, comme avant).
+   */
+  async adjustStock(
+    organizationId: string,
+    productId: string,
+    delta: number,
+    session?: MongooseSession,
+  ): Promise<StockAdjustment | undefined> {
+    const product = await this.productModel
+      .findOne(
+        {
+          _id: new Types.ObjectId(productId),
+          organizationId: new Types.ObjectId(organizationId),
+        },
+        null,
+        { session: session ?? null },
+      )
+      .exec();
     if (!product) return; // product may have been permanently deleted
     if (product.remainingQuantity + delta < 0) {
       throw new BadRequestException(
         `Insufficient stock. Available: ${product.remainingQuantity}`,
       );
     }
+    const remainingBefore = product.remainingQuantity;
     product.remainingQuantity += delta;
-    await product.save();
+    await product.save({ session: session ?? null });
+    return {
+      initialQuantity: product.initialQuantity,
+      remainingBefore,
+      remainingAfter: product.remainingQuantity,
+    };
   }
 
   /**
@@ -294,17 +725,27 @@ export class ProductsService {
    * Si aucune ligne n'est modifiée, on relit le produit AVEC la même session
    * pour distinguer : produit absent/inaccessible → 404 (message actuel),
    * produit présent mais stock insuffisant → 400 `Not enough stock. Available: N`.
+   *
+   * 1-4C.1 — TENANT : le filtre atomique ET la relecture d'échec sont
+   * composites (`_id` + `organizationId`) : un produit d'une autre org est
+   * indistinguable d'un produit absent, le décompte ne se fait jamais sur un
+   * stock étranger. `organizationId` est le 1er argument OBLIGATOIRE — la
+   * décrémentation n'est plus invocable sans org (résiduel `adjustStock`,
+   * non tenant, reporté à 1-4C.2).
    */
   async decrementStock(
+    organizationId: string,
     productId: string,
     quantity: number,
     session?: MongooseSession,
   ): Promise<ProductDocument> {
     const objectId = new Types.ObjectId(productId);
+    const orgOid = new Types.ObjectId(organizationId);
     const product = await this.productModel
       .findOneAndUpdate(
         {
           _id: objectId,
+          organizationId: orgOid,
           deletedAt: null,
           remainingQuantity: { $gte: quantity },
         },
@@ -317,40 +758,28 @@ export class ProductsService {
 
     if (!product) {
       // Aucune mise à jour n'a correspondu au filtre. Relecture d'un produit
-      // ACTIF (même session) pour distinguer : présent mais stock insuffisant
-      // → 400, absent ou déjà corbeillé → 404.
+      // ACTIF du MÊME tenant (même session) pour distinguer : présent mais
+      // stock insuffisant → 400, absent, étranger ou déjà corbeillé → 404.
       const fresh = await this.productModel
-        .findOne({ _id: objectId, deletedAt: null }, null, {
-          session: session ?? null,
-        })
+        .findOne(
+          { _id: objectId, organizationId: orgOid, deletedAt: null },
+          null,
+          { session: session ?? null },
+        )
         .exec();
+      // 1-11C.1 : codes stables ajoutés, messages historiques inchangés.
       if (!fresh) {
-        throw new NotFoundException(`Product ${productId} not found`);
+        throw new NotFoundException({
+          code: SALE_ERROR_CODES.PRODUCT_NOT_FOUND,
+          message: `Product ${productId} not found`,
+        });
       }
-      throw new BadRequestException(
-        `Not enough stock. Available: ${fresh.remainingQuantity}`,
-      );
+      throw new BadRequestException({
+        code: SALE_ERROR_CODES.INSUFFICIENT_STOCK,
+        message: `Not enough stock. Available: ${fresh.remainingQuantity}`,
+        available: fresh.remainingQuantity,
+      });
     }
     return product;
-  }
-
-  private withMetrics(p: ProductDocument): ProductWithMetrics {
-    // Guard against NaN if prices are missing (malformed documents)
-    const buyPrice = Number(p.purchasePrice) || 0;
-    const sellPrice = Number(p.salePrice) || 0;
-    const initQty = Number(p.initialQuantity) || 0;
-    const remQty = Number(p.remainingQuantity) || 0;
-    const unitsSold = initQty - remQty;
-    const totalPurchaseCost = buyPrice * initQty;
-    const estimatedRevenue = sellPrice * unitsSold;
-    const estimatedProfit = estimatedRevenue - buyPrice * unitsSold;
-    return {
-      product: p,
-      status: computeStatus(remQty, initQty),
-      unitsSold,
-      totalPurchaseCost,
-      estimatedRevenue,
-      estimatedProfit,
-    };
   }
 }

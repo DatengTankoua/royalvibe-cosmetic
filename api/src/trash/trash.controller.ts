@@ -1,13 +1,13 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 import { SectionsService } from '../sections/sections.service';
 import { ProductsService } from '../products/products.service';
-import { Roles } from '../auth/decorators/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole } from '../users/schemas/user.schema';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
+import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
+import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
+import { productVisibility } from '../products/product-projection';
 
 @Controller('trash')
-@UseGuards(RolesGuard)
-@Roles(UserRole.ADMIN)
+@RequirePermissions('trash.manage')
 export class TrashController {
   constructor(
     private readonly sectionsService: SectionsService,
@@ -15,10 +15,18 @@ export class TrashController {
   ) {}
 
   @Get()
-  async findAll() {
+  async findAll(
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+  ) {
+    // Filtre tenant sur la corbeille sections (1-4A) ET produits (1-4B) :
+    // l'org est celle du contexte branché par la garde, jamais du client.
     const [sections, products] = await Promise.all([
-      this.sectionsService.findTrashed(),
-      this.productsService.findTrashed(),
+      this.sectionsService.findTrashed(organizationContext.organizationId),
+      // 1-12H : même projection que le catalogue (prix d'achat, stock initial).
+      this.productsService.findTrashed(
+        organizationContext.organizationId,
+        productVisibility(organizationContext),
+      ),
     ]);
     return { sections, products };
   }

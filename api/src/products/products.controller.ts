@@ -2,29 +2,62 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   Patch,
   Post,
   Query,
   UploadedFile,
-  UseGuards,
   UseInterceptors,
   BadRequestException,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+// 1-12D : FileInterceptor + limites multipart durcies (GHSA-535w).
+import { SafeFileInterceptor } from '../common/upload/safe-file-interceptor';
 import { ProductsService } from './products.service';
+import type { SalesHistoryScope } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { S3Service } from '../s3/s3.service';
-import { Roles } from '../auth/decorators/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { User, UserRole } from '../users/schemas/user.schema';
+import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
+import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
+import {
+  DelegablePermission,
+  hasPermission,
+  PERMISSION_DENIED_RESPONSE,
+} from '../organizations/permissions';
+import { User } from '../users/schemas/user.schema';
 import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
+import { productVisibility } from './product-projection';
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
+// Matrice audit 1A §3 : stock+prix ⇒ `stock.adjust`, catalogue/images ⇒
+// `products.manage`. Un PATCH ne portant AUCUN champ reconnu retombe sur
+// `products.manage` (jamais une route sans permission requise).
+const STOCK_FIELDS = ['purchasePrice', 'salePrice', 'additionalStock'] as const;
+const BUSINESS_FIELDS = ['sectionId', 'name'] as const;
+
+function requiredPermissionsForUpdate(
+  dto: UpdateProductDto,
+  hasImage: boolean,
+): DelegablePermission[] {
+  const touchesStock = STOCK_FIELDS.some((field) => dto[field] !== undefined);
+  const touchesBusiness =
+    hasImage || BUSINESS_FIELDS.some((field) => dto[field] !== undefined);
+  const required: DelegablePermission[] = [];
+  if (touchesBusiness || !touchesStock) required.push('products.manage');
+  if (touchesStock) required.push('stock.adjust');
+  return required;
+}
+
+/**
+ * Tenant = `organizationContext.organizationId` (branché par la garde,
+ * jamais fourni par la requête) : c'est la source unique passée au service
+ * en PREMIER argument de chaque méthode du catalogue (§§3-4 de 1-4B).
+ */
 @Controller('products')
 export class ProductsController {
   constructor(
@@ -32,11 +65,15 @@ export class ProductsController {
     private readonly s3Service: S3Service,
   ) {}
 
+  // Clé serveur (1-5B) : jamais dérivée du DTO/nom de fichier client.
+  private imageKeyPrefix(organizationId: string): string {
+    return `organizations/${organizationId}/products`;
+  }
+
   @Post()
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('products.manage')
   @UseInterceptors(
-    FileInterceptor('image', {
+    SafeFileInterceptor('image', {
       limits: { fileSize: MAX_IMAGE_SIZE },
       fileFilter: (_req, file, cb) => {
         if (!file.mimetype.startsWith('image/')) {
@@ -51,54 +88,153 @@ export class ProductsController {
     @Body() dto: CreateProductDto,
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser() user: User,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
     if (!file) throw new BadRequestException('Image file is required');
-    const imageUrl = await this.s3Service.uploadFile(file);
-    return this.productsService.create(dto, imageUrl, user._id.toString());
+    const prefix = this.imageKeyPrefix(organizationContext.organizationId);
+    // Si `uploadFile` échoue, aucune URL n'existe encore : rien à nettoyer.
+    const imageUrl = await this.s3Service.uploadFile(file, prefix);
+    try {
+      return await this.productsService.create(
+        organizationContext.organizationId,
+        dto,
+        imageUrl,
+        user._id.toString(),
+        productVisibility(organizationContext),
+      );
+    } catch (err) {
+      // Mutation échouée après upload : la nouvelle image ne doit jamais
+      // rester orpheline sur le tenant.
+      await this.s3Service.deleteFile(imageUrl, prefix);
+      throw err;
+    }
   }
 
   @Get()
-  findAll(@Query('sectionId') sectionId?: string) {
-    return this.productsService.findAll(sectionId);
+  findAll(
+    // `= undefined` (et non `?`) : un paramètre optionnel ne peut précéder un
+    // paramètre requis (TS1016) tandis que le contexte suit.
+    @Query('sectionId') sectionId = undefined,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+  ) {
+    // 1-12H : projection selon les permissions effectives du demandeur.
+    return this.productsService.findAll(
+      organizationContext.organizationId,
+      sectionId,
+      productVisibility(organizationContext),
+    );
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseObjectIdPipe) id: string) {
-    return this.productsService.findOne(id);
+  findOne(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+  ) {
+    // Correctif 1-7B : le scope de l'historique des ventes ET l'inclusion de
+    // l'audit sont décidés ICI (jamais dans le service, jamais après coup).
+    const salesScope: SalesHistoryScope = hasPermission(
+      organizationContext,
+      'sales.view_all',
+    )
+      ? { kind: 'all' }
+      : hasPermission(organizationContext, 'sales.view_own')
+        ? { kind: 'own', sellerId: organizationContext.userId }
+        : { kind: 'none' };
+    const includeAudit = hasPermission(organizationContext, 'audit.read');
+    return this.productsService.findOne(
+      organizationContext.organizationId,
+      id,
+      salesScope,
+      includeAudit,
+      productVisibility(organizationContext),
+    );
   }
 
   @Patch(':id')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
-  update(
+  @UseInterceptors(
+    SafeFileInterceptor('image', {
+      limits: { fileSize: MAX_IMAGE_SIZE },
+      fileFilter: (_req, file, cb) => {
+        if (!file.mimetype.startsWith('image/')) {
+          cb(new BadRequestException('Only image files are allowed'), false);
+          return;
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  async update(
     @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: UpdateProductDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
     @CurrentUser() user: User,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.productsService.update(id, dto, user._id.toString());
+    // Correctif 1-7B : permission(s) requise(s) dépendent des champs réellement
+    // touchés (pas de métadonnée statique possible ici).
+    const required = requiredPermissionsForUpdate(dto, Boolean(file));
+    if (!required.every((p) => hasPermission(organizationContext, p))) {
+      throw new ForbiddenException(PERMISSION_DENIED_RESPONSE);
+    }
+    const prefix = this.imageKeyPrefix(organizationContext.organizationId);
+    const newImageUrl = file
+      ? await this.s3Service.uploadFile(file, prefix)
+      : undefined;
+    try {
+      return await this.productsService.update(
+        organizationContext.organizationId,
+        id,
+        dto,
+        user._id.toString(),
+        newImageUrl,
+        productVisibility(organizationContext),
+      );
+    } catch (err) {
+      // Mutation échouée après upload : la nouvelle image ne doit jamais
+      // rester orpheline sur le tenant.
+      if (newImageUrl) await this.s3Service.deleteFile(newImageUrl, prefix);
+      throw err;
+    }
   }
 
   @Patch(':id/restore')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
-  restore(@Param('id', ParseObjectIdPipe) id: string) {
-    return this.productsService.restore(id);
+  @RequirePermissions('trash.manage')
+  restore(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+  ) {
+    return this.productsService.restore(
+      organizationContext.organizationId,
+      id,
+      productVisibility(organizationContext),
+    );
   }
 
   @Delete(':id')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('products.manage')
   remove(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentUser() user: User,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.productsService.remove(id, user._id.toString());
+    return this.productsService.remove(
+      organizationContext.organizationId,
+      id,
+      user._id.toString(),
+      productVisibility(organizationContext),
+    );
   }
 
   @Delete(':id/permanent')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
-  permanentDelete(@Param('id', ParseObjectIdPipe) id: string) {
-    return this.productsService.permanentDelete(id);
+  @RequirePermissions('trash.manage')
+  permanentDelete(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+  ) {
+    return this.productsService.permanentDelete(
+      organizationContext.organizationId,
+      id,
+      productVisibility(organizationContext),
+    );
   }
 }

@@ -5,6 +5,10 @@ import axios from "axios";
 import Link from "next/link";
 import { FolderIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
+import { rich } from "@/i18n/rich";
+import { getApiErrorMessage } from "@/lib/api";
 import {
   Card,
   CardHeader,
@@ -40,17 +44,19 @@ import type { ApiSection } from "@/lib/api";
 
 interface SectionCardProps {
   section: ApiSection;
-  isAdmin: boolean;
+  canManage: boolean;
   onDelete: (id: string) => void;
   onRename?: (id: string, name: string, description: string) => Promise<void>;
 }
 
 export function SectionCard({
   section,
-  isAdmin,
+  canManage,
   onDelete,
   onRename,
 }: SectionCardProps) {
+  const { t } = useT("catalog");
+  const format = useFormat();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameLoading, setRenameLoading] = useState(false);
@@ -64,7 +70,7 @@ export function SectionCard({
     setRenameLoading(true);
     try {
       await onRename(section._id, newName, newDesc);
-      toast.success("Catalogue renommé");
+      toast.success(t("section.renamed"));
       setRenameOpen(false);
     } catch (err: unknown) {
       if (axios.isAxiosError(err) && err.response?.status === 409) {
@@ -78,7 +84,7 @@ export function SectionCard({
           return;
         }
       }
-      toast.error(err instanceof Error ? err.message : "Erreur");
+      toast.error(getApiErrorMessage(err));
     } finally {
       setRenameLoading(false);
     }
@@ -87,7 +93,11 @@ export function SectionCard({
   return (
     <>
       <Card className="hover:shadow-md transition-shadow">
-        <Link href={`/sections/${section._id}`} className="block">
+        <Link
+          href={`/app/catalog/${section._id}`}
+          prefetch={false}
+          className="block"
+        >
           <CardHeader>
             <div className="flex items-center gap-2">
               <FolderIcon className="h-5 w-5 shrink-0 text-muted-foreground" />
@@ -103,15 +113,16 @@ export function SectionCard({
           </CardHeader>
           <CardContent>
             <p className="text-xs text-muted-foreground">
-              {new Date(section.createdAt).toLocaleDateString("fr-FR")}
+              {format.date(section.createdAt)}
             </p>
           </CardContent>
         </Link>
-        {isAdmin && (
+        {canManage && (
           <div className="px-6 pb-4 flex justify-end gap-1">
             <Button
               variant="ghost"
               size="sm"
+              aria-label={t("section.renameTitle")}
               onClick={() => {
                 setNewName(section.name);
                 setNewDesc(section.description ?? "");
@@ -124,6 +135,7 @@ export function SectionCard({
               variant="ghost"
               size="sm"
               className="text-destructive hover:text-destructive"
+              aria-label={t("section.trashAction")}
               onClick={() => setConfirmDelete(true)}
             >
               <Trash2Icon className="h-4 w-4" />
@@ -135,11 +147,13 @@ export function SectionCard({
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Renommer le catalogue</DialogTitle>
+            <DialogTitle>{t("section.renameTitle")}</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleRename} className="space-y-4 mt-2">
             <div className="space-y-2">
-              <Label htmlFor={`rename-${section._id}`}>Nouveau nom</Label>
+              <Label htmlFor={`rename-${section._id}`}>
+                {t("section.newName")}
+              </Label>
               <Input
                 id={`rename-${section._id}`}
                 value={newName}
@@ -148,7 +162,9 @@ export function SectionCard({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor={`desc-${section._id}`}>Description</Label>
+              <Label htmlFor={`desc-${section._id}`}>
+                {t("section.description")}
+              </Label>
               <Textarea
                 id={`desc-${section._id}`}
                 value={newDesc}
@@ -157,7 +173,7 @@ export function SectionCard({
               />
             </div>
             <Button type="submit" className="w-full" disabled={renameLoading}>
-              {renameLoading ? "Enregistrement…" : "Enregistrer"}
+              {renameLoading ? t("saving") : t("actions.save")}
             </Button>
           </form>
         </DialogContent>
@@ -166,16 +182,15 @@ export function SectionCard({
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              Déplacer ce catalogue à la corbeille ?
-            </AlertDialogTitle>
+            <AlertDialogTitle>{t("section.trashTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Le catalogue <strong>{section.name}</strong> sera déplacé dans la
-              corbeille. Tu pourras le restaurer depuis la page Corbeille.
+              {rich(t("section.trashText"), {
+                name: () => <strong>{section.name}</strong>,
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
@@ -183,7 +198,7 @@ export function SectionCard({
                 onDelete(section._id);
               }}
             >
-              Mettre à la corbeille
+              {t("section.trashAction")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -1,0 +1,4 @@
+# 1-16C.2 — Textes juridiques archivés : octets EXACTS (empreinte SHA-256
+# enregistrée comme preuve). Aucune conversion de fin de ligne, sous aucun
+# système (core.autocrlf compris).
+api/src/legal/archive/** -text

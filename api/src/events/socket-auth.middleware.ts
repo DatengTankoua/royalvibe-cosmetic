@@ -3,7 +3,21 @@ import { JwtService } from '@nestjs/jwt';
 import type { IncomingMessage } from 'http';
 import type { Server, Socket } from 'socket.io';
 import { UsersService } from '../users/users.service';
+import {
+  OrganizationsService,
+  type ResolvedOrganizationContext,
+} from '../organizations/organizations.service';
 import { OriginAllowlist } from './origin.helpers';
+import {
+  currentSessionVersion,
+  isSessionCurrent,
+} from '../auth/session-version';
+import type { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import {
+  AccessScope,
+  accessScopeFromClaims,
+  type SubscriptionAccessDecision,
+} from '../subscriptions/subscription-access';
 
 /**
  * Contrôle authentifié des connexions Socket.IO — phase 0B.3.
@@ -51,9 +65,22 @@ import { OriginAllowlist } from './origin.helpers';
  */
 export const SOCKET_AUTH_TOKEN_KEY = 'token';
 
-/** Principal minimal et sûr attaché à `socket.data.user`. */
+// ObjectId canonique : une CHAÎNE strictement de 24 caractères hexadécimaux.
+// Aucune forme non-canonique n'est acceptée (nombre, objet, chaîne vide,
+// 12/24 caractères non-hex) — la validation rejette AVANT toute requête DB.
+// `isValidObjectId()` n'est PAS utilisé (cast trop permissif).
+const isStrictObjectId = (value: unknown): value is string =>
+  typeof value === 'string' && /^[0-9a-fA-F]{24}$/.test(value);
+
+/**
+ * Principal attaché à `socket.data.user` : `sub`/`orgId` issus du JWT
+ * vérifié ; `email`/`role` lus EXCLUSIVEMENT du document User chargé de la
+ * base (les claims éventuels du token sont ignorés). Base de l'isolation
+ * par rooms à venir (`organization:{orgId}`).
+ */
 export interface SocketPrincipal {
   sub: string;
+  orgId: string;
   email: string;
   role: string;
 }
@@ -62,6 +89,9 @@ export interface SocketPrincipal {
 export interface SocketAuthDependencies {
   jwtService: JwtService;
   usersService: UsersService;
+  organizationsService: OrganizationsService;
+  /** 1-14C.1 : contrôle commercial (handshake + échéance de couverture). */
+  subscriptionsService: Pick<SubscriptionsService, 'getAccessDecision' | 'now'>;
   logger?: Logger;
 }
 
@@ -79,12 +109,14 @@ export type SocketMiddlewareNext = (err?: Error) => void;
  *   (MÊME instance/secret que l'auth HTTP — AuthModule, `JWT_SECRET`) ;
  * - re-vérification de l'existence de l'utilisateur via
  *   `UsersService.findById` (MÊME politique que `JwtStrategy.validate`) ;
+ * - principal = `sub`/`orgId` du JWT vérifié + `email`/`role` du document
+ *   User de la base (les claims `email`/`role` du token sont ignorés) ;
  * - `next()` (sans erreur) appelé EXACTEMENT UNE FOIS, uniquement quand le
  *   principal est attaché dans `socket.data.user` ; en cas de refus,
  *   `next(err)` appelé EXACTEMENT UNE FOIS (garde interne `done`) ;
- * - `socket.data.user` ne contient QUE `sub`, `email`, `role` — jamais
- *   `password`, le token, ni un document Mongoose complet ;
- * - le payload vérifié DOIT porter `exp` (number fini) dans le futur :
+ * - `socket.data.user` ne contient QUE `sub`, `orgId`, `email`, `role`
+ *   — jamais `password`, le token, ni un document Mongoose complet ;
+ * - le payload vérifié porte `{ sub, orgId }` + `exp` (number fini) futur :
  *   `exp` absent, non-number, NaN, Infinity ou déjà dépassé
  *   (`exp <= Date.now()/1000`) → **refus au handshake**
  *   `next(Error('unauthorized'))` exactement une fois, **aucun timer
@@ -97,7 +129,12 @@ export function installSocketAuthMiddleware(
   server: Server,
   deps: SocketAuthDependencies,
 ): (socket: Socket, next: SocketMiddlewareNext) => void {
-  const { jwtService, usersService } = deps;
+  const {
+    jwtService,
+    usersService,
+    organizationsService,
+    subscriptionsService,
+  } = deps;
   const logger = deps.logger ?? new Logger('EventsGateway');
 
   const middleware = (socket: Socket, next: SocketMiddlewareNext): void => {
@@ -127,25 +164,30 @@ export function installSocketAuthMiddleware(
 
         // 2 + 3. Vérification signature + expiration (MÊME configuration
         //    que l'auth HTTP : instance du JwtModule du AuthModule) +
-        //    structure minimale du payload ({ sub, email, role }).
+        //    structure minimale du payload ({ sub, orgId }).
         // `Record<string, unknown>` (et non le `any` par défaut du
         // générique `JwtService.verifyAsync<T = any>`) : le reste du
         // payload (dont `exp`, §timer) reste typé inconnu.
         const payload =
           await jwtService.verifyAsync<Record<string, unknown>>(token);
-        const sub = payload?.sub;
-        const email = payload?.email;
-        const role = payload?.role;
-        if (
-          typeof sub !== 'string' ||
-          sub.length === 0 ||
-          typeof email !== 'string' ||
-          email.length === 0 ||
-          typeof role !== 'string' ||
-          role.length === 0
-        ) {
+        const sub: unknown = payload?.sub;
+        const orgId: unknown = payload?.orgId;
+        // STRICT : string + 24 hex (jamais de cast). Une valeur non canonique
+        // (nombre, objet, chaîne vide, 12/24 caractères non-hex) est refusée
+        // AVANT toute requête DB et AVANT l'attachement du principal.
+        if (!isStrictObjectId(sub) || !isStrictObjectId(orgId)) {
           logger.warn(
             'Socket.IO: connection rejected — JWT payload missing required fields',
+          );
+          finish(new Error('unauthorized'));
+          return;
+        }
+
+        // 1-14C.1 : seul un JWT APPLICATIF ouvre un socket — jeton limité ou
+        //    claim de portée invalide → refus, avant toute requête DB.
+        if (accessScopeFromClaims(payload) !== AccessScope.APP) {
+          logger.warn(
+            'Socket.IO: connection rejected — non-application access scope',
           );
           finish(new Error('unauthorized'));
           return;
@@ -173,7 +215,7 @@ export function installSocketAuthMiddleware(
 
         // 5. L'utilisateur existe encore (idempotent `JwtStrategy.validate` :
         //    `usersService.findById(sub)`).
-        const user = await usersService.findById(sub);
+        const user = await usersService.findByIdForAuth(sub);
         if (!user) {
           logger.warn(
             'Socket.IO: connection rejected — JWT sub no longer resolves to a user',
@@ -182,13 +224,57 @@ export function installSocketAuthMiddleware(
           return;
         }
 
-        // 5 + 6. Principal minimal dans `socket.data.user` — JAMAIS de
-        //    `password`, du token ou du document Mongoose complet.
+        // 1-13B : version de session — un JWT antérieur à une
+        //    réinitialisation de mot de passe ne (re)connecte jamais.
+        if (!isSessionCurrent(payload, user)) {
+          logger.warn('Socket.IO: connection rejected — session revoked');
+          finish(new Error('unauthorized'));
+          return;
+        }
+
+        // 1-13A : même règle que `JwtStrategy.validate` — un compte non
+        //    vérifié ne se connecte ni ne se reconnecte, même avec un JWT
+        //    signé encore valide (erreur client générique inchangée).
+        if (!user.emailVerifiedAt) {
+          logger.warn(
+            'Socket.IO: connection rejected — email address not verified',
+          );
+          finish(new Error('unauthorized'));
+          return;
+        }
+
+        const organizationContext =
+          await organizationsService.resolveActiveContext(sub, orgId);
+
+        // 1-14C.1 : abonnement actif requis (après les contrôles
+        //    administratifs). Échec de lecture → refus (catch générique).
+        const decision = await subscriptionsService.getAccessDecision(
+          organizationContext.organizationId,
+        );
+        if (!decision.active || !decision.coverageEndsAt) {
+          logger.warn('Socket.IO: connection rejected — subscription inactive');
+          finish(new Error('unauthorized'));
+          return;
+        }
+
+        // 5 + 6. Principal dans `socket.data.user` — JAMAIS de `password`,
+        //    du token ou du document Mongoose complet. `email`/`role` sont
+        //    lus du document User (base) JAMAIS du token ; `orgId` vient du
+        //    JWT vérifié (future isolation par rooms `organization:{id}`).
         socket.data.user = {
           sub: user._id.toString(),
+          orgId: organizationContext.organizationId,
           email: user.email,
           role: user.role,
         } satisfies SocketPrincipal;
+        socket.data.organizationContext =
+          organizationContext satisfies ResolvedOrganizationContext;
+        // 1-13B : version de session du handshake (fermeture ciblée des
+        //    sockets antérieurs à une réinitialisation, sans timer).
+        socket.data.authVersion = currentSessionVersion(user);
+        // 1-14C.1 : fin de couverture connue (filtre des émissions, timer).
+        socket.data.subscriptionCoverageEndsAt =
+          decision.coverageEndsAt.getTime();
 
         // 7. `next()` appelé EXACTEMENT UNE FOIS, sans erreur.
         finish();
@@ -198,6 +284,15 @@ export function installSocketAuthMiddleware(
         //    secondes epoch). Silencieux si `exp` est absent/invalid —
         //    jamais une raison supplémentaire de rejet.
         scheduleSocketDisconnectAtExpiry(socket, payload, logger);
+        // 1-14C.1 : contrôle commercial à l'échéance de couverture.
+        scheduleSocketSubscriptionCheck(socket, {
+          readDecision: () =>
+            subscriptionsService.getAccessDecision(
+              organizationContext.organizationId,
+            ),
+          now: () => subscriptionsService.now(),
+          logger,
+        });
       } catch {
         // Toute autre erreur (signature invalide, token expiré, payload
         //    corrompu, …) : message client UNIFIÉ et générique. Le JWT
@@ -266,6 +361,89 @@ export function scheduleSocketDisconnectAtExpiry(
     logger?.error('Socket.IO: could not schedule disconnect at token expiry');
     return undefined;
   }
+}
+
+/** Délai maximal d'un timer Node (au-delà, il se déclencherait aussitôt). */
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/** Fin de couverture connue d'un socket (ms epoch), ou `null`. */
+export function socketCoverageEndsAt(socket: Socket): number | null {
+  const value: unknown = (
+    socket.data as { subscriptionCoverageEndsAt?: unknown }
+  )?.subscriptionCoverageEndsAt;
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * 1-14C.1 — contrôle commercial d'un socket DÉJÀ ouvert, à l'échéance de
+ * sa couverture connue (`socket.data.subscriptionCoverageEndsAt`) :
+ * - à l'échéance, l'état est RELU côté serveur ;
+ * - couverture prolongée (renouvellement) → mise à jour + reprogrammation ;
+ * - sinon (inactif ou lecture impossible) → `socket.disconnect(true)`
+ *   (fail-closed ; une reconnexion repasse le handshake).
+ * Délai borné à `MAX_TIMER_DELAY_MS` (relecture intermédiaire si la
+ * couverture est plus lointaine). Timer `unref()`, nettoyé sur
+ * `disconnect` (aucune fuite, aucune lecture après déconnexion). Cumulé
+ * avec le timer d'expiration du JWT : la première échéance ferme le socket.
+ */
+export function scheduleSocketSubscriptionCheck(
+  socket: Socket,
+  deps: {
+    readDecision: () => Promise<SubscriptionAccessDecision>;
+    now: () => Date;
+    logger?: Logger;
+  },
+): void {
+  let timer: NodeJS.Timeout | undefined;
+  let stopped = false;
+  const onDisconnect = (): void => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+  };
+  socket.once('disconnect', onDisconnect);
+
+  const arm = (): void => {
+    if (stopped) return;
+    const end = socketCoverageEndsAt(socket) ?? 0;
+    const delay = Math.min(
+      Math.max(end - deps.now().getTime(), 0),
+      MAX_TIMER_DELAY_MS,
+    );
+    timer = setTimeout(() => void check(), delay);
+    timer.unref?.();
+  };
+
+  const check = async (): Promise<void> => {
+    timer = undefined;
+    if (stopped) return;
+    let decision: SubscriptionAccessDecision | null = null;
+    try {
+      decision = await deps.readDecision();
+    } catch {
+      deps.logger?.warn(
+        'Socket.IO: subscription status unavailable — closing socket',
+      );
+    }
+    if (stopped) return;
+    const end = decision?.coverageEndsAt?.getTime();
+    if (
+      decision?.active === true &&
+      typeof end === 'number' &&
+      end > deps.now().getTime()
+    ) {
+      (
+        socket.data as { subscriptionCoverageEndsAt?: number }
+      ).subscriptionCoverageEndsAt = end;
+      arm();
+      return;
+    }
+    stopped = true;
+    socket.off('disconnect', onDisconnect);
+    socket.disconnect(true);
+  };
+
+  arm();
 }
 
 /**
