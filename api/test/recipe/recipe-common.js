@@ -155,6 +155,9 @@ function apiEnv(uri, extra = {}) {
     S3_SECRET_KEY: 'recipe-fictitious',
     S3_BUCKET: 'recipe-fictitious',
     S3_FORCE_PATH_STYLE: 'true',
+    // R2 privé : durée des URL signées ; `RECIPE_SIGNED_URL_TTL_SECONDS`
+    // (60–3600) raccourcit la durée pour éprouver l'expiration.
+    S3_SIGNED_URL_TTL_SECONDS: process.env.RECIPE_SIGNED_URL_TTL_SECONDS || '',
     RESEND_API_KEY: '',
     EMAIL_FROM: '',
     ...extra,

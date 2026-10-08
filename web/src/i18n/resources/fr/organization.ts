@@ -81,6 +81,9 @@ const organizationFr = {
   branding: {
     updated: "Branding mis à jour",
     logoRemoved: "Logo supprimé",
+    // R2 privé : l'ancien fichier n'a pas pu être effacé du stockage.
+    oldLogoNotDeleted:
+      "L'ancien fichier du logo n'a pas pu être effacé du stockage ; il y reste pour l'instant.",
     logoAlt: "Logo de l'organisation",
     noLogo: "Aucun logo",
     colorLabel: "Couleur {{color}}",

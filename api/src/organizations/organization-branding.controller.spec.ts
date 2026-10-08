@@ -11,6 +11,9 @@ import { PERMISSIONS_KEY } from '../auth/decorators/permissions.decorator';
 
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const PREFIX_A = `organizations/${ORG_A}/branding`;
+const STORAGE = 'r2/stockmaster-prod';
+const NEW = { key: `${PREFIX_A}/new.png`, storage: STORAGE };
+const OLD = { key: `${PREFIX_A}/old.png`, storage: STORAGE };
 
 function makeContext(): ResolvedOrganizationContext {
   return {
@@ -62,10 +65,11 @@ describe('OrganizationBrandingController (1-8A)', () => {
     getCurrent: jest.fn(),
     updateBranding: jest.fn(),
     removeLogo: jest.fn(),
+    isLogoReferenced: jest.fn(),
   };
   const s3Stub = {
     uploadValidatedImage: jest.fn(),
-    deleteStoredKey: jest.fn(),
+    deleteStoredObject: jest.fn(),
   };
 
   const currentView = {
@@ -82,17 +86,20 @@ describe('OrganizationBrandingController (1-8A)', () => {
     serviceStub.getCurrent.mockReset().mockResolvedValue(currentView);
     serviceStub.updateBranding.mockReset().mockResolvedValue({
       organization: currentView,
-      previousLogoKey: null,
+      previousLogo: null,
     });
     serviceStub.removeLogo.mockReset().mockResolvedValue({
       organization: currentView,
-      previousLogoKey: null,
+      previousLogo: null,
     });
-    s3Stub.uploadValidatedImage.mockReset().mockResolvedValue({
-      key: `${PREFIX_A}/new.png`,
-      url: 'http://s3/new.png',
-    });
-    s3Stub.deleteStoredKey.mockReset().mockResolvedValue(undefined);
+    serviceStub.isLogoReferenced.mockReset().mockResolvedValue(false);
+    s3Stub.uploadValidatedImage.mockReset().mockResolvedValue(NEW);
+    // Comportement réel : aucune référence → `not_needed` sans appel réseau.
+    s3Stub.deleteStoredObject
+      .mockReset()
+      .mockImplementation((ref: unknown) =>
+        Promise.resolve(ref ? 'deleted' : 'not_needed'),
+      );
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [OrganizationBrandingController],
@@ -137,9 +144,15 @@ describe('OrganizationBrandingController (1-8A)', () => {
     expect(s3Stub.uploadValidatedImage).not.toHaveBeenCalled();
   });
 
-  it('updateBranding sans fichier : aucun appel S3, dto transmis tel quel', async () => {
-    await controller.updateBranding({ name: 'Nouveau' }, undefined, ctx);
+  it('updateBranding sans fichier : aucun appel au stockage, dto transmis tel quel, réponse inchangée', async () => {
+    const res = await controller.updateBranding(
+      { name: 'Nouveau' },
+      undefined,
+      ctx,
+    );
+    expect(res).toEqual(currentView);
     expect(s3Stub.uploadValidatedImage).not.toHaveBeenCalled();
+    expect(s3Stub.deleteStoredObject).not.toHaveBeenCalled();
     expect(serviceStub.updateBranding).toHaveBeenCalledWith(
       ORG_A,
       { name: 'Nouveau' },
@@ -154,35 +167,49 @@ describe('OrganizationBrandingController (1-8A)', () => {
       extension: 'png',
       contentType: 'image/png',
     });
-    expect(serviceStub.updateBranding).toHaveBeenCalledWith(
-      ORG_A,
-      {},
-      `${PREFIX_A}/new.png`,
-    );
+    expect(serviceStub.updateBranding).toHaveBeenCalledWith(ORG_A, {}, NEW);
   });
 
-  it('updateBranding : DB réussit avec ancien logo → suppression de l’ANCIEN après sauvegarde', async () => {
+  it('updateBranding : DB réussit avec ancien logo → suppression de l’ANCIEN après sauvegarde, sort renvoyé', async () => {
     serviceStub.updateBranding.mockResolvedValueOnce({
       organization: currentView,
-      previousLogoKey: `${PREFIX_A}/old.png`,
+      previousLogo: OLD,
     });
-    await controller.updateBranding({}, multerFile(), ctx);
-    expect(s3Stub.deleteStoredKey).toHaveBeenCalledWith(
-      `${PREFIX_A}/old.png`,
-      PREFIX_A,
-    );
+    const res = await controller.updateBranding({}, multerFile(), ctx);
+    expect(s3Stub.deleteStoredObject).toHaveBeenCalledWith(OLD, PREFIX_A);
+    expect(
+      s3Stub.deleteStoredObject.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(serviceStub.updateBranding.mock.invocationCallOrder[0]);
+    expect(res).toEqual({ ...currentView, storageCleanup: 'deleted' });
   });
 
-  it('updateBranding : DB échoue → le NOUVEAU logo est supprimé, erreur repropagée', async () => {
+  it('updateBranding : échec de suppression de l’ancien logo → mutation réussie, `failed` renvoyé', async () => {
+    serviceStub.updateBranding.mockResolvedValueOnce({
+      organization: currentView,
+      previousLogo: OLD,
+    });
+    s3Stub.deleteStoredObject.mockResolvedValueOnce('failed');
+    const res = await controller.updateBranding({}, multerFile(), ctx);
+    expect(res).toMatchObject({ storageCleanup: 'failed' });
+  });
+
+  it('updateBranding : DB échoue → le NOUVEAU logo non référencé est supprimé, erreur repropagée', async () => {
     const dbError = new Error('db down');
     serviceStub.updateBranding.mockRejectedValueOnce(dbError);
     await expect(controller.updateBranding({}, multerFile(), ctx)).rejects.toBe(
       dbError,
     );
-    expect(s3Stub.deleteStoredKey).toHaveBeenCalledWith(
-      `${PREFIX_A}/new.png`,
-      PREFIX_A,
-    );
+    expect(serviceStub.isLogoReferenced).toHaveBeenCalledWith(ORG_A, NEW.key);
+    expect(s3Stub.deleteStoredObject).toHaveBeenCalledWith(NEW, PREFIX_A);
+  });
+
+  it('updateBranding : erreur alors que le nouveau logo est référencé → conservé', async () => {
+    serviceStub.updateBranding.mockRejectedValueOnce(new Error('after save'));
+    serviceStub.isLogoReferenced.mockResolvedValueOnce(true);
+    await expect(
+      controller.updateBranding({}, multerFile(), ctx),
+    ).rejects.toThrow('after save');
+    expect(s3Stub.deleteStoredObject).not.toHaveBeenCalled();
   });
 
   it('updateBranding : fichier invalide (1-12C) → 400 stable, ni upload S3 ni mutation DB', async () => {
@@ -195,7 +222,7 @@ describe('OrganizationBrandingController (1-8A)', () => {
     ).rejects.toMatchObject({ response: { code: 'LOGO_INVALID_FILE' } });
     expect(s3Stub.uploadValidatedImage).not.toHaveBeenCalled();
     expect(serviceStub.updateBranding).not.toHaveBeenCalled();
-    expect(s3Stub.deleteStoredKey).not.toHaveBeenCalled();
+    expect(s3Stub.deleteStoredObject).not.toHaveBeenCalled();
   });
 
   it('updateBranding : contenu reçu relâché après l’envoi (aucune référence conservée)', async () => {
@@ -204,21 +231,20 @@ describe('OrganizationBrandingController (1-8A)', () => {
     expect(file.buffer.length).toBe(0);
   });
 
-  it('removeLogo : supprime l’ancien objet S3 uniquement si previousLogoKey non nul', async () => {
+  it('removeLogo : ancien logo supprimé APRÈS l’écriture, sort renvoyé', async () => {
     serviceStub.removeLogo.mockResolvedValueOnce({
       organization: currentView,
-      previousLogoKey: `${PREFIX_A}/old.png`,
+      previousLogo: OLD,
     });
-    await controller.removeLogo(ctx);
+    const res = await controller.removeLogo(ctx);
     expect(serviceStub.removeLogo).toHaveBeenCalledWith(ORG_A);
-    expect(s3Stub.deleteStoredKey).toHaveBeenCalledWith(
-      `${PREFIX_A}/old.png`,
-      PREFIX_A,
-    );
+    expect(s3Stub.deleteStoredObject).toHaveBeenCalledWith(OLD, PREFIX_A);
+    expect(res).toEqual({ ...currentView, storageCleanup: 'deleted' });
   });
 
-  it('removeLogo : sans logo préexistant, aucun appel S3', async () => {
-    await controller.removeLogo(ctx);
-    expect(s3Stub.deleteStoredKey).not.toHaveBeenCalled();
+  it('removeLogo : sans logo préexistant → `not_needed`', async () => {
+    const res = await controller.removeLogo(ctx);
+    expect(s3Stub.deleteStoredObject).toHaveBeenCalledWith(null, PREFIX_A);
+    expect(res).toMatchObject({ storageCleanup: 'not_needed' });
   });
 });

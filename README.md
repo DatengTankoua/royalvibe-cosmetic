@@ -224,12 +224,12 @@ PORT=4000
 MONGODB_URI=<uri-atlas>
 JWT_SECRET=<chaine-aleatoire-256-bits>
 CORS_ORIGIN=https://<votre-domaine-vercel>.vercel.app
-S3_ENDPOINT=<supabase-s3-endpoint>
-S3_REGION=<supabase-region>
-S3_ACCESS_KEY=<supabase-access-key>
-S3_SECRET_KEY=<supabase-secret-key>
-S3_BUCKET=<supabase-bucket-name>
-S3_PUBLIC_URL=<supabase-public-url>
+S3_ENDPOINT=https://<ACCOUNT_ID>.<jurisdiction>.r2.cloudflarestorage.com
+S3_REGION=auto
+S3_ACCESS_KEY=<r2-access-key-id>
+S3_SECRET_KEY=<r2-secret-access-key>
+S3_BUCKET=stockmaster-prod
+S3_FORCE_PATH_STYLE=false
 TZ=Africa/Douala
 ```
 

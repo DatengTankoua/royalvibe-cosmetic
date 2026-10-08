@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { StoreIcon } from "lucide-react";
 import { organizationInitials } from "@/lib/display-names";
+import { requestImageRenewal } from "@/lib/image-renewal";
 
 // 1-12A — Logo du commerce dans le shell /app : cadre FIXE, image en
 // `object-contain` (jamais étirée ni rognée), repli sur les initiales sur
@@ -50,6 +51,7 @@ export function TenantLogo({
     const img = imgRef.current;
     if (showImage && img && img.complete && img.naturalWidth === 0) {
       setFailedSrc(src);
+      requestImageRenewal(src);
     }
   }, [showImage, src]);
 
@@ -66,7 +68,11 @@ export function TenantLogo({
           width={s.px}
           height={s.px}
           unoptimized
-          onError={() => setFailedSrc(src)}
+          onError={() => {
+            // R2 privé : lien signé expiré → relecture bornée du logo.
+            setFailedSrc(src);
+            requestImageRenewal(src);
+          }}
           className="h-full w-full object-contain"
         />
       </span>

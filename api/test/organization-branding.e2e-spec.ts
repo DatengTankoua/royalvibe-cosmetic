@@ -42,7 +42,7 @@ const emailSender = createE2eEmailSender();
 /**
  * E2E (1-8A) — branding d'organisation + logo tenant, sur
  * `MongoMemoryReplSet` réel (2 organisations A/B). Les opérations S3
- * (`uploadValidatedImage`/`deleteStoredKey`) sont ESPIONNÉES (jamais overridées
+ * (`uploadValidatedImage`/`deleteStoredObject`) sont ESPIONNÉES (jamais overridées
  * en provider) : même convention que `multitenant-isolation.e2e-spec.ts`
  * (§3) — aucun appel réseau réel, la logique HTTP+DB reste réellement
  * exercée.
@@ -351,8 +351,8 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
 
   it('DELETE logo : seller délégué branding.manage → 200', async () => {
     const deleteSpy = jest
-      .spyOn(s3Service, 'deleteStoredKey')
-      .mockResolvedValue(undefined);
+      .spyOn(s3Service, 'deleteStoredObject')
+      .mockResolvedValue('deleted');
     const res = await deleteLogo(delegatedSellerAToken);
     expect(res.status).toBe(200);
     deleteSpy.mockRestore();
@@ -391,16 +391,18 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
   });
 
   describe('cycle logo (S3Service espionné, aucun réseau réel)', () => {
-    it('upload réussi : clé sous le préfixe tenant EXACT, logoUrl calculée', async () => {
+    it('upload réussi : clé + stockage sous le préfixe tenant EXACT, logoUrl signée', async () => {
       const uploadSpy = jest
         .spyOn(s3Service, 'uploadValidatedImage')
         .mockResolvedValue({
           key: `organizations/${orgAId}/branding/first.png`,
-          url: `http://s3-e2e/organizations/${orgAId}/branding/first.png`,
+          storage: s3Service.storage,
         });
       const deleteSpy = jest
-        .spyOn(s3Service, 'deleteStoredKey')
-        .mockResolvedValue(undefined);
+        .spyOn(s3Service, 'deleteStoredObject')
+        .mockImplementation((ref) =>
+          Promise.resolve(ref ? 'deleted' : 'not_needed'),
+        );
 
       const res = await patchBrandingWithLogo(adminAToken, {}, 'first.png');
       expect(res.status).toBe(200);
@@ -409,18 +411,30 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
         `organizations/${orgAId}/branding`,
         { format: 'png', extension: 'png', contentType: 'image/png' },
       );
-      // `logoUrl` est DÉRIVÉE de `logoKey` via `publicUrlForKey` (config S3
-      // réelle) — jamais l'`url` renvoyée par `uploadValidatedImage` (espionné).
-      expect(res.body.logoUrl).toBe(
+      // `logoUrl` : URL GET SIGNÉE (vraie signature, aucun réseau) calculée
+      // à partir de `logoKey` et du stockage, durée explicite.
+      const signed = new URL(res.body.logoUrl as string);
+      expect(`${signed.origin}${signed.pathname}`).toBe(
         `http://127.0.0.1:65535/e2e-local/organizations/${orgAId}/branding/first.png`,
       );
-      // Aucun logo préexistant : aucune suppression.
-      expect(deleteSpy).not.toHaveBeenCalled();
+      expect(signed.searchParams.get('X-Amz-Expires')).toBe('900');
+      expect(signed.searchParams.get('X-Amz-Signature')).toMatch(
+        /^[0-9a-f]{64}$/,
+      );
+      expect(res.body).toMatchObject({ storageCleanup: 'not_needed' });
+      // Aucun logo préexistant : sort `not_needed`, aucun appel réseau.
+      expect(deleteSpy).toHaveBeenCalledWith(
+        null,
+        `organizations/${orgAId}/branding`,
+      );
 
       const stored = await organizationModel.findById(orgAId).exec();
       expect(stored!.logoKey).toBe(
         `organizations/${orgAId}/branding/first.png`,
       );
+      expect(stored!.logoStorage).toBe(s3Service.storage);
+      // Jamais d'URL (publique ni signée) en base.
+      expect(JSON.stringify(stored!.toObject())).not.toContain('X-Amz');
 
       uploadSpy.mockRestore();
       deleteSpy.mockRestore();
@@ -431,50 +445,76 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
         .spyOn(s3Service, 'uploadValidatedImage')
         .mockResolvedValue({
           key: `organizations/${orgAId}/branding/second.png`,
-          url: `http://s3-e2e/organizations/${orgAId}/branding/second.png`,
+          storage: s3Service.storage,
         });
       const deleteSpy = jest
-        .spyOn(s3Service, 'deleteStoredKey')
-        .mockResolvedValue(undefined);
+        .spyOn(s3Service, 'deleteStoredObject')
+        .mockResolvedValue('deleted');
 
       const res = await patchBrandingWithLogo(adminAToken, {}, 'second.png');
       expect(res.status).toBe(200);
       expect(deleteSpy).toHaveBeenCalledWith(
-        `organizations/${orgAId}/branding/first.png`,
+        {
+          key: `organizations/${orgAId}/branding/first.png`,
+          storage: s3Service.storage,
+        },
         `organizations/${orgAId}/branding`,
       );
+      expect(res.body.storageCleanup).toBe('deleted');
 
       uploadSpy.mockRestore();
       deleteSpy.mockRestore();
     });
 
-    it('DELETE logo : logoKey → null, ancien objet tenant supprimé', async () => {
+    it('DELETE logo : logoKey et logoStorage → null, ancien objet tenant supprimé', async () => {
       const deleteSpy = jest
-        .spyOn(s3Service, 'deleteStoredKey')
-        .mockResolvedValue(undefined);
+        .spyOn(s3Service, 'deleteStoredObject')
+        .mockResolvedValue('deleted');
 
       const res = await deleteLogo(adminAToken);
       expect(res.status).toBe(200);
       expect(res.body.logoUrl).toBeNull();
       expect(deleteSpy).toHaveBeenCalledWith(
-        `organizations/${orgAId}/branding/second.png`,
+        {
+          key: `organizations/${orgAId}/branding/second.png`,
+          storage: s3Service.storage,
+        },
         `organizations/${orgAId}/branding`,
       );
 
       const stored = await organizationModel.findById(orgAId).exec();
       expect(stored!.logoKey).toBeNull();
+      expect(stored!.logoStorage).toBeNull();
 
       deleteSpy.mockRestore();
     });
 
-    it('DELETE logo sans logo préexistant : no-op DB, aucun appel S3', async () => {
-      const deleteSpy = jest
-        .spyOn(s3Service, 'deleteStoredKey')
-        .mockResolvedValue(undefined);
+    it('DELETE logo sans logo préexistant : no-op DB, sort `not_needed`, aucun appel réseau', async () => {
+      // Comportement réel (non simulé) : aucune référence → aucun envoi.
+      const deleteSpy = jest.spyOn(s3Service, 'deleteStoredObject');
       const res = await deleteLogo(adminAToken);
       expect(res.status).toBe(200);
-      expect(deleteSpy).not.toHaveBeenCalled();
+      expect(res.body.storageCleanup).toBe('not_needed');
+      expect(deleteSpy).toHaveBeenCalledWith(
+        null,
+        `organizations/${orgAId}/branding`,
+      );
       deleteSpy.mockRestore();
+    });
+
+    it('ancien logoKey sans stockage connu (antérieur à R2) : jamais signé ni supprimé', async () => {
+      await organizationModel.updateOne(
+        { _id: orgAId },
+        { $set: { logoKey: `organizations/${orgAId}/branding/legacy.png` } },
+      );
+      const current = await getCurrent(adminAToken);
+      expect(current.status).toBe(200);
+      expect(current.body.logoUrl).toBeNull();
+      const res = await deleteLogo(adminAToken);
+      expect(res.status).toBe(200);
+      expect(res.body.storageCleanup).toBe('retained');
+      const stored = await organizationModel.findById(orgAId).exec();
+      expect(stored!.logoKey).toBeNull();
     });
   });
 
@@ -676,11 +716,11 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
         .spyOn(s3Service, 'uploadValidatedImage')
         .mockResolvedValue({
           key: `organizations/${orgAId}/branding/legacy.png`,
-          url: 'unused',
+          storage: s3Service.storage,
         });
       const deleteSpy = jest
-        .spyOn(s3Service, 'deleteStoredKey')
-        .mockResolvedValue(undefined);
+        .spyOn(s3Service, 'deleteStoredObject')
+        .mockResolvedValue('deleted');
       expect((await patchBrandingWithLogo(adminAToken)).status).toBe(200);
       expect((await deleteLogo(adminAToken)).status).toBe(200);
       const stored = await organizationModel.findById(orgAId).exec();
@@ -844,9 +884,11 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
         expect(put.ContentType).toBe(mime);
         expect(Buffer.compare(put.Body as Buffer, body)).toBe(0);
         expect(JSON.stringify(res.body)).not.toContain('logoKey');
-        expect(res.body.logoUrl).toBe(
+        const signed = new URL(res.body.logoUrl as string);
+        expect(`${signed.origin}${signed.pathname}`).toBe(
           `http://127.0.0.1:65535/e2e-local/${String(put.Key)}`,
         );
+        expect(signed.searchParams.get('X-Amz-Expires')).toBe('900');
         const stored = await organizationModel.findById(orgAId).exec();
         expect(stored!.logoKey).toBe(put.Key);
       },
@@ -1118,35 +1160,46 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       expect(commandInputs().map((i) => i.Key)).toEqual([before]);
     });
 
-    it('images produits inchangées : JPEG accepté via `uploadFile`, jamais le contrat logo', async () => {
+    it('photos produit (R2) : JPEG contrôlé, clé serveur sous le préfixe tenant, URL signée ; photo invalide refusée sans envoi', async () => {
       const section = await request(app.getHttpServer())
         .post('/sections')
         .set('Authorization', `Bearer ${adminAToken}`)
         .send({ name: 'Rayon 1-12C' });
       expect(section.status).toBe(201);
-      const uploadFile = jest.spyOn(s3Service, 'uploadFile');
-      const validated = jest.spyOn(s3Service, 'uploadValidatedImage');
       const jpeg = await fixture(16, 16).jpeg().toBuffer();
-      const res = await request(app.getHttpServer())
-        .post('/products')
-        .set('Authorization', `Bearer ${adminAToken}`)
-        .field('sectionId', section.body._id as string)
-        .field('name', 'Produit 1-12C')
-        .field('purchasePrice', '100')
-        .field('salePrice', '200')
-        .field('initialQuantity', '3')
-        .attach('image', jpeg, {
-          filename: 'photo.jpg',
-          contentType: 'image/jpeg',
-        });
+      const create = (body: Buffer, name: string, contentType: string) =>
+        request(app.getHttpServer())
+          .post('/products')
+          .set('Authorization', `Bearer ${adminAToken}`)
+          .field('sectionId', section.body._id as string)
+          .field('name', name)
+          .field('purchasePrice', '100')
+          .field('salePrice', '200')
+          .field('initialQuantity', '3')
+          .attach('image', body, { filename: 'photo.jpg', contentType });
+
+      const res = await create(jpeg, 'Produit 1-12C', 'image/jpeg');
       expect(res.status).toBe(201);
-      expect(uploadFile).toHaveBeenCalledTimes(1);
-      expect(validated).not.toHaveBeenCalled();
       const [put] = commandInputs();
       expect(put.ContentType).toBe('image/jpeg');
-      expect(String(put.Key)).toMatch(/photo\.jpg$/);
-      uploadFile.mockRestore();
-      validated.mockRestore();
+      expect(String(put.Key)).toMatch(
+        new RegExp(`^organizations/${orgAId}/products/${UUID}\\.jpg$`),
+      );
+      expect(String(put.Key)).not.toContain('photo');
+      const signed = new URL(res.body.imageUrl as string);
+      expect(signed.pathname).toBe(`/e2e-local/${String(put.Key)}`);
+      expect(signed.searchParams.get('X-Amz-Expires')).toBe('900');
+
+      // Texte déguisé en JPEG : 400 stable, aucun envoi ni écriture.
+      send.mockClear();
+      const fake = await create(
+        Buffer.from('<svg onload="alert(1)">'),
+        'Produit faux',
+        'image/jpeg',
+      );
+      expect(fake.status).toBe(400);
+      expect(fake.body.code).toBe('PRODUCT_IMAGE_INVALID_FILE');
+      expect(send).not.toHaveBeenCalled();
     });
   });
 

@@ -4,16 +4,17 @@ import {
   Controller,
   Delete,
   Get,
+  Logger,
   Patch,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
-import { OrganizationsService } from './organizations.service';
+import { OrganizationsService, logoKeyPrefix } from './organizations.service';
 import type { ResolvedOrganizationContext } from './organizations.service';
 import { UpdateBrandingDto } from './dto/update-branding.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
-import { S3Service } from '../s3/s3.service';
+import { S3Service, type StoredObjectRef } from '../s3/s3.service';
 import { LogoUploadInterceptor } from './logo/logo-upload.interceptor';
 import { validateLogoFile } from './logo/logo-validation';
 
@@ -27,15 +28,12 @@ import { validateLogoFile } from './logo/logo-validation';
  */
 @Controller('organizations/current')
 export class OrganizationBrandingController {
+  private readonly logger = new Logger(OrganizationBrandingController.name);
+
   constructor(
     private readonly organizationsService: OrganizationsService,
     private readonly s3Service: S3Service,
   ) {}
-
-  // Clé serveur (1-5B) : jamais dérivée du DTO/nom de fichier client.
-  private logoKeyPrefix(organizationId: string): string {
-    return `organizations/${organizationId}/branding`;
-  }
 
   @Get()
   getCurrent(
@@ -44,6 +42,37 @@ export class OrganizationBrandingController {
     return this.organizationsService.getCurrent(
       organizationContext.organizationId,
     );
+  }
+
+  /**
+   * Écriture MongoDB échouée après l'upload : le nouveau logo est supprimé
+   * SEULEMENT s'il n'est pas référencé par l'organisation. Lecture
+   * impossible → objet conservé (orphelin journalisé).
+   */
+  private async discardUnreferencedLogo(
+    organizationId: string,
+    logo: StoredObjectRef,
+  ): Promise<void> {
+    let referenced: boolean;
+    try {
+      referenced = await this.organizationsService.isLogoReferenced(
+        organizationId,
+        logo.key,
+      );
+    } catch {
+      this.logger.warn(`Logo conservé (vérification impossible) : ${logo.key}`);
+      return;
+    }
+    if (referenced) return;
+    const cleanup = await this.s3Service.deleteStoredObject(
+      logo,
+      logoKeyPrefix(organizationId),
+    );
+    if (cleanup !== 'deleted') {
+      this.logger.warn(
+        `Logo non référencé conservé (${cleanup}) : ${logo.key}`,
+      );
+    }
   }
 
   @Patch('branding')
@@ -66,11 +95,12 @@ export class OrganizationBrandingController {
     // format détecté, dimensions, décodage) AVANT tout appel S3 ou DB — un
     // refus ne laisse ni objet ni écriture.
     const validated = file ? await validateLogoFile(file) : undefined;
-    const prefix = this.logoKeyPrefix(organizationContext.organizationId);
+    const organizationId = organizationContext.organizationId;
+    const prefix = logoKeyPrefix(organizationId);
     // Upload AVANT la mutation DB : si l'upload échoue, aucune clé n'existe
-    // encore, rien à nettoyer. Clé `<uuid>.<png|webp>` et `ContentType`
+    // encore, rien à nettoyer. Clé `<uuid>.<png|webp|jpg>` et `ContentType`
     // canoniques issus du format détecté, jamais du client.
-    let uploaded: { key: string } | undefined;
+    let uploaded: StoredObjectRef | undefined;
     try {
       uploaded =
         file && validated
@@ -84,23 +114,26 @@ export class OrganizationBrandingController {
       // Plus aucune référence au contenu reçu une fois envoyé (ou refusé).
       if (file) file.buffer = Buffer.alloc(0);
     }
+    let result: Awaited<ReturnType<OrganizationsService['updateBranding']>>;
     try {
-      const result = await this.organizationsService.updateBranding(
-        organizationContext.organizationId,
+      result = await this.organizationsService.updateBranding(
+        organizationId,
         dto,
-        uploaded?.key,
+        uploaded,
       );
-      // APRÈS sauvegarde uniquement : supprime l'ancien logo tenant.
-      if (uploaded && result.previousLogoKey) {
-        await this.s3Service.deleteStoredKey(result.previousLogoKey, prefix);
-      }
-      return result.organization;
     } catch (err) {
-      // Mutation DB échouée après upload : le nouveau logo ne doit jamais
-      // rester orphelin sur le tenant.
-      if (uploaded) await this.s3Service.deleteStoredKey(uploaded.key, prefix);
+      if (uploaded)
+        await this.discardUnreferencedLogo(organizationId, uploaded);
       throw err;
     }
+    if (!uploaded) return result.organization;
+    // APRÈS sauvegarde uniquement : ancien logo du stockage courant
+    // supprimé ; un logo antérieur (stockage inconnu) est laissé en place.
+    const storageCleanup = await this.s3Service.deleteStoredObject(
+      result.previousLogo,
+      prefix,
+    );
+    return { ...result.organization, storageCleanup };
   }
 
   @Delete('logo')
@@ -108,13 +141,12 @@ export class OrganizationBrandingController {
   async removeLogo(
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    const prefix = this.logoKeyPrefix(organizationContext.organizationId);
-    const result = await this.organizationsService.removeLogo(
-      organizationContext.organizationId,
+    const organizationId = organizationContext.organizationId;
+    const result = await this.organizationsService.removeLogo(organizationId);
+    const storageCleanup = await this.s3Service.deleteStoredObject(
+      result.previousLogo,
+      logoKeyPrefix(organizationId),
     );
-    if (result.previousLogoKey) {
-      await this.s3Service.deleteStoredKey(result.previousLogoKey, prefix);
-    }
-    return result.organization;
+    return { ...result.organization, storageCleanup };
   }
 }

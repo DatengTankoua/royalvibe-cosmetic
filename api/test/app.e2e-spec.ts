@@ -1529,7 +1529,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
     //
     // LIMITATION S3 (documentée au rapport 1-4B) : l'endpoint S3 E2E est mort
     // (`http://127.0.0.1:65535`) donc `POST /products` (multipart +
-    // `uploadFile` avant l'appel service) ne peut pas réussir — la création
+    // envoi de la photo avant l'appel service) ne peut pas réussir — la création
     // HTTP est prouvée par les tests unitaires (falsification de l'org,
     // validation tenant de la section). Les fixtures produit passent par
     // `productModel().create` (pas de réseau). Le 400 `organizationId` dans

@@ -399,9 +399,10 @@ describe('Phase 1-4E — portail transversal d’isolation multi-tenant', () => 
   it('3. même matrice Produit B, sans appel S3 et avec état B inchangé', async () => {
     const before = await productSnapshot(productB);
     const s3 = moduleFixture.get(S3Service);
-    const deleteFile = jest
-      .spyOn(s3, 'deleteFile')
-      .mockResolvedValue(undefined);
+    const deleteStored = jest
+      .spyOn(s3, 'deleteStoredObject')
+      .mockResolvedValue('deleted');
+    const signed = jest.spyOn(s3, 'signedReadUrl');
     const operations = [
       { method: 'get', path: (id: string) => `/products/${id}` },
       { method: 'patch', path: (id: string) => `/products/${id}` },
@@ -429,7 +430,11 @@ describe('Phase 1-4E — portail transversal d’isolation multi-tenant', () => 
       );
       expect(await productSnapshot(productB)).toEqual(before);
     }
-    expect(deleteFile).not.toHaveBeenCalled();
+    expect(deleteStored).not.toHaveBeenCalled();
+    // Aucune URL signée produite pour la photo d'une autre organisation.
+    expect(signed).not.toHaveBeenCalled();
+    deleteStored.mockRestore();
+    signed.mockRestore();
   });
 
   it('4-5. ventes A listées seules; vendre le produit B est sans effet parasite', async () => {

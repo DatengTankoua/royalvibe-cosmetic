@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import Image from "next/image";
+import { StoredImage } from "@/components/products/stored-image";
 import type { TFunction } from "i18next";
 import { useT } from "next-i18next/client";
 import { useFormat } from "@/i18n/use-format";
@@ -33,6 +33,7 @@ import { hasPermission } from "@/lib/organization-permissions";
 import { productInfoItems } from "@/lib/product-info";
 import { useSaleInvalidation } from "@/hooks/use-sale-invalidation";
 import { useLiveRefresh } from "@/hooks/use-live-refresh";
+import { useImageRenewal } from "@/hooks/use-image-renewal";
 import { useSocket } from "@/contexts/socket-context";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
 
@@ -193,6 +194,8 @@ export default function ProductDetailPage() {
     () => load({ silent: true }),
     loadedAt,
   );
+  // R2 privé : photo non chargeable (lien signé expiré) → relecture bornée.
+  useImageRenewal(scheduleRefresh);
 
   // 1-12H (correctif) : vente d'un collègue (ou la sienne) sur ce produit →
   // stock, agrégats autorisés et historique scopé rechargés via l'API.
@@ -309,12 +312,10 @@ export default function ProductDetailPage() {
           {/* Hero */}
           <div className="flex gap-6 flex-col sm:flex-row">
             <div className="relative aspect-square w-full sm:w-48 rounded-xl overflow-hidden bg-muted shrink-0">
-              <Image
+              <StoredImage
                 src={detail.imageUrl}
                 alt={detail.name}
-                fill
-                unoptimized
-                className="object-cover"
+                lazy={false}
               />
             </div>
             <div className="flex flex-col gap-3 flex-1">

@@ -92,11 +92,13 @@ export function logoError(code: LogoErrorCode, message = MESSAGES[code]) {
     : new BadRequestException(body);
 }
 
-function isPixelLimitError(err: unknown): boolean {
+/** Limite de pixels de Sharp dépassée (réutilisé par les photos produit). */
+export function isPixelLimitError(err: unknown): boolean {
   return err instanceof Error && /exceeds pixel limit/i.test(err.message);
 }
 
-function detectSignature(buffer: Buffer): LogoFormat | null {
+/** Signature réelle PNG / WebP / JPEG (réutilisé par les photos produit). */
+export function detectSignature(buffer: Buffer): LogoFormat | null {
   if (
     buffer.length >= PNG_SIGNATURE.length &&
     buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)

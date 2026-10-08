@@ -45,7 +45,11 @@ services:
       S3_SECRET_KEY: ${MINIO_PASSWORD}
       S3_BUCKET: stockmaster-objects
       S3_FORCE_PATH_STYLE: "true"
-      S3_PUBLIC_URL: ${S3_PUBLIC_URL}
+      # Stockage privé : les images sont lues par URL signée sur l'hôte de
+      # S3_ENDPOINT. Ici `minio:9000` est interne : cette composition
+      # secondaire n'affiche donc pas les images (limite connue, cf.
+      # docs/architecture/phase-1-17a-r2-private-storage.md).
+      S3_SIGNED_URL_TTL_SECONDS: ${S3_SIGNED_URL_TTL_SECONDS:-}
       # Origine des liens d'invitation (1-12G, aucun email envoyé) : par
       # défaut l'URL publique du frontend, jamais l'en-tête Host.
       PUBLIC_APP_URL: ${PUBLIC_APP_URL:-${WEB_URL}}

@@ -1,101 +1,153 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   S3Client,
   PutObjectCommand,
   DeleteObjectCommand,
+  GetObjectCommand,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'crypto';
+
+/**
+ * Référence DURABLE d'un objet stocké (R2) : la clé ET l'identité du
+ * stockage qui l'a reçu. Jamais d'URL (publique ou signée) en base : l'URL de
+ * lecture est signée à chaque réponse (`signedReadUrl`).
+ *
+ * `storage` = `null` pour une référence antérieure à cette identité (ancien
+ * `logoKey` seul) : son stockage est inconnu, elle n'est donc ni lue ni
+ * supprimée dans le stockage courant.
+ */
+export interface StoredObjectRef {
+  key: string;
+  storage: string | null;
+}
+
+/**
+ * Sort du fichier remplacé ou supprimé, APRÈS l'écriture MongoDB :
+ * - `deleted` : objet supprimé du stockage courant ;
+ * - `not_needed` : aucun fichier précédent ;
+ * - `retained` : référence d'un autre stockage (ou ancienne URL) : laissée
+ *   en place, jamais supprimée à l'aveugle ;
+ * - `failed` : la suppression a échoué — l'objet reste, orphelin, et
+ *   l'échec est journalisé (jamais présenté comme supprimé).
+ */
+export type StorageCleanup = 'deleted' | 'not_needed' | 'retained' | 'failed';
+
+/** Durée de validité par défaut d'une URL de lecture signée (15 min). */
+export const DEFAULT_SIGNED_URL_TTL_SECONDS = 900;
+const MIN_SIGNED_URL_TTL_SECONDS = 60;
+const MAX_SIGNED_URL_TTL_SECONDS = 3600;
+
+type ChecksumMode = 'WHEN_SUPPORTED' | 'WHEN_REQUIRED';
+
+export class StorageConfigError extends Error {}
+
+/**
+ * Identité d'un stockage : hôte (+ chemin éventuel) de l'endpoint et
+ * bucket. Deux configurations différentes (ancien fournisseur, autre
+ * compte, autre juridiction, autre bucket) ont des identités différentes.
+ */
+export function storageIdentity(
+  endpoint: string | undefined,
+  bucket: string | undefined,
+): string | null {
+  if (!endpoint || !bucket) return null;
+  let url: URL;
+  try {
+    url = new URL(endpoint.trim());
+  } catch {
+    return null;
+  }
+  const path = url.pathname.replace(/\/+$/, '');
+  return `${url.host.toLowerCase()}${path}/${bucket.trim()}`;
+}
+
+function parseTtl(value: string | undefined): number {
+  if (value === undefined || value.trim() === '') {
+    return DEFAULT_SIGNED_URL_TTL_SECONDS;
+  }
+  const ttl = Number(value);
+  if (
+    !Number.isInteger(ttl) ||
+    ttl < MIN_SIGNED_URL_TTL_SECONDS ||
+    ttl > MAX_SIGNED_URL_TTL_SECONDS
+  ) {
+    throw new StorageConfigError(
+      `S3_SIGNED_URL_TTL_SECONDS doit être un entier entre ${MIN_SIGNED_URL_TTL_SECONDS} et ${MAX_SIGNED_URL_TTL_SECONDS}`,
+    );
+  }
+  return ttl;
+}
+
+/**
+ * Sommes de contrôle du SDK. Défaut : comportement du SDK (CRC32 à
+ * l'upload, `x-amz-checksum-mode` sur les GET signés). `when_required` ne
+ * doit être choisi qu'après l'essai réel R2 (procédure opérateur).
+ */
+function parseChecksumMode(value: string | undefined): ChecksumMode {
+  if (value === undefined || value.trim() === '') return 'WHEN_SUPPORTED';
+  if (value === 'when_supported') return 'WHEN_SUPPORTED';
+  if (value === 'when_required') return 'WHEN_REQUIRED';
+  throw new StorageConfigError(
+    'S3_CHECKSUM_MODE doit valoir when_supported ou when_required',
+  );
+}
+
+function isWithinPrefix(key: string, allowedPrefix: string): boolean {
+  const boundedPrefix = allowedPrefix.endsWith('/')
+    ? allowedPrefix
+    : `${allowedPrefix}/`;
+  return key.startsWith(boundedPrefix) && key.length > boundedPrefix.length;
+}
 
 @Injectable()
 export class S3Service {
+  private readonly logger = new Logger('Storage');
   private readonly s3Client: S3Client;
   private readonly bucket: string;
-  private readonly endpoint: string;
-  private readonly publicUrlBase: string;
-  // Origine + chemin de base RÉELLEMENT utilisés pour produire les URLs
-  // (cf. `uploadFile`) : seule frontière acceptée par `deleteFile`.
-  // `undefined` si la config est un URL invalide → suppressions refusées.
-  private readonly publicUrlOrigin: string | undefined;
-  private readonly publicUrlBasePath: string | undefined;
+  /** Identité du stockage courant ; `null` si endpoint/bucket absents. */
+  readonly storage: string | null;
+  readonly signedUrlTtlSeconds: number;
 
   constructor(private configService: ConfigService) {
-    this.bucket = this.configService.get<string>('S3_BUCKET')!;
-    this.endpoint = this.configService.get<string>('S3_ENDPOINT')!;
-    this.publicUrlBase = (
-      this.configService.get<string>('S3_PUBLIC_URL') ??
-      `${this.endpoint}/${this.bucket}`
-    ).replace(/\/+$/, '');
-
-    try {
-      const parsedBase = new URL(this.publicUrlBase);
-      this.publicUrlOrigin = parsedBase.origin;
-      this.publicUrlBasePath = `${parsedBase.pathname.replace(/\/+$/, '')}/`;
-    } catch {
-      this.publicUrlOrigin = undefined;
-      this.publicUrlBasePath = undefined;
-    }
+    this.bucket = this.configService.get<string>('S3_BUCKET') ?? '';
+    const endpoint = this.configService.get<string>('S3_ENDPOINT');
+    this.storage = storageIdentity(endpoint, this.bucket);
+    this.signedUrlTtlSeconds = parseTtl(
+      this.configService.get<string>('S3_SIGNED_URL_TTL_SECONDS'),
+    );
+    const checksum = parseChecksumMode(
+      this.configService.get<string>('S3_CHECKSUM_MODE'),
+    );
 
     this.s3Client = new S3Client({
-      endpoint: this.endpoint,
+      endpoint,
       region: this.configService.get<string>('S3_REGION'),
       credentials: {
-        accessKeyId: this.configService.get<string>('S3_ACCESS_KEY')!,
-        secretAccessKey: this.configService.get<string>('S3_SECRET_KEY')!,
+        accessKeyId: this.configService.get<string>('S3_ACCESS_KEY') ?? '',
+        secretAccessKey: this.configService.get<string>('S3_SECRET_KEY') ?? '',
       },
       forcePathStyle:
         this.configService.get<string>('S3_FORCE_PATH_STYLE') === 'true',
+      requestChecksumCalculation: checksum,
+      responseChecksumValidation: checksum,
     });
   }
 
   /**
-   * `keyPrefix` (ex. `organizations/<orgId>/products`) est fourni par
-   * l'appelant : ce service reste agnostique du tenant, la frontière org
-   * est imposée côté appelant (jamais déduite d'un DTO/nom de fichier ici).
-   */
-  async uploadFile(
-    file: Express.Multer.File,
-    keyPrefix: string,
-  ): Promise<string> {
-    const { url } = await this.uploadStoredFile(file, keyPrefix);
-    return url;
-  }
-
-  /**
-   * Variante de `uploadFile` (1-8A) retournant `{key,url}` : utile quand
-   * l'appelant doit PERSISTER la clé elle-même (ex. `Organization.logoKey`)
-   * plutôt que seulement l'URL publique dérivée.
-   */
-  async uploadStoredFile(
-    file: Express.Multer.File,
-    keyPrefix: string,
-  ): Promise<{ key: string; url: string }> {
-    const key = `${keyPrefix}/${randomUUID()}-${this.sanitizeFilename(file.originalname)}`;
-
-    await this.s3Client.send(
-      new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        Body: file.buffer,
-        ContentType: file.mimetype,
-      }),
-    );
-
-    return { key, url: this.publicUrlForKey(key) };
-  }
-
-  /**
-   * Upload d'une image DÉJÀ validée côté serveur (1-12C, logo tenant) :
-   * clé `${keyPrefix}/${uuid}.${extension}` sans aucun nom client, et
+   * Upload d'une image DÉJÀ validée côté serveur (logo 1-12C, photo produit
+   * R2) : clé `${keyPrefix}/${uuid}.${extension}` sans aucun nom client, et
    * `ContentType` issu du format détecté côté serveur — jamais de
-   * `originalname` ni de `mimetype` client. `uploadStoredFile` (produits)
-   * reste inchangé.
+   * `originalname` ni de `mimetype` client. `keyPrefix`
+   * (`organizations/<orgId>/…`) est imposé par l'appelant.
    */
   async uploadValidatedImage(
     body: Buffer,
     keyPrefix: string,
     image: { extension: string; contentType: string },
-  ): Promise<{ key: string; url: string }> {
+  ): Promise<StoredObjectRef> {
+    if (!this.storage) throw new Error('Stockage non configuré');
     const key = `${keyPrefix}/${randomUUID()}.${image.extension}`;
 
     await this.s3Client.send(
@@ -107,114 +159,61 @@ export class S3Service {
       }),
     );
 
-    return { key, url: this.publicUrlForKey(key) };
-  }
-
-  /** URL publique déterministe pour une clé déjà connue (jamais recalculée depuis une entrée cliente). */
-  publicUrlForKey(key: string): string {
-    return `${this.publicUrlBase}/${key}`;
+    return { key, storage: this.storage };
   }
 
   /**
-   * `allowedPrefix` doit correspondre EXACTEMENT au préfixe de tenant sous
-   * lequel la clé a été émise. Clé rejetée (URL étrangère/malformée/hors
-   * frontière/hors préfixe) : no-op silencieux, aucun appel réseau, jamais
-   * l'URL ni un secret journalisés.
+   * URL GET signée, à durée explicite, pour une référence DÉJÀ lue en base
+   * dans le périmètre de l'organisation du demandeur. Jamais une clé fournie
+   * par le client. `null` (aucune URL) si : pas de référence, autre
+   * stockage ou stockage inconnu, clé hors du préfixe EXACT attendu, ou
+   * signature impossible.
+   *
+   * Un lien signé reste utilisable par quiconque le détient jusqu'à son
+   * expiration ; l'expiration n'efface pas les copies déjà téléchargées.
    */
-  async deleteFile(imageUrl: string, allowedPrefix: string): Promise<void> {
-    const key = this.extractTenantKey(imageUrl);
-    if (!key) return;
-    await this.deleteStoredKey(key, allowedPrefix);
-  }
-
-  /**
-   * Suppression par CLÉ déjà connue (1-8A, jamais une URL cliente) : utile
-   * quand seule la clé est persistée (ex. `Organization.logoKey`). `key`
-   * doit débuter EXACTEMENT par `allowedPrefix + '/'` (jamais un
-   * `startsWith` nu sans séparateur, sinon un préfixe voisin — organisation
-   * B, ou un dossier "legacy"/frère — serait accepté à tort).
-   */
-  async deleteStoredKey(key: string, allowedPrefix: string): Promise<void> {
-    const boundedPrefix = allowedPrefix.endsWith('/')
-      ? allowedPrefix
-      : `${allowedPrefix}/`;
-    if (!key.startsWith(boundedPrefix)) return;
-
-    await this.s3Client.send(
-      new DeleteObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-      }),
-    );
-  }
-
-  /**
-   * Parse STRUCTURÉ (`new URL`, jamais un `split`/`includes` naïf) : origine
-   * ET chemin de base doivent correspondre EXACTEMENT à la configuration
-   * réellement utilisée pour produire les URLs (`publicUrlBase`), sinon une
-   * origine étrangère portant le même nom de bucket dans son chemin
-   * (`https://evil.example/<bucket>/...`) serait acceptée à tort. La
-   * frontière de préfixe tenant est vérifiée séparément par
-   * `deleteStoredKey` (partagée avec les clés déjà connues, jamais issues
-   * d'une URL). Toute anomalie (credentials, origine/chemin voisin,
-   * encodage invalide, clé plate) → `undefined`.
-   */
-  private extractTenantKey(imageUrl: string): string | undefined {
-    if (!this.publicUrlOrigin || !this.publicUrlBasePath) return undefined;
-
-    let parsed: URL;
+  async signedReadUrl(
+    ref: StoredObjectRef | null,
+    allowedPrefix: string,
+  ): Promise<string | null> {
+    if (!ref || !this.storage || ref.storage !== this.storage) return null;
+    if (!isWithinPrefix(ref.key, allowedPrefix)) return null;
     try {
-      parsed = new URL(imageUrl);
-    } catch {
-      return undefined;
-    }
-    if (parsed.username || parsed.password) return undefined;
-    if (parsed.origin !== this.publicUrlOrigin) return undefined;
-    if (!parsed.pathname.startsWith(this.publicUrlBasePath)) return undefined;
-
-    let key: string;
-    try {
-      key = decodeURIComponent(
-        parsed.pathname.slice(this.publicUrlBasePath.length),
+      return await getSignedUrl(
+        this.s3Client,
+        new GetObjectCommand({ Bucket: this.bucket, Key: ref.key }),
+        { expiresIn: this.signedUrlTtlSeconds },
       );
     } catch {
-      return undefined;
+      this.logger.warn('Signature de lecture impossible');
+      return null;
     }
-    if (!key) return undefined;
-
-    return key;
   }
 
   /**
-   * Nom de fichier serveur : basename seul (traversal/slashes neutralisés),
-   * caractères de contrôle et Unicode hors ASCII retirés, espaces en tirets ;
-   * extension utile préservée et nettoyée séparément.
+   * Suppression d'un objet APRÈS l'écriture MongoDB correspondante.
+   * Seulement dans le stockage courant et sous le préfixe EXACT attendu
+   * (`allowedPrefix + '/'`, jamais un `startsWith` nu) ; sinon l'objet est
+   * laissé en place (`retained`). Un échec ne lève pas : il est renvoyé
+   * (`failed`) et journalisé, l'objet restant orphelin.
    */
-  private sanitizeFilename(originalName: string): string {
-    const base =
-      originalName
-        .split(/[/\\]/)
-        .filter((segment) => segment.length > 0 && segment !== '..')
-        .pop() ?? '';
-    // eslint-disable-next-line no-control-regex -- neutralise volontairement les caractères de contrôle du nom de fichier
-    const noControl = base.normalize('NFKC').replace(/[\x00-\x1f\x7f]/g, '');
-
-    const dotIndex = noControl.lastIndexOf('.');
-    const hasExtension = dotIndex > 0 && dotIndex < noControl.length - 1;
-    const stem = hasExtension ? noControl.slice(0, dotIndex) : noControl;
-    const rawExtension = hasExtension ? noControl.slice(dotIndex + 1) : '';
-
-    const cleanStem =
-      stem
-        .replace(/\s+/g, '-')
-        .replace(/[^a-zA-Z0-9._-]/g, '')
-        .replace(/\.+/g, '.')
-        .replace(/^[.-]+|[.-]+$/g, '') || 'file';
-    const cleanExtension = rawExtension
-      .replace(/[^a-zA-Z0-9]/g, '')
-      .slice(0, 10)
-      .toLowerCase();
-
-    return cleanExtension ? `${cleanStem}.${cleanExtension}` : cleanStem;
+  async deleteStoredObject(
+    ref: StoredObjectRef | null,
+    allowedPrefix: string,
+  ): Promise<StorageCleanup> {
+    if (!ref) return 'not_needed';
+    if (!this.storage || ref.storage !== this.storage) return 'retained';
+    if (!isWithinPrefix(ref.key, allowedPrefix)) return 'retained';
+    try {
+      await this.s3Client.send(
+        new DeleteObjectCommand({ Bucket: this.bucket, Key: ref.key }),
+      );
+      return 'deleted';
+    } catch {
+      this.logger.warn(
+        `Suppression échouée, objet conservé : ${ref.storage} ${ref.key}`,
+      );
+      return 'failed';
+    }
   }
 }
