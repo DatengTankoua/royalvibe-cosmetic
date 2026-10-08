@@ -44,7 +44,6 @@ export interface ProductSource {
   _id: Types.ObjectId | string;
   sectionId: Types.ObjectId | string;
   name: string;
-  imageUrl: string;
   purchasePrice: number;
   salePrice: number;
   initialQuantity: number;
@@ -59,7 +58,12 @@ export interface ProductView {
   _id: string;
   sectionId: string;
   name: string;
-  imageUrl: string;
+  /**
+   * URL de lecture calculée à chaque réponse par le service (signée à durée
+   * limitée, ou ancienne URL) ; `null` sans photo lisible. Jamais lue telle
+   * quelle sur le document.
+   */
+  imageUrl: string | null;
   salePrice: number;
   remainingQuantity: number;
   deletedAt: Date | null;
@@ -103,12 +107,13 @@ export function computeStatus(p: ProductSource): ProductStatus {
 export function toProductView(
   p: ProductSource,
   visibility: ProductVisibility,
+  imageUrl: string | null,
 ): ProductView {
   const view: ProductView = {
     _id: p._id.toString(),
     sectionId: p.sectionId.toString(),
     name: p.name,
-    imageUrl: p.imageUrl,
+    imageUrl,
     salePrice: p.salePrice,
     remainingQuantity: p.remainingQuantity,
     deletedAt: p.deletedAt ?? null,
@@ -127,10 +132,11 @@ export function toProductView(
 export function toProductMetricsView(
   p: ProductSource,
   visibility: ProductVisibility,
+  imageUrl: string | null,
   actualRevenue?: number,
 ): ProductMetricsView {
   const view: ProductMetricsView = {
-    product: toProductView(p, visibility),
+    product: toProductView(p, visibility, imageUrl),
     status: computeStatus(p),
   };
   const unitsSold = num(p.initialQuantity) - num(p.remainingQuantity);

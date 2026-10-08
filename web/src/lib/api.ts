@@ -40,7 +40,8 @@ export interface ApiProduct {
   _id: string;
   sectionId: string;
   name: string;
-  imageUrl: string;
+  // R2 privé : lien signé à durée limitée (ou ancienne URL), `null` sans photo.
+  imageUrl: string | null;
   salePrice: number;
   remainingQuantity: number;
   createdAt: string;
@@ -127,7 +128,6 @@ export interface ProductRanking {
   // aucun n'a pu l'être), stock `null`, bénéfice `null` si coût inconnu.
   productName: string | null;
   productDeleted: boolean;
-  imageUrl: string | null;
   remainingQuantity: number | null;
   totalUnitsSold: number;
   totalRevenue: number;
@@ -531,24 +531,25 @@ export async function updateOrganizationBranding(payload: {
   name?: string;
   brandColor?: string;
   logo?: File;
-}): Promise<ApiOrganizationCurrent> {
+}): Promise<ApiOrganizationCurrent & { storageCleanup?: StorageCleanup }> {
   const form = new FormData();
   if (payload.name !== undefined) form.append("name", payload.name);
   if (payload.brandColor !== undefined)
     form.append("brandColor", payload.brandColor);
   if (payload.logo) form.append("logo", payload.logo);
-  const { data } = await apiClient.patch<ApiOrganizationCurrent>(
-    "/organizations/current/branding",
-    form,
-  );
+  const { data } = await apiClient.patch<
+    ApiOrganizationCurrent & { storageCleanup?: StorageCleanup }
+  >("/organizations/current/branding", form);
   return data;
 }
 
 // DELETE /organizations/current/logo (1-8A) — `branding.manage`.
-export async function removeOrganizationLogo(): Promise<ApiOrganizationCurrent> {
-  const { data } = await apiClient.delete<ApiOrganizationCurrent>(
-    "/organizations/current/logo",
-  );
+export async function removeOrganizationLogo(): Promise<
+  ApiOrganizationCurrent & { storageCleanup?: StorageCleanup }
+> {
+  const { data } = await apiClient.delete<
+    ApiOrganizationCurrent & { storageCleanup?: StorageCleanup }
+  >("/organizations/current/logo");
   return data;
 }
 
@@ -882,7 +883,7 @@ export interface ApiTrashedProduct {
   _id: string;
   sectionId: string;
   name: string;
-  imageUrl: string;
+  imageUrl: string | null;
   salePrice: number;
   remainingQuantity: number;
   // 1-12H : présents seulement avec la permission correspondante.
@@ -913,8 +914,19 @@ export async function restoreProduct(id: string): Promise<void> {
   await apiClient.patch(`/products/${id}/restore`);
 }
 
-export async function permanentDeleteProduct(id: string): Promise<void> {
-  await apiClient.delete(`/products/${id}/permanent`);
+/**
+ * Sort du fichier (photo, logo) après l'écriture : `failed` = fichier non
+ * effacé du stockage (jamais présenté comme supprimé).
+ */
+export type StorageCleanup = "deleted" | "not_needed" | "retained" | "failed";
+
+export async function permanentDeleteProduct(
+  id: string,
+): Promise<StorageCleanup | undefined> {
+  const { data } = await apiClient.delete<{ storageCleanup?: StorageCleanup }>(
+    `/products/${id}/permanent`,
+  );
+  return data?.storageCleanup;
 }
 
 // ─── Sales ───────────────────────────────────────────────────────────────────

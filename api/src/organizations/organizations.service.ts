@@ -41,7 +41,7 @@ import { UpdateMembershipDto } from './dto/update-membership.dto';
 import { UpdateBrandingDto } from './dto/update-branding.dto';
 import { AcceptInvitationDto } from '../auth/dto/accept-invitation.dto';
 import { SocketRegistryService } from './socket-registry.service';
-import { S3Service } from '../s3/s3.service';
+import { S3Service, type StoredObjectRef } from '../s3/s3.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { buildInvitationUrl, parsePublicAppOrigin } from './invitation-link';
 import {
@@ -159,9 +159,17 @@ export interface TransferOwnershipResult {
   newOwner: MemberView;
 }
 
+/** Préfixe du logo d'une organisation (clé serveur, jamais cliente). */
+export function logoKeyPrefix(organizationId: string): string {
+  return `organizations/${organizationId}/branding`;
+}
+
 /**
  * Vue `GET /organizations/current` (1-8A) : jamais `logoKey` (donnée de
- * stockage interne), `logoUrl` est DÉRIVÉE de `logoKey` (`null` sans logo).
+ * stockage interne). `logoUrl` est une URL de lecture SIGNÉE à durée
+ * limitée, calculée à chaque réponse à partir de `logoKey` et du stockage
+ * qui l'a reçu ; `null` sans logo, ou pour un logo d'un autre stockage /
+ * de stockage inconnu (logo antérieur à R2).
  */
 export interface OrganizationCurrentView {
   _id: string;
@@ -173,10 +181,10 @@ export interface OrganizationCurrentView {
   logoUrl: string | null;
 }
 
-/** Résultat d'une mutation de branding (1-8A) : l'ancien `logoKey` permet au contrôleur de nettoyer S3 APRÈS ce commit. */
+/** Résultat d'une mutation de branding (1-8A) : l'ancien logo permet au contrôleur de nettoyer le stockage APRÈS ce commit. */
 export interface BrandingMutationResult {
   organization: OrganizationCurrentView;
-  previousLogoKey: string | null;
+  previousLogo: StoredObjectRef | null;
 }
 
 @Injectable()
@@ -952,7 +960,7 @@ export class OrganizationsService {
     // cette requête ; une absence ici ne peut survenir que via un appel
     // direct au service (jamais atteint par les routes HTTP réelles).
     if (!organization) throw this.accessDenied();
-    return this.toCurrentView(organization);
+    return await this.toCurrentView(organization);
   }
 
   /**
@@ -967,12 +975,12 @@ export class OrganizationsService {
   async updateBranding(
     organizationId: string,
     dto: UpdateBrandingDto,
-    newLogoKey?: string,
+    newLogo?: StoredObjectRef,
   ): Promise<BrandingMutationResult> {
     if (
       dto.name === undefined &&
       dto.brandColor === undefined &&
-      newLogoKey === undefined
+      newLogo === undefined
     ) {
       throw new BadRequestException({
         code: 'EMPTY_BRANDING_UPDATE',
@@ -985,7 +993,7 @@ export class OrganizationsService {
       .exec();
     if (!organization) throw this.accessDenied();
 
-    const previousLogoKey = organization.logoKey;
+    const previousLogo = this.logoRef(organization);
 
     if (dto.name !== undefined) {
       const trimmed = dto.name.trim();
@@ -1000,7 +1008,10 @@ export class OrganizationsService {
       organization.name = trimmed;
     }
     if (dto.brandColor !== undefined) organization.brandColor = dto.brandColor;
-    if (newLogoKey !== undefined) organization.logoKey = newLogoKey;
+    if (newLogo !== undefined) {
+      organization.logoKey = newLogo.key;
+      organization.logoStorage = newLogo.storage;
+    }
 
     // 1-12C : seuls les chemins modifiés sont revalidés — une organisation
     // historique au nom > 20 caractères peut changer sa couleur ou son logo
@@ -1015,10 +1026,10 @@ export class OrganizationsService {
     );
 
     return {
-      organization: this.toCurrentView(organization),
+      organization: await this.toCurrentView(organization),
       // Rien à nettoyer côté contrôleur si AUCUN nouveau logo n'a été
       // uploadé (les champs name/brandColor seuls ne touchent jamais S3).
-      previousLogoKey: newLogoKey !== undefined ? previousLogoKey : null,
+      previousLogo: newLogo !== undefined ? previousLogo : null,
     };
   }
 
@@ -1034,21 +1045,43 @@ export class OrganizationsService {
       .exec();
     if (!organization) throw this.accessDenied();
 
-    const previousLogoKey = organization.logoKey;
-    if (previousLogoKey !== null) {
+    const previousLogo = this.logoRef(organization);
+    if (previousLogo !== null) {
       organization.logoKey = null;
+      organization.logoStorage = null;
       await organization.save({ validateModifiedOnly: true });
       this.socketRegistry.signalOrganization(
         organizationId,
         'organization:updated',
       );
     }
-    return { organization: this.toCurrentView(organization), previousLogoKey };
+    return {
+      organization: await this.toCurrentView(organization),
+      previousLogo,
+    };
   }
 
-  private toCurrentView(
+  /** Le logo est-il (encore) référencé par l'organisation ? */
+  async isLogoReferenced(
+    organizationId: string,
+    key: string,
+  ): Promise<boolean> {
+    const found = await this.organizationModel
+      .exists({ _id: new Types.ObjectId(organizationId), logoKey: key })
+      .exec();
+    return found !== null;
+  }
+
+  private logoRef(organization: OrganizationDocument): StoredObjectRef | null {
+    return organization.logoKey
+      ? { key: organization.logoKey, storage: organization.logoStorage ?? null }
+      : null;
+  }
+
+  private async toCurrentView(
     organization: OrganizationDocument,
-  ): OrganizationCurrentView {
+  ): Promise<OrganizationCurrentView> {
+    const organizationId = organization._id.toString();
     return {
       _id: organization._id.toString(),
       name: organization.name,
@@ -1056,9 +1089,10 @@ export class OrganizationsService {
       brandColor: organization.brandColor,
       currency: organization.currency,
       status: organization.status,
-      logoUrl: organization.logoKey
-        ? this.s3Service.publicUrlForKey(organization.logoKey)
-        : null,
+      logoUrl: await this.s3Service.signedReadUrl(
+        this.logoRef(organization),
+        logoKeyPrefix(organizationId),
+      ),
     };
   }
 

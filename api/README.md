@@ -51,8 +51,14 @@ Toutes les valeurs par défaut du `.env.example` sont compatibles avec le `docke
 | `S3_ACCESS_KEY` | `minioadmin` | Clé d'accès S3 |
 | `S3_SECRET_KEY` | `minioadmin123` | Secret S3 |
 | `S3_BUCKET` | `stockmaster-objects` | Nom du bucket |
-| `S3_FORCE_PATH_STYLE` | `true` | Obligatoire pour MinIO |
-| `S3_PUBLIC_URL` | _(vide)_ | URL publique des images si différente de `S3_ENDPOINT` |
+| `S3_FORCE_PATH_STYLE` | `true` | Valeur exacte `true` = adressage path-style (MinIO) ; sinon virtual-hosted (exemple officiel R2) |
+| `S3_SIGNING_ENDPOINT` | _(vide)_ | Origine http(s) jointe par le navigateur, utilisée **uniquement** pour signer les URL GET quand l'API joint le stockage par un nom interne (Docker Compose : `https://s3.<domaine>`). Vide pour R2 (endpoint unique). N'affecte pas l'identité du stockage |
+| `S3_SIGNED_URL_TTL_SECONDS` | `900` | Durée des URL GET signées (entier 60–3600). Bucket privé : aucune URL publique ; la clé est stockée, l'URL est signée à chaque lecture |
+| `S3_CHECKSUM_MODE` | `when_supported` | Sommes de contrôle du SDK (`when_supported` ou `when_required`) ; à changer seulement après l'essai R2 opérateur |
+
+`S3_PUBLIC_URL` n'est plus lue (stockage R2 privé). L'identité du stockage
+(hôte de `S3_ENDPOINT` + `S3_BUCKET`) est enregistrée avec chaque clé : une
+autre configuration ne lit ni ne supprime les objets d'un autre stockage.
 | `WEB_PUSH_ENABLED` | `false` | Notifications Web Push (1-16A) ; `true` exige les trois clés VAPID ci-dessous (démarrage refusé si invalides). Le centre de notifications (1-16A.1) fonctionne dans tous les cas ; la migration `migrate:push-notification-indexes` est requise en production et dès que le push est activé |
 | `WEB_PUSH_VAPID_PUBLIC_KEY` | _(vide)_ | Clé publique P-256 base64url, **stable** entre redémarrages |
 | `WEB_PUSH_VAPID_PRIVATE_KEY` | _(vide)_ | Clé privée correspondante — **secret**, jamais journalisée |

@@ -120,6 +120,7 @@ describe('SubscriptionPeriod schema (1-14B)', () => {
         'createdAt',
         'currency',
         'logoKey',
+        'logoStorage',
         'name',
         'slug',
         'status',

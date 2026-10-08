@@ -73,7 +73,7 @@ export default function OrganizationBrandingPage() {
     setError(null);
     setSaving(true);
     try {
-      await updateOrganizationBranding({
+      const updated = await updateOrganizationBranding({
         name: name !== organization.name ? name : undefined,
         brandColor:
           brandColor !== organization.brandColor ? brandColor : undefined,
@@ -82,6 +82,9 @@ export default function OrganizationBrandingPage() {
       setLogo(null);
       refreshOrganization();
       toast.success(t("branding.updated"));
+      if (updated.storageCleanup === "failed") {
+        toast.warning(t("branding.oldLogoNotDeleted"));
+      }
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -94,9 +97,12 @@ export default function OrganizationBrandingPage() {
     setError(null);
     setRemovingLogo(true);
     try {
-      await removeOrganizationLogo();
+      const removed = await removeOrganizationLogo();
       refreshOrganization();
       toast.success(t("branding.logoRemoved"));
+      if (removed.storageCleanup === "failed") {
+        toast.warning(t("branding.oldLogoNotDeleted"));
+      }
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {

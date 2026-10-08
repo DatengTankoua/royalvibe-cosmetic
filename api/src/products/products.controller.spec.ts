@@ -1,6 +1,7 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
+import sharp from 'sharp';
 import { ProductsController } from './products.controller';
 import { ProductsService } from './products.service';
 import { S3Service } from '../s3/s3.service';
@@ -35,10 +36,27 @@ function makeContext(
 }
 
 const user = { _id: new Types.ObjectId('eeeeeeeeeeeeeeeeeeeeeeee') } as User;
-const file = {
-  buffer: Buffer.from('x'),
-  originalname: 'a.png',
-} as Express.Multer.File;
+const PREFIX_A = `organizations/${ORG_A}/products`;
+const STORED = { key: `${PREFIX_A}/new.png`, storage: 'r2/stockmaster-prod' };
+
+// Vraie photo PNG (contrôlée par Sharp) ; une copie par appel : le
+// contrôleur libère le contenu reçu après l'envoi.
+let PNG: Buffer;
+beforeAll(async () => {
+  PNG = await sharp({
+    create: { width: 4, height: 4, channels: 3, background: '#f80' },
+  })
+    .png()
+    .toBuffer();
+});
+function imageFile(): Express.Multer.File {
+  return {
+    buffer: Buffer.from(PNG),
+    size: PNG.length,
+    originalname: 'a.png',
+    mimetype: 'image/png',
+  } as Express.Multer.File;
+}
 
 /**
  * ProductsController (1-4B) — chaque route du catalogue transmet EXACTEMENT
@@ -56,11 +74,12 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     restore: jest.fn(),
     remove: jest.fn(),
     permanentDelete: jest.fn(),
+    isImageReferenced: jest.fn(),
   };
 
   const s3Stub = {
-    uploadFile: jest.fn().mockResolvedValue('http://s3-e2e/key.png'),
-    deleteFile: jest.fn().mockResolvedValue(undefined),
+    uploadValidatedImage: jest.fn().mockResolvedValue(STORED),
+    deleteStoredObject: jest.fn().mockResolvedValue('deleted'),
   };
 
   beforeEach(async () => {
@@ -74,8 +93,9 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       product: {},
       auditLogs: [{ action: 'created' }],
     });
-    s3Stub.uploadFile.mockReset().mockResolvedValue('http://s3-e2e/key.png');
-    s3Stub.deleteFile.mockReset().mockResolvedValue(undefined);
+    serviceStub.isImageReferenced.mockResolvedValue(false);
+    s3Stub.uploadValidatedImage.mockReset().mockResolvedValue(STORED);
+    s3Stub.deleteStoredObject.mockReset().mockResolvedValue('deleted');
     const module: TestingModule = await Test.createTestingModule({
       controllers: [ProductsController],
       providers: [
@@ -89,7 +109,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
   const ctxA = makeContext(ORG_A);
   const actorId = 'eeeeeeeeeeeeeeeeeeeeeeee';
 
-  it('create : transmet l’org du contexte AVANT le DTO, imageUrl et actorId', async () => {
+  it('create : photo contrôlée puis envoyée sous le préfixe de l’org ; transmet org, DTO, référence et actorId', async () => {
     const dto = {
       sectionId: SECTION_QUERY,
       name: 'N',
@@ -97,24 +117,49 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       salePrice: 10,
       initialQuantity: 7,
     };
+    const file = imageFile();
     await controller.create(dto, file, user, ctxA);
-    expect(s3Stub.uploadFile).toHaveBeenCalledTimes(1);
-    expect(s3Stub.uploadFile).toHaveBeenCalledWith(
-      file,
-      `organizations/${ORG_A}/products`,
+    expect(s3Stub.uploadValidatedImage).toHaveBeenCalledTimes(1);
+    expect(s3Stub.uploadValidatedImage).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      PREFIX_A,
+      { format: 'png', extension: 'png', contentType: 'image/png' },
     );
+    // Contenu reçu libéré après l'envoi.
+    expect(file.buffer.length).toBe(0);
     expect(serviceStub.create).toHaveBeenCalledTimes(1);
     expect(serviceStub.create).toHaveBeenCalledWith(
       ORG_A,
       dto,
-      'http://s3-e2e/key.png',
+      STORED,
       actorId,
       FULL,
     );
-    expect(s3Stub.deleteFile).not.toHaveBeenCalled();
+    expect(s3Stub.deleteStoredObject).not.toHaveBeenCalled();
   });
 
-  it('create : mutation métier échouée après upload → supprime UNIQUEMENT la nouvelle image sous le préfixe tenant, repropage l’erreur', async () => {
+  it('create : photo invalide (texte déguisé en PNG) → 400 avant tout envoi ni écriture', async () => {
+    const dto = {
+      sectionId: SECTION_QUERY,
+      name: 'N',
+      purchasePrice: 5,
+      salePrice: 10,
+      initialQuantity: 7,
+    };
+    const fake = {
+      buffer: Buffer.from('<svg onload=alert(1)>'),
+      size: 21,
+      originalname: 'a.png',
+      mimetype: 'image/png',
+    } as Express.Multer.File;
+    await expect(controller.create(dto, fake, user, ctxA)).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(s3Stub.uploadValidatedImage).not.toHaveBeenCalled();
+    expect(serviceStub.create).not.toHaveBeenCalled();
+  });
+
+  it('create : écriture MongoDB échouée après upload → nouvelle photo non référencée supprimée sous le préfixe tenant, erreur repropagée', async () => {
     const dto = {
       sectionId: SECTION_QUERY,
       name: 'N',
@@ -124,15 +169,39 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     };
     const error = new Error('create failed');
     serviceStub.create.mockRejectedValueOnce(error);
-    await expect(controller.create(dto, file, user, ctxA)).rejects.toBe(error);
-    expect(s3Stub.deleteFile).toHaveBeenCalledTimes(1);
-    expect(s3Stub.deleteFile).toHaveBeenCalledWith(
-      'http://s3-e2e/key.png',
-      `organizations/${ORG_A}/products`,
+    await expect(controller.create(dto, imageFile(), user, ctxA)).rejects.toBe(
+      error,
     );
+    expect(serviceStub.isImageReferenced).toHaveBeenCalledWith(
+      ORG_A,
+      STORED.key,
+    );
+    expect(s3Stub.deleteStoredObject).toHaveBeenCalledTimes(1);
+    expect(s3Stub.deleteStoredObject).toHaveBeenCalledWith(STORED, PREFIX_A);
   });
 
-  it('create : uploadFile échoue AVANT toute URL → aucune suppression, erreur repropagée', async () => {
+  it('create : erreur APRÈS l’écriture (photo référencée) → photo conservée ; vérification impossible → conservée', async () => {
+    const dto = {
+      sectionId: SECTION_QUERY,
+      name: 'N',
+      purchasePrice: 5,
+      salePrice: 10,
+      initialQuantity: 7,
+    };
+    serviceStub.create.mockRejectedValueOnce(new Error('audit failed'));
+    serviceStub.isImageReferenced.mockResolvedValueOnce(true);
+    await expect(
+      controller.create(dto, imageFile(), user, ctxA),
+    ).rejects.toThrow('audit failed');
+    serviceStub.create.mockRejectedValueOnce(new Error('db down'));
+    serviceStub.isImageReferenced.mockRejectedValueOnce(new Error('db down'));
+    await expect(
+      controller.create(dto, imageFile(), user, ctxA),
+    ).rejects.toThrow('db down');
+    expect(s3Stub.deleteStoredObject).not.toHaveBeenCalled();
+  });
+
+  it('create : envoi échoué → aucune écriture ni suppression, erreur repropagée', async () => {
     const dto = {
       sectionId: SECTION_QUERY,
       name: 'N',
@@ -141,10 +210,12 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       initialQuantity: 7,
     };
     const error = new Error('upload failed');
-    s3Stub.uploadFile.mockReset().mockRejectedValueOnce(error);
-    await expect(controller.create(dto, file, user, ctxA)).rejects.toBe(error);
+    s3Stub.uploadValidatedImage.mockReset().mockRejectedValueOnce(error);
+    await expect(controller.create(dto, imageFile(), user, ctxA)).rejects.toBe(
+      error,
+    );
     expect(serviceStub.create).not.toHaveBeenCalled();
-    expect(s3Stub.deleteFile).not.toHaveBeenCalled();
+    expect(s3Stub.deleteStoredObject).not.toHaveBeenCalled();
   });
 
   it('findAll : transmet l’org du contexte + sectionId de la query inchangée', async () => {
@@ -293,10 +364,10 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     });
   });
 
-  it('update sans image : ne touche pas S3, transmet newImageUrl undefined', async () => {
+  it('update sans image : ne touche pas le stockage, transmet newImage undefined', async () => {
     const dto = { name: 'N2' };
     await controller.update(PRODUCT_ID, dto, undefined, user, ctxA);
-    expect(s3Stub.uploadFile).not.toHaveBeenCalled();
+    expect(s3Stub.uploadValidatedImage).not.toHaveBeenCalled();
     expect(serviceStub.update).toHaveBeenCalledWith(
       ORG_A,
       PRODUCT_ID,
@@ -307,22 +378,23 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     );
   });
 
-  it('update avec nouvelle image : upload sous le préfixe de l’org puis transmission de newImageUrl', async () => {
+  it('update avec nouvelle image : envoi sous le préfixe de l’org puis transmission de la référence', async () => {
     const dto = { name: 'N2' };
-    await controller.update(PRODUCT_ID, dto, file, user, ctxA);
-    expect(s3Stub.uploadFile).toHaveBeenCalledWith(
-      file,
-      `organizations/${ORG_A}/products`,
+    await controller.update(PRODUCT_ID, dto, imageFile(), user, ctxA);
+    expect(s3Stub.uploadValidatedImage).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      PREFIX_A,
+      expect.objectContaining({ contentType: 'image/png' }),
     );
     expect(serviceStub.update).toHaveBeenCalledWith(
       ORG_A,
       PRODUCT_ID,
       dto,
       actorId,
-      'http://s3-e2e/key.png',
+      STORED,
       FULL,
     );
-    expect(s3Stub.deleteFile).not.toHaveBeenCalled();
+    expect(s3Stub.deleteStoredObject).not.toHaveBeenCalled();
   });
 
   it('update avec nouvelle image : mutation échouée → supprime la nouvelle image et repropage l’erreur', async () => {
@@ -330,12 +402,9 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     const error = new Error('mutation failed');
     serviceStub.update.mockRejectedValueOnce(error);
     await expect(
-      controller.update(PRODUCT_ID, dto, file, user, ctxA),
+      controller.update(PRODUCT_ID, dto, imageFile(), user, ctxA),
     ).rejects.toBe(error);
-    expect(s3Stub.deleteFile).toHaveBeenCalledWith(
-      'http://s3-e2e/key.png',
-      `organizations/${ORG_A}/products`,
-    );
+    expect(s3Stub.deleteStoredObject).toHaveBeenCalledWith(STORED, PREFIX_A);
   });
 
   it('update sans image : mutation échouée ne déclenche aucun appel S3', async () => {
@@ -345,7 +414,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     await expect(
       controller.update(PRODUCT_ID, dto, undefined, user, ctxA),
     ).rejects.toBe(error);
-    expect(s3Stub.deleteFile).not.toHaveBeenCalled();
+    expect(s3Stub.deleteStoredObject).not.toHaveBeenCalled();
   });
 
   describe('update — permissions dynamiques (correctif 1-7B : stock+prix ⇒ stock.adjust, catalogue/images ⇒ products.manage)', () => {
@@ -441,10 +510,18 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
 
     it('image seule (aucun champ DTO) : traitée comme descriptive ⇒ products.manage requis', async () => {
       await expect(
-        controller.update(PRODUCT_ID, {}, file, user, stockAdjustOnly),
+        controller.update(PRODUCT_ID, {}, imageFile(), user, stockAdjustOnly),
       ).rejects.toThrow(ForbiddenException);
+      // Refus de permission AVANT tout contrôle ou envoi de la photo.
+      expect(s3Stub.uploadValidatedImage).not.toHaveBeenCalled();
 
-      await controller.update(PRODUCT_ID, {}, file, user, productsManageOnly);
+      await controller.update(
+        PRODUCT_ID,
+        {},
+        imageFile(),
+        user,
+        productsManageOnly,
+      );
       expect(serviceStub.update).toHaveBeenCalledTimes(1);
     });
 
@@ -518,7 +595,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       initialQuantity: 1,
       organizationId: 'b'.repeat(24),
     };
-    await controller.create(dto, file, user, ctxA);
+    await controller.create(dto, imageFile(), user, ctxA);
     expect(serviceStub.create).toHaveBeenCalledTimes(1);
     expect(serviceStub.create.mock.calls[0][0]).toBe(ORG_A);
   });

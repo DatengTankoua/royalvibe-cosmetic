@@ -49,6 +49,8 @@ function makeConnection() {
 const TRACKED_PRODUCT_FIELDS = [
   'name',
   'imageUrl',
+  'imageKey',
+  'imageStorage',
   'purchasePrice',
   'salePrice',
   'sectionId',
@@ -84,7 +86,10 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
   let session: ReturnType<typeof makeSession>;
 
   const baseOpts = {
-    s3Service: { uploadFile: jest.fn(), deleteFile: jest.fn() },
+    s3Service: {
+      signedReadUrl: jest.fn(),
+      deleteStoredObject: jest.fn(),
+    },
     eventsGateway: { emitToOrganization: jest.fn() },
     auditService: { log: jest.fn(), findByProduct: jest.fn() },
     saleModel: {},
@@ -279,7 +284,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
   let stockAdjustmentModel: { create: jest.Mock };
   let updateManyChain: { exec: jest.Mock };
   let tx: ReturnType<typeof makeConnection>;
-  let s3Service: { deleteFile: jest.Mock; uploadFile: jest.Mock };
+  let s3Service: { signedReadUrl: jest.Mock; deleteStoredObject: jest.Mock };
   let auditService: { log: jest.Mock; findByProduct: jest.Mock };
   let eventsGateway: { emitToOrganization: jest.Mock };
   let findChain: { sort: jest.Mock; exec: jest.Mock };
@@ -298,6 +303,9 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
   const SECTION_ID = '112233445566778899001122';
   const FOREIGN_SECTION_ID = 'cccccccccccccccccccccccc';
   const PRODUCT_ID = '223344556677889900112233';
+  const STORAGE = 'r2/stockmaster-prod';
+  const PREFIX_A = `organizations/${ORG_A}/products`;
+  const IMAGE = { key: `${PREFIX_A}/new.jpg`, storage: STORAGE };
 
   const DTO = {
     sectionId: SECTION_ID,
@@ -321,7 +329,8 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       _id: new Types.ObjectId(PRODUCT_ID),
       sectionId: new Types.ObjectId(SECTION_ID),
       name: 'Prod',
-      imageUrl: 'http://s3-e2e/p.png',
+      imageKey: `organizations/${ORG_A}/products/p.jpg`,
+      imageStorage: 'r2/stockmaster-prod',
       purchasePrice: 5,
       salePrice: 10,
       initialQuantity: 10,
@@ -375,7 +384,16 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       updateMany: jest.fn(() => updateManyChain),
     };
     tx = makeConnection();
-    s3Service = { deleteFile: jest.fn(), uploadFile: jest.fn() };
+    s3Service = {
+      // Signature simulée : seule une référence du stockage courant (`r2`)
+      // reçoit une URL ; le vrai contrôle est couvert par s3.service.spec.
+      signedReadUrl: jest.fn((ref: { key: string; storage: string } | null) =>
+        Promise.resolve(
+          ref && ref.storage === STORAGE ? `https://signed/${ref.key}` : null,
+        ),
+      ),
+      deleteStoredObject: jest.fn().mockResolvedValue('deleted'),
+    };
     auditService = { log: jest.fn(), findByProduct: jest.fn() };
     auditService.findByProduct.mockResolvedValue([]);
     eventsGateway = { emitToOrganization: jest.fn() };
@@ -411,14 +429,19 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     // org d'origine runtime fournie (le DTO whitelisté ne peut pas la porter,
     // mais le service ne doit PAS non plus copier un tel champ) :
     const dto = { ...DTO, organizationId: ORG_B };
-    await service.create(ORG_A, dto, 'http://s3/x.png', 'actor');
+    const created = await service.create(ORG_A, dto, IMAGE, 'actor');
 
     const written = productModel.create.mock.calls[0][0] as Record<
       string,
       unknown
     >;
     expect(String(written.organizationId)).toBe(ORG_A); // jamais B
-    expect(String(written.imageUrl)).toBe('http://s3/x.png');
+    // Référence durable : clé + stockage ; aucune URL (publique ni signée).
+    expect(written.imageKey).toBe(IMAGE.key);
+    expect(written.imageStorage).toBe(STORAGE);
+    expect(written).not.toHaveProperty('imageUrl');
+    // URL signée à la réponse (photo du document créé).
+    expect(created.imageUrl).toBe(`https://signed/${PREFIX_A}/p.jpg`);
     expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
       ORG_A,
       'product:created',
@@ -451,7 +474,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     countChain.exec.mockResolvedValue(99);
 
     const err = await service
-      .create(ORG_A, DTO, 'http://s3/x.png', 'actor')
+      .create(ORG_A, DTO, IMAGE, 'actor')
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NotFoundException);
     expect((err as Error).message).toBe(`Section ${SECTION_ID} not found`);
@@ -467,7 +490,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     countChain.exec.mockResolvedValue(3);
 
     const err = await service
-      .create(ORG_A, DTO, 'http://s3/x.png', 'actor')
+      .create(ORG_A, DTO, IMAGE, 'actor')
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BadRequestException);
     expect((err as Error).message).toBe('SECTION_HAS_SUBSECTIONS');
@@ -749,13 +772,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     sectionOneChain.exec.mockResolvedValue(sectionDoc());
     countChain.exec.mockResolvedValue(0);
     productModel.create.mockResolvedValue(productDoc());
-    const created = await service.create(
-      ORG_A,
-      DTO,
-      'http://s3/x.png',
-      'actor',
-      FULL,
-    );
+    const created = await service.create(ORG_A, DTO, IMAGE, 'actor', FULL);
     expect(created.purchasePrice).toBe(5); // réponse du demandeur autorisé
 
     productOneChain.exec.mockResolvedValue(productDoc());
@@ -787,6 +804,46 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       }
     }
     expect(saleModel.aggregate).toHaveBeenCalledTimes(1); // update, pour le demandeur
+    // Photo : URL signée pour la room de l'organisation, jamais la clé.
+    for (const payload of payloads) {
+      expect(payload).toContain('https://signed/');
+      expect(payload).not.toContain('"imageKey"');
+      expect(payload).not.toContain('"imageStorage"');
+    }
+  });
+
+  it('lecture : photo du stockage courant signée sous le préfixe de l’org ; ancienne URL telle quelle ; autre stockage → null', async () => {
+    await build();
+    findChain.exec.mockResolvedValue([
+      productDoc(),
+      productDoc({
+        _id: new Types.ObjectId(),
+        imageKey: null,
+        imageStorage: null,
+        imageUrl: 'https://proj.supabase.co/storage/v1/object/public/b/x.png',
+      }),
+      productDoc({
+        _id: new Types.ObjectId(),
+        imageStorage: 'ancien/bucket',
+      }),
+      productDoc({
+        _id: new Types.ObjectId(),
+        imageKey: null,
+        imageStorage: null,
+        imageUrl: 'javascript:alert(1)',
+      }),
+    ]);
+    const list = await service.findAll(ORG_A);
+    expect(list.map((v) => v.product.imageUrl)).toEqual([
+      `https://signed/${PREFIX_A}/p.jpg`,
+      'https://proj.supabase.co/storage/v1/object/public/b/x.png',
+      null,
+      null,
+    ]);
+    // Toujours le préfixe de l'organisation du DEMANDEUR.
+    for (const call of s3Service.signedReadUrl.mock.calls) {
+      expect(call[1]).toBe(PREFIX_A);
+    }
   });
 
   it('findOne (correctif 1-7B) : audit.read absent → AUCUNE lecture d’audit (jamais interrogé ni vidé après coup)', async () => {
@@ -853,16 +910,15 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       'product:updated',
       expect.any(Object),
     );
-    expect(s3Service.deleteFile).not.toHaveBeenCalled();
+    expect(s3Service.deleteStoredObject).not.toHaveBeenCalled();
   });
 
-  it("update avec newImageUrl : remplace imageUrl et supprime l'ancienne APRÈS save, sous le préfixe de l'org", async () => {
+  it("update avec nouvelle photo : clé et stockage remplacés, ancienne supprimée APRÈS l'écriture, sort renvoyé", async () => {
     await build();
     const doc = productDoc();
-    const previousImageUrl = doc.imageUrl as string;
     productOneChain.exec.mockResolvedValue(doc);
     updateChain.exec.mockResolvedValue(
-      productDoc({ name: 'Nouveau', imageUrl: 'http://s3-e2e/new.png' }),
+      productDoc({ name: 'Nouveau', imageKey: IMAGE.key }),
     );
 
     const res = await service.update(
@@ -870,41 +926,66 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       PRODUCT_ID,
       { name: 'Nouveau' },
       'actor',
-      'http://s3-e2e/new.png',
+      IMAGE,
     );
 
     expect(productModel.findOneAndUpdate).toHaveBeenCalledWith(
       expect.any(Object),
-      { $set: { name: 'Nouveau', imageUrl: 'http://s3-e2e/new.png' } },
+      { $set: { name: 'Nouveau', imageKey: IMAGE.key } },
       expect.any(Object),
     );
-    // Ancienne image supprimée APRÈS l'écriture réussie.
-    expect(s3Service.deleteFile.mock.invocationCallOrder[0]).toBeGreaterThan(
+    // Ancienne photo supprimée APRÈS l'écriture réussie.
+    expect(
+      s3Service.deleteStoredObject.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(
       productModel.findOneAndUpdate.mock.invocationCallOrder[0],
     );
-    expect(s3Service.deleteFile).toHaveBeenCalledTimes(1);
-    expect(s3Service.deleteFile).toHaveBeenCalledWith(
-      previousImageUrl,
-      `organizations/${ORG_A}/products`,
+    expect(s3Service.deleteStoredObject).toHaveBeenCalledTimes(1);
+    expect(s3Service.deleteStoredObject).toHaveBeenCalledWith(
+      { key: `${PREFIX_A}/p.jpg`, storage: STORAGE },
+      PREFIX_A,
     );
-    expect(res.product.imageUrl).toBe('http://s3-e2e/new.png');
+    expect(res.product.imageUrl).toBe(`https://signed/${IMAGE.key}`);
+    expect(res.storageCleanup).toBe('deleted');
   });
 
-  it("update avec newImageUrl identique à l'existante : aucune suppression S3", async () => {
+  it('update : échec de suppression de l’ancienne photo → mutation réussie, sort `failed` renvoyé (jamais « supprimée »)', async () => {
     await build();
-    const doc = productDoc({ imageUrl: 'http://s3-e2e/same.png' });
+    productOneChain.exec.mockResolvedValue(productDoc());
+    updateChain.exec.mockResolvedValue(productDoc({ imageKey: IMAGE.key }));
+    s3Service.deleteStoredObject.mockResolvedValue('failed');
+    const res = await service.update(ORG_A, PRODUCT_ID, {}, 'actor', IMAGE);
+    expect(res.storageCleanup).toBe('failed');
+  });
+
+  it('update : ancienne URL (avant R2) conservée en base et jamais supprimée → `retained`', async () => {
+    await build();
+    const legacy = 'https://proj.supabase.co/storage/v1/object/public/b/x.png';
+    const doc = productDoc({
+      imageKey: null,
+      imageStorage: null,
+      imageUrl: legacy,
+    });
     productOneChain.exec.mockResolvedValue(doc);
-    updateChain.exec.mockResolvedValue(doc);
-
-    await service.update(
-      ORG_A,
-      PRODUCT_ID,
-      { name: 'Nouveau' },
-      'actor',
-      'http://s3-e2e/same.png',
+    updateChain.exec.mockResolvedValue(
+      productDoc({ imageUrl: legacy, imageKey: IMAGE.key }),
     );
+    const res = await service.update(ORG_A, PRODUCT_ID, {}, 'actor', IMAGE);
+    const written = productModel.findOneAndUpdate.mock.calls[0][1] as {
+      $set: Record<string, unknown>;
+    };
+    expect(written.$set).not.toHaveProperty('imageUrl');
+    expect(s3Service.deleteStoredObject).not.toHaveBeenCalled();
+    expect(res.storageCleanup).toBe('retained');
+  });
 
-    expect(s3Service.deleteFile).not.toHaveBeenCalled();
+  it('update sans photo : aucun nettoyage, aucun champ `storageCleanup`', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+    updateChain.exec.mockResolvedValue(productDoc({ name: 'N' }));
+    const res = await service.update(ORG_A, PRODUCT_ID, { name: 'N' }, 'actor');
+    expect(s3Service.deleteStoredObject).not.toHaveBeenCalled();
+    expect(res).not.toHaveProperty('storageCleanup');
   });
 
   it('1-15E update : ajout de stock en `$inc` atomique, jamais en valeur absolue', async () => {
@@ -957,17 +1038,12 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     updateChain.exec.mockResolvedValue(null);
 
     const err = await service
-      .update(
-        ORG_A,
-        PRODUCT_ID,
-        { additionalStock: 5 },
-        'actor',
-        'http://s3-e2e/new.png',
-      )
+      .update(ORG_A, PRODUCT_ID, { additionalStock: 5 }, 'actor', IMAGE)
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NotFoundException);
     expect(eventsGateway.emitToOrganization).not.toHaveBeenCalled();
-    expect(s3Service.deleteFile).not.toHaveBeenCalled();
+    // L'ANCIENNE photo n'est jamais supprimée sans écriture réussie.
+    expect(s3Service.deleteStoredObject).not.toHaveBeenCalled();
   });
 
   it('1-15E update : aucune modification → aucune écriture', async () => {
@@ -1045,7 +1121,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     countChain.exec.mockResolvedValue(0);
     productModel.create.mockResolvedValue(productDoc());
     await expect(
-      service.create(ORG_A, DTO, 'http://s3/x.png', 'actor'),
+      service.create(ORG_A, DTO, IMAGE, 'actor'),
     ).resolves.toBeDefined();
     expect(productModel.create).toHaveBeenCalledTimes(1);
 
@@ -1116,30 +1192,70 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     ).resolves.toBeDefined();
   });
 
-  it('permanentDelete : S3 deleteFile puis purge {_id, organizationId} UNIQUEMENT', async () => {
+  it('permanentDelete : purge {_id, organizationId} PUIS suppression du fichier, hors transaction', async () => {
     await build();
     const doc = productDoc();
-    productOneChain.exec.mockResolvedValue(doc); // porte imageUrl
+    productOneChain.exec.mockResolvedValue(doc);
     deleteChain.exec.mockResolvedValue(doc);
 
     const res = await service.permanentDelete(ORG_A, PRODUCT_ID);
     // 1-12H : réponse projetée (visibilité standard par défaut).
-    expect(res).toMatchObject({ _id: PRODUCT_ID, name: 'Prod' });
+    expect(res).toMatchObject({
+      _id: PRODUCT_ID,
+      name: 'Prod',
+      imageUrl: null,
+      storageCleanup: 'deleted',
+    });
     expect(res).not.toHaveProperty('purchasePrice');
-    expect(s3Service.deleteFile).toHaveBeenCalledTimes(1);
-    expect(s3Service.deleteFile).toHaveBeenCalledWith(
-      doc.imageUrl,
-      `organizations/${ORG_A}/products`,
-    );
     expect(productModel.findOneAndDelete).toHaveBeenCalledWith(
       { _id: PRODUCT_ID, organizationId: new Types.ObjectId(ORG_A) },
       { session: tx.session },
     );
-    // Fichier supprimé AVANT et HORS de la transaction (jamais rejoué).
-    expect(s3Service.deleteFile.mock.invocationCallOrder[0]).toBeLessThan(
-      tx.session.withTransaction.mock.invocationCallOrder[0],
+    expect(s3Service.deleteStoredObject).toHaveBeenCalledTimes(1);
+    expect(s3Service.deleteStoredObject).toHaveBeenCalledWith(
+      { key: `${PREFIX_A}/p.jpg`, storage: STORAGE },
+      PREFIX_A,
     );
-    expect(tx.session.endSession).toHaveBeenCalledTimes(1);
+    // Fichier supprimé APRÈS le commit, HORS de la transaction.
+    expect(
+      s3Service.deleteStoredObject.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(tx.session.endSession.mock.invocationCallOrder[0]);
+  });
+
+  it('permanentDelete : échec de suppression du fichier → produit purgé, `failed` renvoyé', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+    deleteChain.exec.mockResolvedValue(productDoc());
+    s3Service.deleteStoredObject.mockResolvedValue('failed');
+    const res = await service.permanentDelete(ORG_A, PRODUCT_ID);
+    expect(res.storageCleanup).toBe('failed');
+    expect(eventsGateway.emitToOrganization).toHaveBeenCalledWith(
+      ORG_A,
+      'product:purged',
+      { _id: PRODUCT_ID },
+    );
+  });
+
+  it('permanentDelete : ancienne URL → jamais supprimée (`retained`) ; déjà purgé ailleurs → `not_needed`', async () => {
+    await build();
+    const legacy = productDoc({
+      imageKey: null,
+      imageStorage: null,
+      imageUrl: 'https://proj.supabase.co/storage/v1/object/public/b/x.png',
+    });
+    productOneChain.exec.mockResolvedValue(legacy);
+    deleteChain.exec.mockResolvedValue(legacy);
+    expect(
+      (await service.permanentDelete(ORG_A, PRODUCT_ID)).storageCleanup,
+    ).toBe('retained');
+    expect(s3Service.deleteStoredObject).not.toHaveBeenCalled();
+
+    productOneChain.exec.mockResolvedValue(productDoc());
+    deleteChain.exec.mockResolvedValue(null);
+    expect(
+      (await service.permanentDelete(ORG_A, PRODUCT_ID)).storageCleanup,
+    ).toBe('not_needed');
+    expect(s3Service.deleteStoredObject).not.toHaveBeenCalled();
   });
 
   it('1-15D : purge → historique figé sur les ventes du produit, dans la MÊME transaction', async () => {
@@ -1244,9 +1360,11 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     );
     expect(tx.session.endSession).toHaveBeenCalledTimes(1);
     expect(eventsGateway.emitToOrganization).not.toHaveBeenCalled();
+    // MongoDB en échec : le fichier n'est JAMAIS supprimé.
+    expect(s3Service.deleteStoredObject).not.toHaveBeenCalled();
   });
 
-  it('permanentDelete : produit étranger → 404, S3 deleteFile JAMAIS appelé, pas de purge', async () => {
+  it('permanentDelete : produit étranger → 404, aucun fichier touché, pas de purge', async () => {
     await build();
     productOneChain.exec.mockResolvedValue(null);
 
@@ -1254,7 +1372,7 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       .permanentDelete(ORG_A, PRODUCT_ID)
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NotFoundException);
-    expect(s3Service.deleteFile).not.toHaveBeenCalled();
+    expect(s3Service.deleteStoredObject).not.toHaveBeenCalled();
     expect(productModel.findOneAndDelete).not.toHaveBeenCalled();
     expect(tx.connection.startSession).not.toHaveBeenCalled();
     expect(saleModel.updateMany).not.toHaveBeenCalled();
@@ -1301,7 +1419,8 @@ describe('ProductsService — appelants AuditService.log portent la tenant (1-4C
       _id: new Types.ObjectId(PRODUCT_ID),
       sectionId: new Types.ObjectId(SECTION_ID),
       name: 'Prod',
-      imageUrl: 'http://s3-e2e/p.png',
+      imageKey: `organizations/${ORG_A}/products/p.jpg`,
+      imageStorage: 'r2/stockmaster-prod',
       purchasePrice: 5,
       salePrice: 10,
       initialQuantity: 10,
@@ -1358,7 +1477,10 @@ describe('ProductsService — appelants AuditService.log portent la tenant (1-4C
         },
         {
           provide: S3Service,
-          useValue: { deleteFile: jest.fn(), uploadFile: jest.fn() },
+          useValue: {
+            signedReadUrl: jest.fn().mockResolvedValue(null),
+            deleteStoredObject: jest.fn(),
+          },
         },
         {
           provide: EventsGateway,
@@ -1388,7 +1510,12 @@ describe('ProductsService — appelants AuditService.log portent la tenant (1-4C
       salePrice: 10,
       initialQuantity: 7,
     };
-    await service.create(ORG_A, DTO, 'http://s3/x.png', 'actor');
+    await service.create(
+      ORG_A,
+      DTO,
+      { key: `organizations/${ORG_A}/products/n.jpg`, storage: 'r2/b' },
+      'actor',
+    );
     expect(auditService.log).toHaveBeenCalledTimes(1);
     const [orgArg] = auditService.log.mock.calls[0] as unknown[];
     expect(orgArg).toBe(ORG_A);

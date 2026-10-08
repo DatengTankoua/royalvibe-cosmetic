@@ -14,6 +14,7 @@ import {
 import { useSocket } from "@/contexts/socket-context";
 import { useSaleInvalidation } from "@/hooks/use-sale-invalidation";
 import { useLiveRefresh } from "@/hooks/use-live-refresh";
+import { useImageRenewal } from "@/hooks/use-image-renewal";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
 
 // 1-12H : les diffusions Socket.IO ne portent que les champs standard ; les
@@ -75,6 +76,8 @@ export function useProducts(sectionId?: string) {
     () => load({ silent: true }),
     loadedAt,
   );
+  // R2 privé : photo non chargeable (lien signé expiré) → relecture bornée.
+  useImageRenewal(scheduleRefresh);
 
   useEffect(() => {
     if (!socket) return;

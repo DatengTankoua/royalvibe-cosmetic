@@ -3,17 +3,16 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ObjectEntity, ObjectDocument } from './schemas/object.schema';
 import { CreateObjectDto } from './dto/create-object.dto';
-import { S3Service } from '../s3/s3.service';
 
 // Dette 1-5B : module orphelin (jamais importé dans AppModule), sans org.
-const LEGACY_OBJECTS_PREFIX = 'legacy/objects';
+// Stockage R2 privé : ses anciennes URLs ne sont jamais supprimées ici
+// (stockage d'origine inconnu) ; le document seul est retiré.
 
 @Injectable()
 export class ObjectsService {
   constructor(
     @InjectModel(ObjectEntity.name)
     private objectModel: Model<ObjectDocument>,
-    private s3Service: S3Service,
   ) {}
 
   async create(
@@ -42,7 +41,6 @@ export class ObjectsService {
 
   async remove(id: string): Promise<ObjectDocument> {
     const object = await this.findOne(id);
-    await this.s3Service.deleteFile(object.imageUrl, LEGACY_OBJECTS_PREFIX);
     await this.objectModel.findByIdAndDelete(id).exec();
     return object;
   }

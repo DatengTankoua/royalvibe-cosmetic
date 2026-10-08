@@ -571,8 +571,12 @@ async function apiPurgeSection(token, sectionId) {
   ok(purge.status === 200, `purge section ${purge.status} ${purge.text}`);
 }
 
+// R2 privé : `imageUrl` est un lien SIGNÉ — la clé est dans le chemin,
+// jamais dans la requête (signature).
 const storageKeyOf = (imageUrl) =>
-  decodeURIComponent(String(imageUrl).split('/recipe-fictitious/')[1] || '');
+  decodeURIComponent(
+    new URL(String(imageUrl)).pathname.split('/recipe-fictitious/')[1] || '',
+  );
 
 async function apiGet(token, url) {
   const res = await L.http('GET', url, { token });

@@ -283,8 +283,9 @@ describe('E2E 1-15D — historique des ventes après purge', () => {
       transactionCount: 1,
       netProfit: 600,
       remainingQuantity: null,
-      imageUrl: null,
     });
+    // R2 privé : le classement ne transporte aucune URL de photo.
+    expect(after).not.toHaveProperty('imageUrl');
     const ov = await overview();
     expect(ov.totalRevenue).toBe(before.overview.totalRevenue);
     expect(ov.netProfit).toBe(before.overview.netProfit);

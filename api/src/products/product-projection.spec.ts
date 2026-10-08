@@ -9,7 +9,10 @@ const SOURCE = {
   _id: new Types.ObjectId('223344556677889900112233'),
   sectionId: new Types.ObjectId('112233445566778899001122'),
   name: 'Prod',
-  imageUrl: 'http://s3/p.png',
+  // Champs de stockage : jamais projetés tels quels (l'URL est fournie).
+  imageUrl: 'http://ancien/p.png',
+  imageKey: 'organizations/aaaaaaaaaaaaaaaaaaaaaaaa/products/k.jpg',
+  imageStorage: 'r2/stockmaster-prod',
   purchasePrice: 1000,
   salePrice: 1500,
   initialQuantity: 10,
@@ -21,6 +24,8 @@ const SOURCE = {
   organizationId: new Types.ObjectId('aaaaaaaaaaaaaaaaaaaaaaaa'),
   __v: 0,
 };
+
+const SIGNED = 'https://signed.example/k.jpg?X-Amz-Expires=900';
 
 const STANDARD_PRODUCT_KEYS = [
   '_id',
@@ -77,18 +82,27 @@ describe('projection produit (1-12H)', () => {
       ],
     ],
   ])('%s : clés exactes', (_label, visibility, productKeys, metricKeys) => {
-    const view = toProductMetricsView(SOURCE, visibility, 9000);
+    const view = toProductMetricsView(SOURCE, visibility, SIGNED, 9000);
     expect(Object.keys(view).sort()).toEqual([...metricKeys].sort());
     expect(Object.keys(view.product).sort()).toEqual([...productKeys].sort());
-    expect(Object.keys(toProductView(SOURCE, visibility)).sort()).toEqual(
-      [...productKeys].sort(),
-    );
+    expect(
+      Object.keys(toProductView(SOURCE, visibility, SIGNED)).sort(),
+    ).toEqual([...productKeys].sort());
+  });
+
+  it('URL de photo : celle fournie par le service, jamais la clé, le stockage ni l’ancienne URL du document', () => {
+    const view = toProductView(SOURCE, COMMON_VISIBILITY, SIGNED);
+    expect(view.imageUrl).toBe(SIGNED);
+    expect(JSON.stringify(view)).not.toContain('imageKey');
+    expect(JSON.stringify(view)).not.toContain('r2/stockmaster-prod');
+    expect(toProductView(SOURCE, COMMON_VISIBILITY, null).imageUrl).toBeNull();
   });
 
   it('formules conservées : CA réel fourni, bénéfice = CA − achat × vendus, marge = bénéfice / CA, coût = achat × initial', () => {
     const view = toProductMetricsView(
       SOURCE,
       { stockDetails: true, financials: true },
+      SIGNED,
       9000,
     );
     expect(view.unitsSold).toBe(5);
@@ -102,6 +116,7 @@ describe('projection produit (1-12H)', () => {
     const view = toProductMetricsView(
       SOURCE,
       { stockDetails: false, financials: true },
+      SIGNED,
       0,
     );
     expect(view.margin).toBeNull();

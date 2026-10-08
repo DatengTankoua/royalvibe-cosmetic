@@ -36,7 +36,7 @@ import { useOrganizationShell } from "@/contexts/organization-shell-context";
 import { hasPermission } from "@/lib/organization-permissions";
 import { useTrash } from "@/hooks/use-trash";
 import { getApiErrorMessage } from "@/lib/api";
-import Image from "next/image";
+import { StoredImage } from "@/components/products/stored-image";
 
 type ConfirmAction =
   | { kind: "restore-section"; id: string; name: string }
@@ -154,12 +154,17 @@ export default function TrashPage() {
             t("trash.toast.productRestored", { name: confirm.name }),
           );
           break;
-        case "delete-product":
-          await doPermanentDeleteProduct(confirm.id);
+        case "delete-product": {
+          const cleanup = await doPermanentDeleteProduct(confirm.id);
           toast.success(
             t("trash.toast.productDeleted", { name: confirm.name }),
           );
+          // R2 privé : jamais annoncer l'effacement d'une photo restée.
+          if (cleanup === "failed") {
+            toast.warning(t("trash.toast.photoNotDeleted"));
+          }
           break;
+        }
         case "bulk-restore-sections":
           await doBulkRestoreSections(confirm.ids);
           toast.success(
@@ -181,13 +186,17 @@ export default function TrashPage() {
           );
           setSelectedProducts(new Set());
           break;
-        case "bulk-delete-products":
-          await doBulkDeleteProducts(confirm.ids);
+        case "bulk-delete-products": {
+          const failed = await doBulkDeleteProducts(confirm.ids);
           toast.success(
             t("trash.toast.productsDeleted", { count: confirm.ids.length }),
           );
+          if (failed > 0) {
+            toast.warning(t("trash.toast.photosNotDeleted", { count: failed }));
+          }
           setSelectedProducts(new Set());
           break;
+        }
       }
     } catch (err) {
       toast.error(getApiErrorMessage(err));
@@ -527,15 +536,7 @@ export default function TrashPage() {
                       href={`/app/catalog/products/${p._id}`}
                       className="relative block aspect-video overflow-hidden bg-muted"
                     >
-                      <Image
-                        src={p.imageUrl}
-                        alt={p.name}
-                        fill
-                        unoptimized
-                        priority={false}
-                        loading="lazy"
-                        className="object-cover"
-                      />
+                      <StoredImage src={p.imageUrl} alt={p.name} />
                     </Link>
                     <CardHeader className="pb-2">
                       <div className="flex items-start gap-2">

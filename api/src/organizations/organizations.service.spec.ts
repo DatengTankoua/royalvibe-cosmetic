@@ -29,7 +29,7 @@ import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 // `updateBranding`/`removeLogo` (couverts par leur propre describe) — seule
 // la résolution DI du nouveau constructeur importe ici.
 const s3ServiceStub = {
-  publicUrlForKey: jest.fn((key: string) => `http://s3/${key}`),
+  signedReadUrl: jest.fn().mockResolvedValue(null),
 };
 // Stub partagé (1-12G) : `PUBLIC_APP_URL` valide — seule la résolution DI
 // importe ici, sauf dans le describe `invitations` qui pilote sa valeur.
@@ -2253,7 +2253,11 @@ describe('OrganizationsService — branding (1-8A)', () => {
 
   let service: OrganizationsService;
   let organizationModel: { findOne: jest.Mock };
-  let s3Service: { publicUrlForKey: jest.Mock };
+  let s3Service: { signedReadUrl: jest.Mock };
+  const STORAGE = 'r2/stockmaster-prod';
+  const PREFIX = `organizations/${ORG_ID_18A}/branding`;
+  const OLD = { key: `${PREFIX}/old.png`, storage: STORAGE };
+  const NEW = { key: `${PREFIX}/new.png`, storage: STORAGE };
 
   function orgDoc(overrides: Record<string, unknown> = {}) {
     const doc = {
@@ -2264,6 +2268,7 @@ describe('OrganizationsService — branding (1-8A)', () => {
       currency: 'XAF',
       status: OrganizationStatus.ACTIVE,
       logoKey: null as string | null,
+      logoStorage: null as string | null,
       save: jest.fn().mockResolvedValue(undefined),
       ...overrides,
     };
@@ -2275,7 +2280,14 @@ describe('OrganizationsService — branding (1-8A)', () => {
       findOne: jest.fn(() => ({ exec: () => Promise.resolve(organization) })),
     };
     s3Service = {
-      publicUrlForKey: jest.fn((key: string) => `http://s3/${key}`),
+      // Signature simulée : seule une référence du stockage courant reçoit
+      // une URL (le vrai contrôle est couvert par s3.service.spec).
+      signedReadUrl: jest.fn(
+        (ref: { key: string; storage: string | null } | null) =>
+          Promise.resolve(
+            ref && ref.storage === STORAGE ? `https://signed/${ref.key}` : null,
+          ),
+      ),
     };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -2326,15 +2338,28 @@ describe('OrganizationsService — branding (1-8A)', () => {
       });
     });
 
-    it('logoUrl dérivée de logoKey via S3Service.publicUrlForKey, jamais logoKey exposée', async () => {
+    it('logoUrl signée à partir de logoKey et du stockage, sous le préfixe exact ; jamais logoKey exposée', async () => {
       await build(
-        orgDoc({ logoKey: `organizations/${ORG_ID_18A}/branding/abc.png` }),
+        orgDoc({ logoKey: `${PREFIX}/abc.png`, logoStorage: STORAGE }),
       );
       const view = await service.getCurrent(ORG_ID_18A);
-      expect(view.logoUrl).toBe(
-        `http://s3/organizations/${ORG_ID_18A}/branding/abc.png`,
+      expect(view.logoUrl).toBe(`https://signed/${PREFIX}/abc.png`);
+      expect(s3Service.signedReadUrl).toHaveBeenCalledWith(
+        { key: `${PREFIX}/abc.png`, storage: STORAGE },
+        PREFIX,
       );
       expect(Object.keys(view)).not.toContain('logoKey');
+      expect(Object.keys(view)).not.toContain('logoStorage');
+    });
+
+    it('ancien logoKey sans stockage (antérieur à R2) : jamais lu dans le stockage courant → logoUrl null', async () => {
+      await build(orgDoc({ logoKey: `${PREFIX}/legacy.png` }));
+      const view = await service.getCurrent(ORG_ID_18A);
+      expect(view.logoUrl).toBeNull();
+      expect(s3Service.signedReadUrl).toHaveBeenCalledWith(
+        { key: `${PREFIX}/legacy.png`, storage: null },
+        PREFIX,
+      );
     });
 
     it('organisation absente → refus uniforme (défensif)', async () => {
@@ -2384,27 +2409,30 @@ describe('OrganizationsService — branding (1-8A)', () => {
       expect(doc.name).toBe('Nouveau nom');
       expect(doc.brandColor).toBe('#062B5C');
       expect(doc.save).toHaveBeenCalledTimes(1);
-      expect(result.previousLogoKey).toBeNull();
+      expect(result.previousLogo).toBeNull();
     });
 
-    it('nouveau logo fourni : logoKey appliqué, ancien logoKey retourné pour nettoyage APRÈS ce commit', async () => {
-      const doc = orgDoc({
-        logoKey: `organizations/${ORG_ID_18A}/branding/old.png`,
-      });
+    it('nouveau logo : clé ET stockage appliqués, ancien logo retourné pour nettoyage APRÈS ce commit', async () => {
+      const doc = orgDoc({ logoKey: OLD.key, logoStorage: STORAGE });
       await build(doc);
-      const newKey = `organizations/${ORG_ID_18A}/branding/new.png`;
-      const result = await service.updateBranding(ORG_ID_18A, {}, newKey);
-      expect(doc.logoKey).toBe(newKey);
-      expect(result.previousLogoKey).toBe(
-        `organizations/${ORG_ID_18A}/branding/old.png`,
-      );
+      const result = await service.updateBranding(ORG_ID_18A, {}, NEW);
+      expect(doc.logoKey).toBe(NEW.key);
+      expect(doc.logoStorage).toBe(STORAGE);
+      expect(result.previousLogo).toEqual(OLD);
+      expect(result.organization.logoUrl).toBe(`https://signed/${NEW.key}`);
     });
 
-    it('nouveau logo fourni sans logo préexistant : previousLogoKey null (rien à nettoyer)', async () => {
+    it('ancien logo sans stockage connu : retourné avec storage null (jamais supprimé à l’aveugle)', async () => {
+      const doc = orgDoc({ logoKey: OLD.key });
+      await build(doc);
+      const result = await service.updateBranding(ORG_ID_18A, {}, NEW);
+      expect(result.previousLogo).toEqual({ key: OLD.key, storage: null });
+    });
+
+    it('nouveau logo fourni sans logo préexistant : previousLogo null (rien à nettoyer)', async () => {
       await build(orgDoc());
-      const newKey = `organizations/${ORG_ID_18A}/branding/new.png`;
-      const result = await service.updateBranding(ORG_ID_18A, {}, newKey);
-      expect(result.previousLogoKey).toBeNull();
+      const result = await service.updateBranding(ORG_ID_18A, {}, NEW);
+      expect(result.previousLogo).toBeNull();
     });
 
     it('organisation absente → refus uniforme, aucune sauvegarde tentée', async () => {
@@ -2442,26 +2470,23 @@ describe('OrganizationsService — branding (1-8A)', () => {
   });
 
   describe('removeLogo', () => {
-    it('logoKey → null, ancien logoKey retourné', async () => {
-      const doc = orgDoc({
-        logoKey: `organizations/${ORG_ID_18A}/branding/old.png`,
-      });
+    it('logoKey et logoStorage → null, ancien logo retourné', async () => {
+      const doc = orgDoc({ logoKey: OLD.key, logoStorage: STORAGE });
       await build(doc);
       const result = await service.removeLogo(ORG_ID_18A);
       expect(doc.logoKey).toBeNull();
+      expect(doc.logoStorage).toBeNull();
       expect(doc.save).toHaveBeenCalledTimes(1);
-      expect(result.previousLogoKey).toBe(
-        `organizations/${ORG_ID_18A}/branding/old.png`,
-      );
+      expect(result.previousLogo).toEqual(OLD);
       expect(result.organization.logoUrl).toBeNull();
     });
 
-    it('déjà sans logo : no-op DB (aucune sauvegarde), previousLogoKey null', async () => {
+    it('déjà sans logo : no-op DB (aucune sauvegarde), previousLogo null', async () => {
       const doc = orgDoc();
       await build(doc);
       const result = await service.removeLogo(ORG_ID_18A);
       expect(doc.save).not.toHaveBeenCalled();
-      expect(result.previousLogoKey).toBeNull();
+      expect(result.previousLogo).toBeNull();
       // 1-15C : rien n'a changé → aucun signal.
       expect(lastRegistry.signalOrganization).not.toHaveBeenCalled();
     });

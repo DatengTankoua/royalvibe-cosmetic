@@ -169,6 +169,21 @@ export const ERROR_MESSAGE_TRANSLATIONS: Readonly<
     fr: 'Seules les images sont acceptées.',
     en: 'Only image files are allowed.',
   },
+  'La photo doit être une image JPEG, PNG ou WebP.': {
+    en: 'The photo must be a JPEG, PNG or WebP image.',
+  },
+  'La photo ne doit pas dépasser 5 Mo.': {
+    en: 'The photo must not exceed 5 MB.',
+  },
+  'La photo ne doit pas dépasser 6000 pixels de côté ni 24 mégapixels.': {
+    en: 'The photo must not exceed 6000 pixels per side or 24 megapixels.',
+  },
+  'Photo vide, corrompue, animée ou illisible.': {
+    en: 'Empty, corrupted, animated or unreadable photo.',
+  },
+  'Cette fonctionnalité a été retirée.': {
+    en: 'This feature has been removed.',
+  },
   'Product ${…} not found': {
     fr: 'Produit {0} introuvable.',
     en: 'Product {0} not found.',

@@ -80,6 +80,7 @@ import { computeTenantAccent, tenantAccentStyle } from "@/lib/tenant-brand";
 import { firstNameOf, fullNameOf } from "@/lib/display-names";
 import { useOfflineSalesSync } from "@/hooks/use-offline-sales-sync";
 import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
+import { useImageRenewal } from "@/hooks/use-image-renewal";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import {
@@ -177,6 +178,8 @@ function OrganizationLiveSync({
 }) {
   const request = useLiveRefresh(refresh, loadedAt);
   useSocketSignals(ORGANIZATION_SIGNALS, request);
+  // R2 privé : logo non chargeable (lien signé expiré) → relecture bornée.
+  useImageRenewal(request);
   return null;
 }
 

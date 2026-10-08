@@ -3,7 +3,6 @@ import { NotFoundException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { ObjectsService } from './objects.service';
 import { ObjectEntity } from './schemas/object.schema';
-import { S3Service } from '../s3/s3.service';
 
 const mockObject = {
   _id: 'abc123',
@@ -37,11 +36,9 @@ function execResolves(value: unknown) {
 describe('ObjectsService', () => {
   let service: ObjectsService;
   let model: ModelMock;
-  let s3Service: { deleteFile: jest.Mock };
 
   beforeEach(async () => {
     model = createModelMock(mockObject);
-    s3Service = { deleteFile: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -50,7 +47,6 @@ describe('ObjectsService', () => {
           provide: getModelToken(ObjectEntity.name),
           useValue: model,
         },
-        { provide: S3Service, useValue: s3Service },
       ],
     }).compile();
 
@@ -95,16 +91,12 @@ describe('ObjectsService', () => {
     await expect(service.findOne('missing')).rejects.toThrow(NotFoundException);
   });
 
-  it('removes an object by id and deletes the S3 file', async () => {
+  it('removes an object by id ; its legacy URL is never deleted (unknown storage)', async () => {
     model.findById.mockReturnValue(execResolves(mockObject));
     model.findByIdAndDelete.mockReturnValue(execResolves(mockObject));
 
     const result = await service.remove('abc123');
 
-    expect(s3Service.deleteFile).toHaveBeenCalledWith(
-      mockObject.imageUrl,
-      'legacy/objects',
-    );
     expect(model.findByIdAndDelete).toHaveBeenCalledWith('abc123');
     expect(result).toEqual(mockObject);
   });

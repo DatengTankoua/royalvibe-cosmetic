@@ -5,7 +5,7 @@ import { useT } from "next-i18next/client";
 import { useFormat } from "@/i18n/use-format";
 import { rich } from "@/i18n/rich";
 import Link from "next/link";
-import Image from "next/image";
+import { StoredImage } from "@/components/products/stored-image";
 import {
   BadgeCheckIcon,
   AlertTriangleIcon,
@@ -90,14 +90,10 @@ export function ProductCard({
           href={`/app/catalog/products/${product._id}`}
           className="relative block aspect-video overflow-hidden bg-muted"
         >
-          <Image
+          <StoredImage
             src={product.imageUrl}
             alt={product.name}
-            fill
-            unoptimized
             priority={priority}
-            loading={priority ? "eager" : "lazy"}
-            className="object-cover"
           />
         </Link>
 
