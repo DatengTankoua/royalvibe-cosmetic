@@ -3,7 +3,8 @@ import { SITE } from "@/lib/legal/site-identity";
 import type { DocumentContent } from "@/i18n/documents/types";
 
 // 1-16G — Traduction anglaise fidèle de « Cookies et stockage sur
-// l'appareil » 0.4. Les noms techniques (clés, bases) ne sont pas traduits.
+// l'appareil » 0.5 (1-16H : clés de session `stockmaster_*`). Les noms
+// techniques (clés, bases) ne sont pas traduits.
 // Statut « projet », `noindex`.
 type Row = { name: string; purpose: string; duration: string };
 
@@ -94,13 +95,13 @@ const content: DocumentContent = {
           caption="Local and session storage"
           rows={[
             {
-              name: "heyama_token",
+              name: "stockmaster_token",
               purpose: "Login token: keeps you logged in.",
               duration:
                 "Until you log out; the token expires after 7 days at the latest",
             },
             {
-              name: "heyama_user",
+              name: "stockmaster_user",
               purpose:
                 "Name, email address and identifier of the logged-in account, for display.",
               duration: "Until you log out",

@@ -184,9 +184,12 @@ const DRAFT_PRIVACY_0_4 = {
 } as const;
 
 // 1-16G — Cookies 0.4 : ajout du cookie de langue `stockmaster.lang`.
-const DRAFT_COOKIES_0_4 = {
+// 1-16H — Cookies 0.5 : clés de session renommées `stockmaster_token` /
+// `stockmaster_user` (anciennement `heyama_token` / `heyama_user`). Document
+// non archivé (non soumis à acceptation) : seul le numéro change.
+const DRAFT_COOKIES_0_5 = {
   status: "projet",
-  version: "0.4",
+  version: "0.5",
   updatedAt: OCTOBER_8_2026,
 } as const;
 
@@ -215,7 +218,7 @@ export const LEGAL_DOCUMENTS: readonly PublicDocument[] = Object.freeze([
   {
     id: "cookies",
     href: "/cookies",
-    ...DRAFT_COOKIES_0_4,
+    ...DRAFT_COOKIES_0_5,
   },
   {
     id: "traitement-donnees",

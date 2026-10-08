@@ -1,5 +1,8 @@
-const TOKEN_KEY = "heyama_token";
-const USER_KEY = "heyama_user";
+// 1-16H — Clés `localStorage` de la session (seule définition). Renommées
+// depuis `heyama_*` avant la mise en production, sans reprise des anciennes
+// clés : une session de développement existante doit se reconnecter.
+export const TOKEN_KEY = "stockmaster_token";
+export const USER_KEY = "stockmaster_user";
 
 export interface StoredUser {
   _id: string;

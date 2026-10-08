@@ -227,8 +227,8 @@ async function apiPay(token, extra = {}) {
 }
 async function logoutLocal(page) {
   await page.evaluate(() => {
-    localStorage.removeItem('heyama_token');
-    localStorage.removeItem('heyama_user');
+    localStorage.removeItem('stockmaster_token');
+    localStorage.removeItem('stockmaster_user');
     sessionStorage.clear();
   });
 }
@@ -548,7 +548,7 @@ async function quiet(requests, p, ms) {
       await waitText(page, 'Réponse non reçue');
       const raw = await marker(page);
       const token = await page.evaluate(() =>
-        localStorage.getItem('heyama_token'),
+        localStorage.getItem('stockmaster_token'),
       );
       const entries = JSON.parse(raw);
       ok(entries.length === 1, 'une entrée');
@@ -1094,7 +1094,7 @@ async function quiet(requests, p, ms) {
       );
       ok(completes.length === 1, `échange complete : ${completes.length}`);
       ok(
-        await page.evaluate(() => !!localStorage.getItem('heyama_token')),
+        await page.evaluate(() => !!localStorage.getItem('stockmaster_token')),
         'JWT applicatif installé',
       );
       ok(

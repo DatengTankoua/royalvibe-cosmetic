@@ -6,7 +6,8 @@ import { SITE } from "@/lib/legal/site-identity";
 // tiers ni mesure d'audience. Inventaire : lib/auth.ts, restricted-session,
 // commercial-block, payment-intent, pwa-install, engagement-prompt, bases
 // IndexedDB `stockmaster-offline-*`, cache du service worker (public/sw.js).
-// Les clés techniques héritées (`heyama_*`) sont conservées telles quelles.
+// 1-16H (cookies 0.5) : clés de session renommées `stockmaster_token` et
+// `stockmaster_user` (anciennement `heyama_*`).
 import type { DocumentContent } from "@/i18n/documents/types";
 
 type Row = { name: string; purpose: string; duration: string };
@@ -42,6 +43,7 @@ function StorageTable({ caption, rows }: { caption: string; rows: Row[] }) {
 // 1-16G : texte français déplacé depuis la page. Version 0.4 : un cookie
 // technique de langue (`stockmaster.lang`), posé seulement par le choix
 // « Français / English ». Document non archivé, non soumis à acceptation.
+// 1-16H, version 0.5 : clés de session `stockmaster_token` / `stockmaster_user`.
 const content: DocumentContent = {
   metaTitle: "Cookies et stockage sur l'appareil",
   metaDescription:
@@ -104,13 +106,13 @@ const content: DocumentContent = {
           caption="Stockage local et de session"
           rows={[
             {
-              name: "heyama_token",
+              name: "stockmaster_token",
               purpose: "Jeton de connexion : vous garde connecté.",
               duration:
                 "Jusqu'à la déconnexion ; le jeton expire au plus tard après 7 jours",
             },
             {
-              name: "heyama_user",
+              name: "stockmaster_user",
               purpose:
                 "Nom, adresse e-mail et identifiant du compte connecté, pour l'affichage.",
               duration: "Jusqu'à la déconnexion",

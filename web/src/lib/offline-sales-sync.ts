@@ -4,7 +4,7 @@ import {
   setForcedLogoutListener,
   toSaleSyncOutcome,
 } from "./api";
-import { getToken } from "./auth";
+import { getToken, TOKEN_KEY } from "./auth";
 import { isJwtExpired } from "./jwt";
 import { sha256Hex } from "./offline-db-utils";
 import { readVerifiedIdentity } from "./offline-identity-db";
@@ -41,7 +41,6 @@ import {
 export const SALES_SYNC_LOCK_PREFIX = "stockmaster-sales-sync:";
 const LEASE_DURATION_MS = 30_000;
 const LEASE_RENEW_MS = 10_000;
-const TOKEN_STORAGE_KEY = "heyama_token";
 
 // Identifiant d'onglet pour le bail de secours (jamais persisté ailleurs).
 const TAB_ID =
@@ -128,7 +127,7 @@ export function onOfflineSalesSyncRequested(listener: () => void): () => void {
 
 export function isAuthTokenStorageKey(key: string | null): boolean {
   // `null` = `localStorage.clear()` dans un autre onglet.
-  return key === null || key === TOKEN_STORAGE_KEY;
+  return key === null || key === TOKEN_KEY;
 }
 
 // ─── Point d'entrée ──────────────────────────────────────────────────────────
