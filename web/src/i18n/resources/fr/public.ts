@@ -37,17 +37,17 @@ const publicFr = {
   },
   preview: {
     analyticsAlt:
-      "Écran Analyse de Stock Master pour une boutique fictive : capital investi 324 500 FCFA, chiffre d'affaires 88 250 FCFA, bénéfice net 18 200 FCFA, marge moyenne 20,6 %, 76 unités vendues en 10 transactions.",
+      "Capture de l'écran Analyse de Stock Master pour la boutique fictive Boutique Démo, mois en cours : montant des ventes 137 500 FCFA (+13,8 % par rapport à la même période du mois précédent), 58 ventes pour 84 unités, gain estimé 28 050 FCFA, puis le graphique des ventes par jour.",
     salesAlt:
-      "Écran Ventes de Stock Master : liste des ventes enregistrées avec le produit, la quantité, le prix, le total et le vendeur, données fictives.",
+      "Capture de l'écran Ventes de Stock Master pour la boutique fictive Boutique Démo : dernières ventes enregistrées, avec produit, vendeur, date, quantité et montant en FCFA.",
     caption:
-      "Captures réelles de l'application, avec une boutique et des ventes fictives.",
+      "Captures réelles de l'application, interface en français · Boutique Démo, produits et ventes fictifs.",
   },
   landing: {
     meta: {
       title: "Stock Master — Stock et ventes de votre commerce, sur téléphone",
       description:
-        "Suivez votre stock, enregistrez vos ventes, travaillez avec vos vendeurs et comprenez votre activité.",
+        "Ventes et stock en temps réel, aide au réapprovisionnement et historique mensuel Excel/PDF. En français et en anglais.",
       price: "{{monthly}} par mois, ou {{best}} pour {{term}}",
       trial: "Essai gratuit de {{days}} jours, puis {{price}}.",
       subscription: "Abonnement de {{price}}.",
@@ -57,7 +57,7 @@ const publicFr = {
     },
     hero: {
       title: "Suivez votre stock et vos ventes depuis votre téléphone",
-      text: "Stock Master remplace le cahier de la boutique. Ajoutez vos produits, enregistrez chaque vente et voyez ce qui reste en rayon et ce que vous gagnez, seul ou avec vos vendeurs.",
+      text: "Une vente de deux savons ? Le stock baisse et vos collègues connectés voient la mise à jour. Stock Master rassemble le catalogue, les ventes et les repères utiles pour tenir votre boutique.",
       trialNote:
         "{{days}} jours d'essai gratuit, aucun paiement requis. Ensuite, à partir de <price>{{price}} par mois</price> avec la formule {{term}}.",
       registrationClosed:
@@ -73,11 +73,11 @@ const publicFr = {
       title: "Tout ce qu'il faut pour tenir la boutique",
       stock: {
         title: "Suivre votre stock",
-        text: "Rangez vos produits par rayon. Chaque vente fait baisser le stock restant, et l'application vous signale les produits en stock faible ou épuisés.",
+        text: "Rangez le riz, l'huile et les savons par rayon. Chaque vente met à jour le stock ; les produits presque épuisés ou en rupture sont signalés selon vos droits.",
       },
       sales: {
         title: "Enregistrer vos ventes",
-        text: "Choisissez le produit, la quantité et le prix, puis validez. Chaque vente garde sa date et le nom du vendeur.",
+        text: "Choisissez le produit, la quantité et le prix réel. La vente garde sa date et le nom du vendeur. Les collègues connectés retrouvent les mises à jour sans recharger la page.",
       },
       team: {
         title: "Travailler avec votre équipe",
@@ -85,32 +85,40 @@ const publicFr = {
       },
       analytics: {
         title: "Comprendre votre activité",
-        text: "La page Analyse calcule votre chiffre d'affaires, votre bénéfice et votre marge, et classe vos produits et vos vendeurs.",
+        text: "L'Analyse montre les produits à surveiller, les meilleures ventes et le gain estimé selon vos droits. Par exemple, repérez l'huile à réapprovisionner au rythme des ventes enregistrées : c'est une aide à la décision, pas une commande automatique ni un bénéfice garanti.",
+      },
+      history: {
+        title: "Garder l'historique du mois",
+        text: "Propriétaire et administrateur : choisissez un mois dans Analyse et téléchargez l'Excel ou le PDF. Retrouvez le bilan, les ventes, les produits, les vendeurs et les corrections, hors ventes encore en attente sur un appareil.",
+      },
+      notifications: {
+        title: "Retrouver les alertes et l'aide",
+        text: "La cloche rassemble les notifications correspondant à vos droits. Besoin d'aide sur une vente ? Le propriétaire, l'administrateur ou un vendeur autorisé peut écrire depuis Organisation → Assistance.",
       },
       alsoIncluded:
-        "Aussi inclus : la corbeille pour récupérer un produit supprimé, le convertisseur euro ↔ franc CFA, le logo et la couleur de votre commerce, et un centre de notifications dans l'application.",
+        "À votre façon : français ou anglais, mode clair ou sombre, logo et couleurs du commerce. Aussi inclus : corbeille et convertisseur euro ↔ franc CFA.",
     },
     offline: {
       title: "Le réseau coupe ? Vous continuez à vendre.",
       steps: {
         open: {
           title: "Ouvrez l'application avec du réseau",
-          text: "Le téléphone garde votre catalogue et votre droit de vendre pendant 72 heures.",
+          text: "Sur le même appareil, compte et commerce, chargez le catalogue avec une session autorisée à vendre. Le catalogue et cette autorisation sont conservés au plus 72 heures ; la session doit rester valide.",
         },
         sell: {
           title: "Vendez même sans connexion",
-          text: "Chaque vente est enregistrée sur l'appareil et marquée « en attente ».",
+          text: "Une vente de savon reste sur cet appareil, marquée « en attente ». Le stock hors ligne est indicatif : il ne voit pas les ventes des collègues.",
         },
         sync: {
           title: "Le réseau revient, les ventes partent",
-          text: "L'envoi est automatique. Le serveur vérifie le stock ; si une vente pose problème, elle vous est signalée pour que vous décidiez.",
+          text: "Avec l'application ouverte et une session valide, l'envoi reprend automatiquement. Le serveur revérifie le stock et les droits ; en cas de refus, consultez Ventes en attente.",
         },
       },
-      note: "Sans réseau, seule la vente est possible. Ajouter des produits, consulter les analyses ou gérer l'équipe demande une connexion. Les ventes en attente restent sur l'appareil jusqu'à 14 jours.",
+      note: "Sans réseau : catalogue déjà chargé et saisie de nouvelles ventes seulement. Produits, analyses, exports et gestion d'équipe demandent une connexion. La file est limitée à 200 ventes non finalisées par compte et commerce sur cet appareil ; après 14 jours, une vente n'est plus envoyée automatiquement. Gardez le même appareil pour la reprise.",
     },
     pricing: {
       title: "Un abonnement, la durée de votre choix",
-      text: "Toutes les fonctionnalités, pour tout le commerce. Le montant indiqué est le total payé pour la durée choisie.",
+      text: "Un tarif pour tout le commerce. Le montant indiqué couvre la durée choisie. Le paiement en ligne n'est pas disponible : pour renouveler, le propriétaire contacte l'assistance.",
       trial: "{{days}} jours d'essai gratuit, sans carte bancaire",
       equivalent:
         "Soit {{monthly}} par mois et {{saving}} d'économie par rapport au paiement mensuel.",
@@ -150,9 +158,9 @@ const publicFr = {
       subscription: {
         question: "Comment fonctionne l'abonnement ?",
         answer:
-          "Le propriétaire choisit une durée de 1, 3, 6 ou 12 mois depuis l'espace Abonnement. Il n'y a aucun prélèvement automatique : chaque renouvellement est volontaire. Le prix couvre tout le commerce, quel que soit le nombre de vendeurs.",
+          "Le propriétaire choisit une durée de 1, 3, 6 ou 12 mois depuis l'espace Abonnement. Le paiement en ligne n'est pas encore disponible ; pour renouveler, il contacte l'assistance. Il n'y a aucun prélèvement automatique : chaque renouvellement est volontaire. Le prix couvre tout le commerce, quel que soit le nombre de vendeurs.",
         answerTrial:
-          "Après les {{days}} jours d'essai, le propriétaire choisit une durée de 1, 3, 6 ou 12 mois depuis l'espace Abonnement. Il n'y a aucun prélèvement automatique : chaque renouvellement est volontaire. Le prix couvre tout le commerce, quel que soit le nombre de vendeurs.",
+          "Après les {{days}} jours d'essai, le propriétaire choisit une durée de 1, 3, 6 ou 12 mois depuis l'espace Abonnement. Le paiement en ligne n'est pas encore disponible ; pour renouveler, il contacte l'assistance. Il n'y a aucun prélèvement automatique : chaque renouvellement est volontaire. Le prix couvre tout le commerce, quel que soit le nombre de vendeurs.",
       },
       privacy: {
         question: "Les autres commerces voient-ils mes données ?",

@@ -1,19 +1,19 @@
 services:
   mongo:
     image: mongo:7
-    container_name: royalvibe-mongo
+    container_name: stockmaster-mongo
     restart: always
     # MongoDB sans port exposé à l'extérieur — accès interne uniquement
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
-      MONGO_INITDB_DATABASE: royalvibe
+      MONGO_INITDB_DATABASE: stockmaster
     volumes:
       - mongo_data:/data/db
 
   minio:
     image: minio/minio:latest
-    container_name: royalvibe-minio
+    container_name: stockmaster-minio
     restart: always
     command: server /data --console-address ":9001"
     # Expose uniquement la console admin, pas l'API S3 (derrière Nginx)
@@ -29,21 +29,21 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
-    container_name: royalvibe-api
+    container_name: stockmaster-api
     restart: always
     depends_on:
       - mongo
       - minio
     environment:
       PORT: 4000
-      MONGODB_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/royalvibe?authSource=admin
+      MONGODB_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/stockmaster?authSource=admin
       JWT_SECRET: ${JWT_SECRET}
       CORS_ORIGIN: ${WEB_URL}
       S3_ENDPOINT: http://minio:9000
       S3_REGION: us-east-1
       S3_ACCESS_KEY: ${MINIO_USER}
       S3_SECRET_KEY: ${MINIO_PASSWORD}
-      S3_BUCKET: royalvibe-objects
+      S3_BUCKET: stockmaster-objects
       S3_FORCE_PATH_STYLE: "true"
       S3_PUBLIC_URL: ${S3_PUBLIC_URL}
       # Origine des liens d'invitation (1-12G, aucun email envoyé) : par
@@ -83,14 +83,14 @@ services:
         NEXT_PUBLIC_API_URL: ${API_URL}
         NEXT_PUBLIC_REGISTRATION_ENABLED: ${NEXT_PUBLIC_REGISTRATION_ENABLED:-false}
         S3_HOSTNAME: ${S3_HOSTNAME:-}
-    container_name: royalvibe-web
+    container_name: stockmaster-web
     restart: always
     depends_on:
       - api
 
   nginx:
     image: nginx:alpine
-    container_name: royalvibe-nginx
+    container_name: stockmaster-nginx
     restart: always
     ports:
       - "80:80"

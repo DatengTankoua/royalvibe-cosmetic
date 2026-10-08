@@ -1,6 +1,6 @@
-# RoyalVibe — Frontend (Next.js)
+# Stock Master — Frontend (Next.js)
 
-Interface utilisateur de l'application **RoyalVibe Cosmétiques & Bijoux**.
+Interface utilisateur de l'application **Stock Master**.
 
 ## Stack
 
@@ -125,8 +125,8 @@ pnpm lint       # ESLint
 
 ```bash
 docker build \
-  --build-arg NEXT_PUBLIC_API_URL=https://api.royalvibe.tondomaine.com \
-  -t royalvibe-web \
+  --build-arg NEXT_PUBLIC_API_URL=https://api.stock-master.app \
+  -t stock-master-web \
   ./web
 ```
 

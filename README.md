@@ -1,7 +1,6 @@
-# RoyalVibe Cosmétiques & Bijoux — Application de gestion
+# Stock Master — Application de gestion
 
-Application collaborative de gestion des ventes pour **RoyalVibe Cosmétiques & Bijoux**.
-Produits achetés en Europe (€) et revendus en Afrique (FCFA/XOF).
+Application collaborative de gestion des ventes et du stock pour **Stock Master**.
 
 ---
 
@@ -82,7 +81,7 @@ Services lancés :
 
 1. Ouvrir [http://localhost:9001](http://localhost:9001)
 2. Se connecter avec `minioadmin` / `minioadmin123`
-3. **Buckets → Create Bucket** → nom : `heyama-objects`
+3. **Buckets → Create Bucket** → nom : `stockmaster-objects`
 4. Aller dans le bucket → **Access Policy** → passer en `public`
 
 > Cette étape est nécessaire pour que les images des produits soient accessibles publiquement.

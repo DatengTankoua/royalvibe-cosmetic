@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   BarChart3Icon,
+  BellRingIcon,
   ChevronDownIcon,
+  FileSpreadsheetIcon,
   PackageIcon,
   ReceiptTextIcon,
   UsersIcon,
@@ -78,6 +80,8 @@ const BENEFITS = [
   { icon: ReceiptTextIcon, key: "sales" },
   { icon: UsersIcon, key: "team" },
   { icon: BarChart3Icon, key: "analytics" },
+  { icon: FileSpreadsheetIcon, key: "history" },
+  { icon: BellRingIcon, key: "notifications" },
 ] as const;
 
 const OFFLINE_STEPS = ["open", "sell", "sync"] as const;

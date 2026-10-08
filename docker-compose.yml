@@ -2,10 +2,10 @@ services:
   mongo:
     image: mongo:7
     # Variables à défaut stable : le smoke test isolé de 0B.7C injecte de
-    # nouvelles valeurs via un projet Compose explicite (-p heyama_phase0b7c_smoke)
+    # nouvelles valeurs via un projet Compose explicite (-p stockmaster_phase0b7c_smoke)
     # pour rester 100 % hermétique (nom de conteneur unique, port hôte distinct).
     # La configuration de DEV réelle est inchangée (défauts ci-dessous).
-    container_name: ${MONGO_SERVICE_CONTAINER_NAME:-heyama-mongo}
+    container_name: ${MONGO_SERVICE_CONTAINER_NAME:-stockmaster-mongo}
     restart: unless-stopped
     # Replica set mono-nœud « rs0 » (phase 0B.7C) : prérequis local des
     # transactions multi-documents (écriture atomique vente–stock–audit, 0B.7B).
@@ -60,7 +60,7 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: heyama-minio
+    container_name: stockmaster-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
     ports:
@@ -76,7 +76,7 @@ services:
     # Variables à défaut stable : le smoke test isolé de 0B.7C injecte de
     # nouvelles valeurs (nom de conteneur unique, port hôte distinct) via un
     # projet Compose explicite. La DEV réelle est inchangée (défauts ci-dessous).
-    container_name: ${MONGO_EXPRESS_CONTAINER_NAME:-heyama-mongo-express}
+    container_name: ${MONGO_EXPRESS_CONTAINER_NAME:-stockmaster-mongo-express}
     restart: unless-stopped
     ports:
       - "${MONGO_EXPRESS_HOST_PORT:-8081}:8081"

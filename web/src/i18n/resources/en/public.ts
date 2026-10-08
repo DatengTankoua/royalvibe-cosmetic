@@ -39,17 +39,17 @@ const publicEn: Translation<typeof publicFr> = {
   },
   preview: {
     analyticsAlt:
-      "Stock Master Analytics screen for a sample shop (screen in French): capital invested 324,500 FCFA, revenue 88,250 FCFA, net profit 18,200 FCFA, average margin 20.6%, 76 units sold in 10 transactions.",
+      "Screenshot of the Stock Master Analytics screen for the sample shop Demo Shop, current month: sales amount 137,500 FCFA (+13.8% versus the same period last month), 58 sales for 84 units, estimated gain 28,050 FCFA, then the sales-per-day chart.",
     salesAlt:
-      "Stock Master Sales screen (in French): list of recorded sales with the product, quantity, price, total and seller, sample data.",
+      "Screenshot of the Stock Master Sales screen for the sample shop Demo Shop: latest recorded sales, with product, seller, date, quantity and amount in FCFA.",
     caption:
-      "Real screenshots of the app (in French), with a sample shop and sample sales.",
+      "Real screenshots of the app, English interface · Demo Shop, sample products and sales.",
   },
   landing: {
     meta: {
       title: "Stock Master — Your shop's stock and sales, on your phone",
       description:
-        "Track your stock, record your sales, work with your sellers and understand your business.",
+        "Real-time sales and stock, restocking guidance and monthly Excel/PDF history. In French and English.",
       price: "{{monthly}} per month, or {{best}} for {{term}}",
       trial: "{{days}}-day free trial, then {{price}}.",
       subscription: "Subscription: {{price}}.",
@@ -59,7 +59,7 @@ const publicEn: Translation<typeof publicFr> = {
     },
     hero: {
       title: "Track your stock and sales from your phone",
-      text: "Stock Master replaces the shop notebook. Add your products, record every sale, and see what is left on the shelves and what you earn, on your own or with your sellers.",
+      text: "Sold two soaps? Stock goes down and connected teammates see the update. Stock Master brings catalogue, sales and clear indicators together to help you run your shop.",
       trialNote:
         "{{days}}-day free trial, no payment required. Then from <price>{{price}} per month</price> with the {{term}} plan.",
       registrationClosed:
@@ -75,11 +75,11 @@ const publicEn: Translation<typeof publicFr> = {
       title: "Everything you need to run the shop",
       stock: {
         title: "Track your stock",
-        text: "Organise your products by section. Each sale lowers the remaining stock, and the app tells you which products are running low or sold out.",
+        text: "Organise rice, oil and soap by section. Each sale updates stock, and low or out-of-stock products are flagged based on your rights.",
       },
       sales: {
         title: "Record your sales",
-        text: "Choose the product, the quantity and the price, then confirm. Each sale keeps its date and the seller's name.",
+        text: "Choose the product, quantity and actual price, then confirm. Every sale keeps its date and the seller's name. Connected teammates see updates without reloading.",
       },
       team: {
         title: "Work with your team",
@@ -87,32 +87,40 @@ const publicEn: Translation<typeof publicFr> = {
       },
       analytics: {
         title: "Understand your business",
-        text: "The Analytics page calculates your revenue, your profit and your margin, and ranks your products and your sellers.",
+        text: "Analytics highlights products to watch, best sellers and estimated gain according to your rights. Example: spot oil to restock from the pace of recorded sales. It helps decisions; it is not automatic ordering or guaranteed profit.",
+      },
+      history: {
+        title: "Keep each month's history",
+        text: "Owner and administrator can choose a month in Analytics and download Excel or PDF. You get the summary, sales, products, sellers and corrections, excluding sales still pending on a device.",
+      },
+      notifications: {
+        title: "See alerts and get support",
+        text: "The bell shows notifications that match your rights. Need help with a sale? The owner, administrator or an authorised seller can write from Organisation → Support.",
       },
       alsoIncluded:
-        "Also included: the trash to recover a deleted product, the euro ↔ CFA franc converter, your shop's logo and colour, and a notification centre in the app.",
+        "Make it yours: French or English, light or dark mode, logo and shop colours. Also included: trash and the euro ↔ CFA franc converter.",
     },
     offline: {
       title: "Network down? You keep selling.",
       steps: {
         open: {
           title: "Open the app while you have network",
-          text: "The phone keeps your catalogue and your right to sell for 72 hours.",
+          text: "On the same device, account and shop, load the catalogue with a session allowed to sell. The catalogue and this capability are kept for up to 72 hours; the session must remain valid.",
         },
         sell: {
           title: "Sell even without a connection",
-          text: "Each sale is saved on the device and marked “pending”.",
+          text: "A soap sale stays on this device, marked “pending”. Offline stock is indicative: it does not include teammates' sales.",
         },
         sync: {
           title: "The network comes back, the sales are sent",
-          text: "Sending is automatic. The server checks the stock; if a sale has a problem, you are told so you can decide.",
+          text: "With the app open and a valid session, sending resumes automatically. The server checks stock and rights again; if a sale is refused, use Pending sales.",
         },
       },
-      note: "Without network, only selling is possible. Adding products, viewing analytics or managing the team needs a connection. Pending sales stay on the device for up to 14 days.",
+      note: "Without network: only already-loaded catalogue and new sale entry. Products, analytics, exports and team management need a connection. The queue is limited to 200 non-finalised sales per account and shop on this device; after 14 days, a sale is no longer sent automatically. Keep the same device for recovery.",
     },
     pricing: {
       title: "One subscription, the length you choose",
-      text: "All features, for the whole shop. The amount shown is the total paid for the chosen length.",
+      text: "One price for the whole shop. The amount shown covers the chosen length. Online payment is not available yet: to renew, the owner contacts support.",
       trial: "{{days}}-day free trial, no bank card",
       equivalent:
         "That is {{monthly}} per month and {{saving}} saved compared with paying monthly.",
@@ -151,9 +159,9 @@ const publicEn: Translation<typeof publicFr> = {
       subscription: {
         question: "How does the subscription work?",
         answer:
-          "The owner chooses a length of 1, 3, 6 or 12 months in the Subscription area. There is no automatic payment: every renewal is voluntary. The price covers the whole shop, whatever the number of sellers.",
+          "The owner chooses a length of 1, 3, 6 or 12 months in the Subscription area. Online payment is not available yet; to renew, the owner contacts support. There is no automatic payment: every renewal is voluntary. The price covers the whole shop, whatever the number of sellers.",
         answerTrial:
-          "After the {{days}}-day trial, the owner chooses a length of 1, 3, 6 or 12 months in the Subscription area. There is no automatic payment: every renewal is voluntary. The price covers the whole shop, whatever the number of sellers.",
+          "After the {{days}}-day trial, the owner chooses a length of 1, 3, 6 or 12 months in the Subscription area. Online payment is not available yet; to renew, the owner contacts support. There is no automatic payment: every renewal is voluntary. The price covers the whole shop, whatever the number of sellers.",
       },
       privacy: {
         question: "Can other shops see my data?",
