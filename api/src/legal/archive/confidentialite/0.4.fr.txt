@@ -1,0 +1,111 @@
+Politique de confidentialité
+Version 0.4, mise à jour le 8 octobre 2026.
+Cette page explique quelles données Stock Master traite, pourquoi, avec qui elles sont partagées, combien de temps elles sont conservées et comment exercer vos droits. Elle distingue les données de votre compte, gérées par Stock Master, et les données que votre commerce enregistre dans l'application, traitées pour son compte.
+1. Qui est responsable de vos données
+Les données de votre compte
+Pour les comptes, les abonnements, les notifications et la sécurité du service, le responsable du traitement est l'exploitant de Stock Master : Stock Master, entreprise établie au Cameroun (implantations : Bijou Maképé, Douala, Cameroun ; Carrefour GP Melen, après l'ancien commissariat du 13e, Yaoundé, Cameroun).
+Les données saisies par un commerce
+Pour les produits, le stock, les ventes, les photos et les informations sur les acheteurs qu'un commerce enregistre, c'est le commerce qui décide de leur usage : il en est responsable. Stock Master les traite pour son compte, en sous-traitant, selon l'accord de traitement des données.
+Contact pour vos données
+confidentialite@stock-master.app.
+2. Les données traitées
+Compte et connexion
+- nom, adresse e-mail, date de confirmation de l'adresse ;
+- mot de passe, conservé uniquement sous forme hachée (jamais en clair) ;
+- liens de confirmation et de réinitialisation, conservés sous forme hachée, avec leurs dates d'envoi et d'expiration et le nombre d'envois récents ;
+- langue choisie (français ou anglais), utilisée pour l'application et pour les e-mails et notifications qui vous sont envoyés.
+Acceptation des conditions
+- identifiant de votre compte et, s'il y a lieu, du commerce concerné ;
+- date et heure de l'acceptation, fixées par le serveur ;
+- langue, versions et empreintes numériques des textes acceptés et de cette politique telle qu'elle vous a été présentée.
+Lire cette politique ne vaut pas accord : elle vous informe. Aucune autorisation facultative (par exemple pour des messages commerciaux) n'est demandée à l'inscription, et l'activation des notifications sur un appareil reste un choix séparé.
+Commerce et membres
+- nom du commerce, logo, couleur, devise, état ;
+- pour chaque membre : rôle, droits, état de l'accès, auteur de l'invitation, date d'arrivée ;
+- invitations : adresse e-mail invitée, rôle et droits proposés, état, date d'expiration.
+Abonnement
+- périodes d'essai et d'abonnement : durée, dates, origine ;
+- montant, durée choisie, références de l'opération, état, et numéro de téléphone du payeur sous forme masquée.
+Notifications
+- notifications de l'application : type, date, lecture ;
+- vos choix de catégories de notifications, par commerce ;
+- si vous activez les notifications sur un appareil : l'adresse technique et les clés fournies par le navigateur pour cet appareil.
+Demandes d'assistance
+- depuis Organisation, puis Assistance : catégorie, sujet et message que vous écrivez ;
+- joints automatiquement par le serveur : votre nom et votre adresse e-mail, le nom et l'identifiant du commerce, votre rôle et vos droits, les identifiants de votre compte et de votre appartenance, la date, une référence de demande et, si elle est connue, la page de l'application concernée. Aucune vente, aucun contact d'acheteur, aucun fichier, mot de passe ni jeton n'est joint.
+Données saisies par le commerce
+- catégories, produits, prix, quantités, photos ;
+- ventes : produit, quantité, prix, date, membre qui l'a enregistrée et, si le commerce les saisit, nom et contact de l'acheteur ;
+- historique des actions (qui a modifié quoi et quand) et bilans mensuels calculés.
+Données techniques
+- adresse IP : utilisée pour limiter les tentatives de connexion répétées. Ces compteurs sont gardés en mémoire et disparaissent au redémarrage du serveur ;
+Ce que l'application garde sur votre appareil est décrit sur la page Cookies et stockage sur l'appareil.
+3. Pourquoi ces données sont traitées
+La loi n° 2024/017 fait du consentement préalable, libre, éclairé et spécifique la règle (art. 9). Elle prévoit des exceptions, notamment le respect d'une obligation légale. Chaque usage ci-dessous a donc son propre fondement : aucun accord global ne couvre tous les usages.
+Finalités et fondements
+Usage | Fondement envisagé
+Créer et gérer votre compte, vous connecter, envoyer les e-mails de confirmation et de réinitialisation | Votre consentement
+Conserver la preuve de votre acceptation des conditions | Obligation légale : la preuve de l'information et de l'acceptation incombe au prestataire (loi n° 2010/021, art. 26 ; décret n° 2011/1521/PM, art. 12).
+Faire fonctionner le commerce : membres, droits, catalogue, ventes, analyses | Traitement pour le compte du commerce, sur ses instructions (accord de traitement)
+Gérer l'essai et l'abonnement, conserver la preuve des opérations | Consentement du propriétaire ; obligation légale de conserver certaines opérations (décret n° 2011/1521/PM, art. 8 et 22).
+Sécuriser le service : limiter les abus, tracer les actions sur les données | Obligation légale de sécurité (loi n° 2024/017, art. 27).
+Répondre à vos demandes d'assistance | Votre consentement : vous choisissez d'écrire au service client
+Vous prévenir sur votre appareil (notifications push) | Votre consentement spécifique : activation par vous et autorisation du navigateur. Il se retire à tout moment.
+Stock Master n'envoie pas de prospection commerciale, ne vend pas vos données et n'affiche pas de publicité. Les analyses (chiffre d'affaires, classements de produits et de vendeurs) sont des calculs faits à partir des ventes, pour le commerce qui les consulte.
+4. Qui peut voir les données
+- Les membres de votre commerce, selon les droits que le commerce leur a donnés. Un vendeur sans droit supplémentaire ne voit que ses propres ventes.
+- Les prestataires techniques qui hébergent le service ou envoient ses e-mails, uniquement pour ce service (liste ci-dessous).
+- Le service de notification du navigateur (par exemple celui de Google, Mozilla ou Apple), si vous activez les notifications sur un appareil : il achemine le message vers cet appareil.
+- Le service client de Stock Master, pour vos demandes d'assistance : le message est envoyé par Resend à l'adresse support@stock-master.app. Sa réponse vous parvient à l'adresse e-mail de votre compte.
+- Une autorité, lorsque la loi l'exige.
+Prestataires techniques
+Prestataire | Rôle
+Vercel | Hébergement de l'application web
+Railway | Hébergement de l'API (serveur)
+MongoDB Atlas | Base de données
+Supabase Storage | Stockage des images (logos, photos de produits)
+Resend | Envoi des e-mails (confirmation, réinitialisation)
+5. Données hébergées hors du Cameroun
+Les prestataires listés ci-dessus sont des entreprises étrangères. Vos données peuvent donc être hébergées ou transmises hors du Cameroun. Les pays concernés seront indiqués dès qu'ils auront été vérifiés.
+La loi n° 2024/017 soumet tout transfert de données vers un État étranger à l'autorisation préalable de l'Autorité de protection des données à caractère personnel (art. 32).
+6. Combien de temps les données sont gardées
+Durées de conservation
+Données | Durée
+Lien de confirmation d'adresse e-mail | Valable 24 heures
+Lien de réinitialisation du mot de passe | Valable 1 heure
+Lien d'invitation | Valable 72 heures ; l'invitation reste ensuite dans l'historique du commerce.
+Connexion sur un appareil | 7 jours au plus, ou jusqu'à la déconnexion
+Registre d'une demande d'assistance (référence, contexte joint, état de l'envoi ; ni le sujet ni le message) | Expire 30 jours après la demande. Il est ensuite effacé par un nettoyage automatique de la base, qui s'exécute en arrière-plan et peut intervenir un peu plus tard. Le message reçu par le service client est conservé séparément, dans sa messagerie (ligne suivante).
+Message d'assistance reçu par le service client | Conservé dans la messagerie du service client
+Notifications lues | Supprimées de 48 heures à 30 jours après la lecture, selon leur type
+Notifications sur un appareil | Jusqu'à leur désactivation. Un appareil devenu injoignable est désactivé automatiquement.
+Compte | Tant que le compte existe.
+Preuve d'acceptation des conditions et textes acceptés | Conservés tant que le compte existe. Rien n'est supprimé automatiquement aujourd'hui.
+Données du commerce, ventes et historique des actions | Tant que le commerce utilise le service. Rien n'est supprimé automatiquement aujourd'hui.
+Opérations d'abonnement d'au moins 20 000 FCFA | 10 ans, durée prévue par le décret n° 2011/1521/PM (art. 8).
+La loi n° 2024/017 prévoit que les durées maximales soient fixées par un référentiel de l'Autorité (art. 13 et 28). Elles seront ajustées lorsque ce référentiel sera publié.
+7. Comment les données sont protégées
+- mots de passe et liens sensibles enregistrés sous forme hachée ;
+- liens de confirmation, de réinitialisation et d'invitation à durée limitée ;
+- données de chaque commerce séparées : chaque demande est vérifiée par le serveur pour le commerce et les droits du membre ;
+- limitation des tentatives de connexion répétées ;
+- sur l'appareil, données hors connexion effacées à la déconnexion (sauf les ventes pas encore envoyées).
+8. En cas d'incident
+Si une violation de données est constatée, la loi n° 2024/017 impose d'en informer sans délai l'Autorité et les personnes concernées (art. 22).
+9. Vos droits
+La loi n° 2024/017 vous permet notamment de demander :
+- l'accès à vos données et une copie (art. 39) ;
+- la correction de données inexactes ou incomplètes (art. 42) ;
+- l'effacement de vos données ou l'arrêt de leur diffusion (art. 37 et 38) ;
+- la limitation du traitement si l'exactitude ou l'usage est contesté (art. 46) ;
+- de vous opposer à un traitement, dans les cas prévus par la loi (art. 40) ;
+- la récupération des données que vous avez fournies, dans un format lisible par machine (art. 43) ;
+- de donner des directives pour vos données après votre décès (art. 21 et 45).
+Pour exercer ces droits, écrivez à confidentialite@stock-master.app depuis l'adresse de votre compte. La loi demande de pouvoir justifier de votre identité (art. 42) : il peut vous être demandé de confirmer votre demande depuis cette adresse.
+L'application ne propose pas encore de bouton pour télécharger vos données ou supprimer votre compte : ces demandes sont traitées par e-mail.
+Pour des données qu'un commerce a enregistrées sur vous, par exemple comme acheteur, adressez-vous d'abord à ce commerce. Stock Master l'aide à vous répondre.
+Vous pouvez aussi saisir l'Autorité de protection des données à caractère personnel (art. 53).
+10. Mineurs
+Stock Master s'adresse aux commerces. Selon la loi n° 2024/017, le consentement d'une personne de moins de 18 ans n'est valable qu'avec celui de ses parents ou de son représentant légal (art. 9).
+11. Modifications de cette politique
+Chaque version est datée en haut de la page.

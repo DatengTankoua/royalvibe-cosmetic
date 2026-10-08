@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { ArrowLeftRightIcon } from "lucide-react";
-import { EUR_TO_XOF, fmtEur, fmtXof } from "@/lib/currency";
+import { useT } from "next-i18next/client";
+import { EUR_TO_XOF } from "@/lib/currency";
+import { useFormat } from "@/i18n/use-format";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +23,8 @@ export function CurrencyConverter({
   open,
   onOpenChange,
 }: CurrencyConverterProps) {
+  const { t } = useT("common");
+  const format = useFormat();
   const [eur, setEur] = useState("");
   const [xof, setXof] = useState("");
 
@@ -45,14 +49,14 @@ export function CurrencyConverter({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ArrowLeftRightIcon className="h-4 w-4" />
-            Convertisseur EUR ↔ Franc CFA
+            {t("converter.title")}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 mt-2">
           {/* EUR → XOF */}
           <div className="space-y-2">
-            <Label htmlFor="eur-input">Euro (€)</Label>
+            <Label htmlFor="eur-input">{t("converter.euro")}</Label>
             <Input
               id="eur-input"
               type="number"
@@ -66,7 +70,7 @@ export function CurrencyConverter({
               <p className="text-sm text-muted-foreground">
                 ={" "}
                 <span className="font-semibold text-foreground">
-                  {fmtXof(eurVal * EUR_TO_XOF)}
+                  {format.fcfa(eurVal * EUR_TO_XOF)}
                 </span>
               </p>
             )}
@@ -80,7 +84,7 @@ export function CurrencyConverter({
 
           {/* XOF → EUR */}
           <div className="space-y-2">
-            <Label htmlFor="xof-input">Franc CFA (FCFA)</Label>
+            <Label htmlFor="xof-input">{t("converter.cfa")}</Label>
             <Input
               id="xof-input"
               type="number"
@@ -94,16 +98,16 @@ export function CurrencyConverter({
               <p className="text-sm text-muted-foreground">
                 ={" "}
                 <span className="font-semibold text-foreground">
-                  {fmtEur(xofVal / EUR_TO_XOF)}
+                  {format.eur(xofVal / EUR_TO_XOF)}
                 </span>
               </p>
             )}
           </div>
 
           <p className="text-xs text-muted-foreground border-t pt-3">
-            Taux fixe officiel : 1 EUR = {EUR_TO_XOF.toFixed(3)} FCFA
+            {t("converter.rate", { rate: EUR_TO_XOF.toFixed(3) })}
             <br />
-            (Parité fixe FCFA zone UEMOA / Banque de France)
+            {t("converter.parity")}
           </p>
         </div>
       </DialogContent>

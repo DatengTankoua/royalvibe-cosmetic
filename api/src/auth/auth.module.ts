@@ -1,19 +1,47 @@
+import { LegalModule } from '../legal/legal.module';
 import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
+import {
+  AUTH_THROTTLER_WINDOWS,
+  AuthThrottlerGuard,
+} from '../common/auth-rate-limiting';
+import { createInvitationThrottlerWindow } from '../common/invitation-rate-limiting';
+import { createSupportThrottlerWindow } from '../support/support-rate-limiting';
+import { createPaymentThrottlerWindows } from '../common/subscription-payment-rate-limiting';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { OrganizationGuard } from './guards/organization.guard';
+import { PermissionGuard } from './guards/permission.guard';
+import { SubscriptionAccessGuard } from './guards/subscription-access.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { UsersModule } from '../users/users.module';
+import { OrganizationsModule } from '../organizations/organizations.module';
+import { EmailVerificationModule } from '../email-verification/email-verification.module';
+import { PasswordResetModule } from '../password-reset/password-reset.module';
+import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 
 @Module({
   imports: [
     UsersModule,
+    OrganizationsModule,
+    // 1-13A : vérification des emails (service + expéditeur substituable).
+    EmailVerificationModule,
+    // 1-13B : réinitialisation du mot de passe.
+    PasswordResetModule,
+    // 1-14C.1 : contrôle commercial (garde globale + jetons limités).
+    SubscriptionsModule,
+    // 1-16C.2 : preuve d'acceptation dans la transaction d'inscription.
+    LegalModule,
     PassportModule,
+    // Instance du JwtModule (secret `JWT_SECRET`, `signOptions.expiresIn: '7d'`)
+    // — MÊME configuration que l'auth HTTP : le handshake Socket.IO (0B.3)
+    // vérifie les tokens avec cette instance exacte.
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -22,14 +50,61 @@ import { UsersModule } from '../users/users.module';
         signOptions: { expiresIn: '7d' },
       }),
     }),
+    // Rate limiting (0B.6 + 1-10B) : stockage mémoire officiel de
+    // `@nestjs/throttler` (module global => ses tokens résident en tous
+    // modules) — UNIQUE `forRoot()` du projet, jamais un second (créerait
+    // une seconde instance de stockage ambiguë pour un module `@Global()`).
+    // La fenêtre `invitation-create` (1-10B, `POST /organizations/invitations`)
+    // est fusionnée ICI ; `AuthController` s'en exclut explicitement
+    // (`@SkipThrottle`) puisque `AuthThrottlerGuard` (tracker IP) ne doit
+    // jamais évaluer une fenêtre conçue pour un tracker utilisateur+organisation.
+    ThrottlerModule.forRoot({
+      setHeaders: false,
+      throttlers: [
+        ...AUTH_THROTTLER_WINDOWS,
+        createInvitationThrottlerWindow(),
+        // 1-14D.2B : paiements d'abonnement (tracker utilisateur+organisation).
+        ...createPaymentThrottlerWindows(),
+        // 1-16C.1 : demandes d'assistance (tracker utilisateur+organisation).
+        createSupportThrottlerWindow(),
+      ],
+    }),
   ],
   providers: [
     AuthService,
     JwtStrategy,
+    AuthThrottlerGuard,
+    // Ordre global FIXÉ (NestJS exécute dans l'ordre du tableau) :
+    // 1. JwtAuthGuard → 401 si absent/invalide / laisse passer si @Public()
+    // 2. OrganizationGuard → 403 uniforme si membership/organisation inactive
+    //    ; brancher `request.organizationContext` (jamais de mutation sur
+    //    `request.user`).
+    // 2bis. SubscriptionAccessGuard (1-14C.1) → refus PAR DÉFAUT si le JWT
+    //    est limité (403 `SUBSCRIPTION_ACCESS_LIMITED`) ou si l'abonnement
+    //    n'est pas actif (403 `SUBSCRIPTION_INACTIVE`) ; exceptions explicites
+    //    par handler (`@AllowInactiveSubscription`). Après OrganizationGuard :
+    //    suspension et révocation restent prioritaires.
+    // 3. PermissionGuard (1-7A) → 403 `PERMISSION_DENIED` si les permissions
+    //    effectives (rôle ∪ `context.permissions`) ou l'exclusivité owner
+    //    ne sont pas satisfaites ; lit UNIQUEMENT `organizationContext`.
+    // 4. RolesGuard → contrôle du rôle `User.role` du document chargé.
+    // L'ordre est contractuel : les tests E2E / unitaires l'assertent.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: OrganizationGuard },
+    { provide: APP_GUARD, useClass: SubscriptionAccessGuard },
+    { provide: APP_GUARD, useClass: PermissionGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
   controllers: [AuthController],
-  exports: [AuthService],
+  // `JwtModule` (classe, pas l'objet dynamique de registerAsync) : NestJS
+  // autorise l'export d'un module importé quand on exporte sa CLASSE de
+  // metatype (validateExportedProvider, @nestjs/core 11.1.28) — c'est cette
+  // classe qui est stockée comme metatype de l'import dynamique, exactement
+  // comme pour `forRoot()` (d'où `exports: [ConfigModule]` après un
+  // forRoot). L'export de la classe rend `JwtService` transitive aux
+  // importateurs de `AuthModule` (EventsModule → Gateway Socket.IO) ;
+  // exporter `JwtService` lui-même lèverait `UnknownExportException`, car ce
+  // n'est pas un provider local de ce module.
+  exports: [AuthService, JwtModule],
 })
 export class AuthModule {}

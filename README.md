@@ -1,7 +1,6 @@
-# RoyalVibe Cosmétiques & Bijoux — Application de gestion
+# Stock Master — Application de gestion
 
-Application collaborative de gestion des ventes pour **RoyalVibe Cosmétiques & Bijoux**.
-Produits achetés en Europe (€) et revendus en Afrique (FCFA/XOF).
+Application collaborative de gestion des ventes et du stock pour **Stock Master**.
 
 ---
 
@@ -82,7 +81,7 @@ Services lancés :
 
 1. Ouvrir [http://localhost:9001](http://localhost:9001)
 2. Se connecter avec `minioadmin` / `minioadmin123`
-3. **Buckets → Create Bucket** → nom : `heyama-objects`
+3. **Buckets → Create Bucket** → nom : `stockmaster-objects`
 4. Aller dans le bucket → **Access Policy** → passer en `public`
 
 > Cette étape est nécessaire pour que les images des produits soient accessibles publiquement.
@@ -231,12 +230,149 @@ S3_ACCESS_KEY=<supabase-access-key>
 S3_SECRET_KEY=<supabase-secret-key>
 S3_BUCKET=<supabase-bucket-name>
 S3_PUBLIC_URL=<supabase-public-url>
+TZ=Africa/Douala
 ```
+
+`TZ` (1-16D) fixe le calendrier des mois : bornes de l'Analyse, de
+l'historique mensuel exportable et du bilan mensuel. Au lancement au
+Cameroun : `Africa/Douala` (UTC+1, sans heure d'été). Sans `TZ`, le fuseau du
+conteneur s'applique (UTC sur `node:22-alpine`). Un nom inconnu bloque le
+démarrage de l'API (sinon Node basculerait silencieusement en UTC) ; le
+fuseau effectif est journalisé au démarrage (« Fuseau des bornes
+mensuelles »). Changer `TZ` ne modifie aucune date enregistrée (toutes en
+UTC) : seul le rattachement d'une vente proche de minuit à un mois change.
+À définir dans Railway **avant** l'ouverture (configuration Railway actuelle
+non consultée par le lot 1-16D).
 
 **Vercel (Web)** :
 ```env
 NEXT_PUBLIC_API_URL=https://<votre-service>.railway.app
 ```
+
+### Migrations à exécuter avant l'activation d'une version
+
+**Règle : une migration requise par une version s'exécute AVANT que cette
+version de l'API ne reçoive du trafic.** Railway et Vercel déploient
+automatiquement à chaque push sur `main` : sans précaution, la nouvelle API
+peut démarrer avant ses index. Deux façons de garantir l'ordre :
+
+1. **Recommandé : la « Pre-deploy Command » de Railway** (service API,
+   Settings → Deploy). Elle s'exécute après la construction de l'image et
+   **avant** le démarrage du nouveau déploiement, avec les variables du
+   service (donc `MONGODB_URI`). Si elle sort avec un code non nul, elle
+   n'est pas relancée et **le déploiement ne se poursuit pas** : la version
+   en service reste active. Elle s'exécute à chaque déploiement ; toutes les
+   migrations sont idempotentes (sans effet si l'index exact existe).
+   Source : documentation Railway « Pre-deploy Command » et « Config as
+   code » (`deploy.preDeployCommand`), consultée le 7 octobre 2026.
+2. À défaut, depuis un poste ou un job contrôlé, **avant la fusion sur
+   `main`**, avec l'URI de la base de production (jamais commitée).
+
+#### Commande exacte depuis l'image de production
+
+L'image `api/Dockerfile` ne contient **pas** pnpm (étape `runtime`) : les
+scripts `pnpm --filter api migrate:*` n'y fonctionnent pas. Les programmes
+compilés sont dans `/app/api/dist/migrations/` (dossier de travail de
+l'image : `/app/api`), avec les seules dépendances de production. Les chemins
+absolus ci-dessous fonctionnent quel que soit le dossier de lancement.
+
+Pre-deploy Command (une seule commande, sans shell) :
+
+```
+node /app/api/dist/migrations/predeploy-migrations.js
+```
+
+Elle lance dans l'ordre, et s'arrête au premier échec :
+
+| Migration | Depuis | Pourquoi elle est requise |
+|---|---|---|
+| `create-sale-operations-index.js` | 1-11C.1 | Vérifiée au démarrage en production : sans elle, l'API ne démarre pas |
+| `create-subscription-period-indexes.js` | 1-14B | Idem |
+| `create-subscription-payment-indexes.js` | 1-14D.2B | Idem |
+| `create-subscription-payment-reconciliation-indexes.js` | 1-14D.2G | Requise par le CLI de rapprochement (`--apply`) |
+| `create-push-notification-indexes.js` | 1-16A | Vérifiée au démarrage en production, même avec `WEB_PUSH_ENABLED=false` |
+| `create-support-request-indexes.js` | 1-16C.1 | Index TTL `createdAt_1_ttl` (`expireAfterSeconds = 2592000`, 30 jours) du registre `support_requests`. Non bloquante au démarrage : sans elle, l'assistance fonctionne mais le registre n'expire jamais |
+| `create-legal-acceptance-indexes.js` | 1-16C.2 | Collections `legal_acceptances` et `legal_document_versions`, index `{ userId, acceptedAt }`. Non bloquante au démarrage |
+
+**Échec partiel :** chaque migration s'exécute à part et s'arrête au premier
+échec. Les index déjà créés par les étapes précédentes **restent en place**
+(rien n'est annulé, aucun index ni aucune donnée n'est supprimé
+automatiquement). Ces index sont compatibles avec la version en service ; il
+suffit de corriger la cause puis de relancer, les étapes déjà faites étant
+sans effet.
+
+Pour la seule migration de l'assistance :
+`node /app/api/dist/migrations/create-support-request-indexes.js`.
+Chaque migration échoue sans rien écraser si un index homonyme a une autre
+configuration, ou si des doublons empêchent un index unique : le
+déploiement est alors interrompu, à analyser avant de recommencer. Les outils
+opérateur (`subscription:grant`, rapprochement, rattrapage d'historique) ne
+sont **jamais** lancés par le pré-déploiement.
+
+Réglages conseillés dans Railway :
+
+- **Pre-deploy Timeout** : une valeur explicite (par exemple 300 secondes ;
+  sans réglage, aucune limite) pour qu'une connexion bloquée fasse échouer
+  le déploiement au lieu de le suspendre ;
+- si l'accès réseau d'Atlas est limité par adresse IP, vérifier que le
+  pré-déploiement y a accès comme l'API.
+
+**Limites, à vérifier dans le tableau de bord Railway** (configuration non
+présente dans le dépôt : ni `railway.json` ni `railway.toml`). La commande
+dépend du constructeur et des chemins réels de l'image ; elle a été testée
+avec les seules dépendances de production installées depuis le lockfile, mais
+**ni l'image Docker ni Railway n'ont été vérifiés** (rapport 1-16C.2). Ces
+chemins supposent que le service est construit avec `api/Dockerfile` et la racine du
+dépôt comme contexte (`RAILWAY_DOCKERFILE_PATH=api/Dockerfile`, ou
+équivalent). Avec un autre constructeur (Railpack), le dossier de l'image
+diffère : depuis le dossier `api` du service, utiliser
+`node dist/migrations/predeploy-migrations.js`.
+
+#### Vérification en lecture seule
+
+Sans aucune création ni lecture de données (liste des index uniquement ;
+sortie 1 si l'index est absent ou différent) :
+
+```
+node /app/api/dist/migrations/create-support-request-indexes.js --check
+# Attendu : « support_requests : index createdAt_1_ttl présent, createdAt,
+#            expireAfterSeconds=2592000 (lecture seule). »
+node /app/api/dist/migrations/create-legal-acceptance-indexes.js --check
+```
+
+Équivalent `mongosh`, en lecture seule :
+`db.support_requests.getIndexes()` doit contenir
+`{ key: { createdAt: 1 }, name: "createdAt_1_ttl", expireAfterSeconds: 2592000 }`.
+
+#### Depuis un poste (dépôt cloné)
+
+```bash
+pnpm --filter api build
+MONGODB_URI=<uri-atlas> pnpm --filter api migrate:predeploy
+MONGODB_URI=<uri-atlas> node api/dist/migrations/create-support-request-indexes.js --check
+```
+
+Les autres migrations du dépôt (`migrate:*` dans `api/package.json`) sont
+décrites dans les rapports de leurs lots (`docs/architecture/`).
+
+### Documents juridiques versionnés (1-16C.2)
+
+Les conditions d'utilisation, les conditions d'abonnement et la politique de
+confidentialité sont acceptées (ou présentées) à l'inscription et à la
+création d'un compte par invitation. Leur texte affiché est archivé dans
+`api/src/legal/archive/` avec son empreinte. **Toute modification du texte
+affiché** (y compris un prix ou une coordonnée rendus dans ces pages) exige
+une nouvelle version dans `web/src/lib/legal/site-identity.ts`, puis :
+
+```bash
+node api/test/recipe/recipe.js isolated web-build --legal-archive=write --published-at=AAAA-MM-JJ
+```
+
+Le build vérifié (`isolated web-build`, et l'étape de la CI web) échoue tant
+que le texte affiché diffère de l'archive de sa version. Une version archivée
+n'est jamais réécrite. L'invite des comptes existants dans l'application
+reste désactivée tant que `LEGAL_ACCEPTANCE_PROMPT_ENABLED` n'est pas
+exactement `true` (variable du service API).
 
 ## CI/CD et rollback
 

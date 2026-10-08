@@ -1,6 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
+import { useT } from "next-i18next/client";
+import { useFormat } from "@/i18n/use-format";
+import { rich } from "@/i18n/rich";
 import Link from "next/link";
 import Image from "next/image";
 import {
@@ -23,54 +26,68 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { fmtXof } from "@/lib/currency";
+import { useIndicativeStock } from "@/contexts/offline-sales-context";
 import type { ApiProduct } from "@/lib/api";
+import { productInfoItems, type ProductInfoKey } from "@/lib/product-info";
 
+// 1-16G : libellés dans `catalog` (`status.*`).
 const STATUS_CONFIG = {
-  in_stock: {
-    label: "En stock",
-    icon: BadgeCheckIcon,
-    variant: "default" as const,
-  },
-  low_stock: {
-    label: "Stock faible",
-    icon: AlertTriangleIcon,
-    variant: "secondary" as const,
-  },
-  out_of_stock: {
-    label: "Épuisé",
-    icon: XCircleIcon,
-    variant: "destructive" as const,
-  },
+  in_stock: { icon: BadgeCheckIcon, variant: "default" as const },
+  low_stock: { icon: AlertTriangleIcon, variant: "secondary" as const },
+  out_of_stock: { icon: XCircleIcon, variant: "destructive" as const },
 };
 
-const fmt = fmtXof;
+// 1-12H : sous-ensemble compact de la fiche, même source de calcul ; seuls
+// les champs présents dans la réponse projetée sont rendus.
+const CARD_KEYS: readonly ProductInfoKey[] = [
+  "salePrice",
+  "stock",
+  "initialQuantity",
+  "unitsSold",
+  "purchasePrice",
+  "actualProfit",
+];
 
 interface ProductCardProps {
   product: ApiProduct;
-  isAdmin: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
   priority?: boolean;
+  // Début de la requête serveur ayant fourni `product` (1-11C.3).
+  serverLoadedAt?: number;
   onDelete: (id: string) => void;
   onEdit: (product: ApiProduct) => void;
 }
 
 export function ProductCard({
   product,
-  isAdmin,
+  canEdit,
+  canDelete,
   priority = false,
+  serverLoadedAt,
   onDelete,
   onEdit,
 }: ProductCardProps) {
-  const cfg = STATUS_CONFIG[product.status] ?? STATUS_CONFIG.in_stock;
+  const { t } = useT("catalog");
+  const { fcfa } = useFormat();
+  const status = STATUS_CONFIG[product.status] ? product.status : "in_stock";
+  const cfg = STATUS_CONFIG[status];
   const StatusIcon = cfg.icon;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmEdit, setConfirmEdit] = useState(false);
+  // 1-11C.3 : stock serveur moins ventes locales non confirmées (≥ 0).
+  const indicative = useIndicativeStock(
+    product._id,
+    product.remainingQuantity,
+    serverLoadedAt,
+  );
 
   return (
     <>
       <Card className="overflow-hidden hover:shadow-md transition-shadow">
         <Link
-          href={`/products/${product._id}`}
+          prefetch={false}
+          href={`/app/catalog/products/${product._id}`}
           className="relative block aspect-video overflow-hidden bg-muted"
         >
           <Image
@@ -88,7 +105,8 @@ export function ProductCard({
           <div className="flex items-start justify-between gap-2">
             <CardTitle className="text-sm leading-tight">
               <Link
-                href={`/products/${product._id}`}
+                prefetch={false}
+                href={`/app/catalog/products/${product._id}`}
                 className="hover:underline"
               >
                 {product.name}
@@ -96,54 +114,57 @@ export function ProductCard({
             </CardTitle>
             <Badge variant={cfg.variant} className="shrink-0 text-xs">
               <StatusIcon className="mr-1 h-3 w-3" />
-              {cfg.label}
+              {t(`status.${status}`)}
             </Badge>
           </div>
         </CardHeader>
 
         <CardContent className="space-y-2 text-sm">
           <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
-            <span className="text-muted-foreground">Achat unitaire</span>
-            <span className="text-right font-medium">
-              {fmt(product.purchasePrice)}
-            </span>
-            <span className="text-muted-foreground">Vente unitaire</span>
-            <span className="text-right font-medium">
-              {fmt(product.salePrice)}
-            </span>
-            <span className="text-muted-foreground">Stock restant</span>
-            <span className="text-right">
-              {product.remainingQuantity} / {product.initialQuantity}
-            </span>
-            <span className="text-muted-foreground">Vendus</span>
-            <span className="text-right">{product.unitsSold ?? 0}</span>
-            <span className="text-muted-foreground">Bénéfice estimé</span>
-            <span
-              className={`text-right font-semibold ${product.estimatedProfit >= 0 ? "text-green-600" : "text-red-600"}`}
-            >
-              {fmt(product.estimatedProfit)}
-            </span>
+            {productInfoItems(product, indicative, { t, fcfa })
+              .filter((item) => CARD_KEYS.includes(item.key))
+              .map((item) => (
+                <Fragment key={item.key}>
+                  <span className="text-muted-foreground">{item.label}</span>
+                  <span
+                    className={`text-right font-medium ${
+                      item.tone === "positive"
+                        ? "text-green-700 dark:text-green-400"
+                        : item.tone === "negative"
+                          ? "text-red-600 dark:text-red-400"
+                          : ""
+                    }`}
+                  >
+                    {item.value}
+                  </span>
+                </Fragment>
+              ))}
           </div>
 
-          {isAdmin && (
+          {(canEdit || canDelete) && (
             <div className="flex gap-2 pt-1">
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex-1"
-                onClick={() => setConfirmEdit(true)}
-              >
-                <PencilIcon className="h-3 w-3 mr-1" />
-                Modifier
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-destructive hover:text-destructive"
-                onClick={() => setConfirmDelete(true)}
-              >
-                <Trash2Icon className="h-4 w-4" />
-              </Button>
+              {canEdit && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => setConfirmEdit(true)}
+                >
+                  <PencilIcon className="h-3 w-3 mr-1" />
+                  {t("product.edit")}
+                </Button>
+              )}
+              {canDelete && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive hover:text-destructive"
+                  onClick={() => setConfirmDelete(true)}
+                  aria-label={t("product.trashAction")}
+                >
+                  <Trash2Icon className="h-4 w-4" />
+                </Button>
+              )}
             </div>
           )}
         </CardContent>
@@ -153,22 +174,20 @@ export function ProductCard({
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              Placer ce produit dans la corbeille ?
-            </AlertDialogTitle>
+            <AlertDialogTitle>{t("product.trashTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Tu es sur le point de placer <strong>{product.name}</strong> dans
-              la corbeille. Tu peux restaurer ou supprimer définitivement ce
-              produit depuis la corbeille.
+              {rich(t("product.trashText"), {
+                name: () => <strong>{product.name}</strong>,
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => onDelete(product._id)}
             >
-              Placer dans la corbeille
+              {t("product.trashAction")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -178,21 +197,22 @@ export function ProductCard({
       <AlertDialog open={confirmEdit} onOpenChange={setConfirmEdit}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Modifier ce produit ?</AlertDialogTitle>
+            <AlertDialogTitle>{t("product.editTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Tu vas modifier <strong>{product.name}</strong>. Les changements
-              de prix affecteront les calculs de bénéfice futurs.
+              {rich(t("product.editText"), {
+                name: () => <strong>{product.name}</strong>,
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
                 setConfirmEdit(false);
                 onEdit(product);
               }}
             >
-              Continuer
+              {t("actions.continue")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

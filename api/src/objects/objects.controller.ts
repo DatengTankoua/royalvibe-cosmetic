@@ -9,13 +9,17 @@ import {
   UseInterceptors,
   BadRequestException,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+// 1-12D : FileInterceptor + limites multipart durcies (GHSA-535w).
+import { SafeFileInterceptor } from '../common/upload/safe-file-interceptor';
 import { ObjectsService } from './objects.service';
 import { S3Service } from '../s3/s3.service';
 import { CreateObjectDto } from './dto/create-object.dto';
 import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
 
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+// Dette 1-5B : module orphelin (jamais importé dans AppModule), sans org.
+// Préfixe fixe uniquement pour rester compilable contre la signature S3.
+const LEGACY_OBJECTS_PREFIX = 'legacy/objects';
 
 @Controller('objects')
 export class ObjectsController {
@@ -26,7 +30,7 @@ export class ObjectsController {
 
   @Post()
   @UseInterceptors(
-    FileInterceptor('image', {
+    SafeFileInterceptor('image', {
       limits: { fileSize: MAX_IMAGE_SIZE_BYTES },
       fileFilter: (_req, file, callback) => {
         if (!file.mimetype.startsWith('image/')) {
@@ -47,7 +51,10 @@ export class ObjectsController {
     if (!file) {
       throw new BadRequestException('Image file is required');
     }
-    const imageUrl = await this.s3Service.uploadFile(file);
+    const imageUrl = await this.s3Service.uploadFile(
+      file,
+      LEGACY_OBJECTS_PREFIX,
+    );
     return this.objectsService.create(createObjectDto, imageUrl);
   }
 

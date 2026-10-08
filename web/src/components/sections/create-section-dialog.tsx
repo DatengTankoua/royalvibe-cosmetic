@@ -4,6 +4,8 @@ import { useState } from "react";
 import axios from "axios";
 import { PlusIcon } from "lucide-react";
 import { toast } from "sonner";
+import { useT } from "next-i18next/client";
+import { getApiErrorMessage } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -28,6 +30,7 @@ export function CreateSectionDialog({
   onCreated,
   label,
 }: CreateSectionDialogProps) {
+  const { t } = useT("catalog");
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -44,7 +47,7 @@ export function CreateSectionDialog({
     setLoading(true);
     try {
       await onCreated(name, description);
-      toast.success("Section créée");
+      toast.success(t("section.created"));
       setOpen(false);
       resetForm();
     } catch (err: unknown) {
@@ -59,7 +62,7 @@ export function CreateSectionDialog({
           return;
         }
       }
-      toast.error(err instanceof Error ? err.message : "Erreur");
+      toast.error(getApiErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -69,27 +72,29 @@ export function CreateSectionDialog({
     <>
       <Button size="sm" onClick={() => setOpen(true)}>
         <PlusIcon className="mr-1 h-4 w-4" />
-        {label ?? "Nouvelle section"}
+        {label ?? t("section.new")}
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Créer une section</DialogTitle>
+            <DialogTitle>{t("section.createTitle")}</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4 mt-2">
             <div className="space-y-2">
-              <Label htmlFor="sec-name">Nom de la section</Label>
+              <Label htmlFor="sec-name">{t("section.name")}</Label>
               <Input
                 id="sec-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
-                placeholder="Ex: Parfums, Bijoux…"
+                placeholder={t("section.namePlaceholder")}
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="sec-desc">Description (optionnel)</Label>
+              <Label htmlFor="sec-desc">
+                {t("section.descriptionOptional")}
+              </Label>
               <Textarea
                 id="sec-desc"
                 value={description}
@@ -98,7 +103,7 @@ export function CreateSectionDialog({
               />
             </div>
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Création…" : "Créer"}
+              {loading ? t("creating") : t("actions.create")}
             </Button>
           </form>
         </DialogContent>

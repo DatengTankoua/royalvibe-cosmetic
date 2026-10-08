@@ -2,12 +2,20 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
+/* 1-16F : le mode sombre ne s'applique qu'à l'écran — impression toujours
+   en thème clair, quel que soit le choix de l'appareil. */
+@custom-variant dark {
+  @media screen {
+    &:is(.dark *) {
+      @slot;
+    }
+  }
+}
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
+  --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -49,6 +57,23 @@
 }
 
 :root {
+  /* Stock Master (1-9A) : couleurs de marque centrales, utilis\u00e9es sur les
+     pages d'authentification et le wordmark \u2014 le thème shadcn --primary
+     global n'est pas modifié pour ne pas affecter les pages métier. */
+  --brand-navy: #062b5c;
+  --brand-orange: #ff6a00;
+  --brand-white: #ffffff;
+  /* 1-16F : jetons des pages publiques (identité Stock Master), déclinés en
+     sombre plus bas. --brand-navy/--brand-orange restent les couleurs de
+     marque fixes ; --brand-ink sert aux textes/filets, --brand-solid aux
+     fonds pleins portant du texte blanc (≥ 4,5:1 dans les deux thèmes). */
+  --brand-ink: #062b5c;
+  --brand-solid: #062b5c;
+  --public-bg: #ffffff;
+  --public-surface: #f5f8fc;
+  --public-surface-2: #eef3f9;
+  --public-body: #26364d;
+  --public-muted: #3d4e66;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -83,38 +108,74 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+@media screen {
+  .dark {
+    --brand-ink: #e3ecf8;
+    --brand-solid: #2f6bc2;
+    --public-bg: #071a33;
+    --public-surface: #0c2547;
+    --public-surface-2: #0a2140;
+    --public-body: #d5deeb;
+    --public-muted: #b4c3d6;
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+  }
+}
+
+/* 1-12A : focus aux couleurs du commerce, UNIQUEMENT sous la racine du
+   shell /app (jetons --tenant-* calculés et validés par lib/tenant-brand.ts,
+   posés en style inline sur [data-tenant-shell]) — :root et les pages
+   publiques/auth/offline ne sont jamais modifiés. */
+[data-tenant-shell] {
+  /* 1-16F : lib/tenant-brand.ts calcule une variante claire et une variante
+     sombre de chaque jeton ; le thème affiché choisit laquelle utiliser. */
+  --tenant-accent: var(--tenant-light-accent);
+  --tenant-accent-foreground: var(--tenant-light-accent-foreground);
+  --tenant-accent-soft: var(--tenant-light-accent-soft);
+  --tenant-accent-border: var(--tenant-light-accent-border);
+  --tenant-accent-ink: var(--tenant-light-accent-ink);
+  --tenant-accent-ring: var(--tenant-light-accent-ring);
+  --ring: var(--tenant-accent-ring);
+}
+
+@media screen {
+  .dark [data-tenant-shell] {
+    --tenant-accent: var(--tenant-dark-accent);
+    --tenant-accent-foreground: var(--tenant-dark-accent-foreground);
+    --tenant-accent-soft: var(--tenant-dark-accent-soft);
+    --tenant-accent-border: var(--tenant-dark-accent-border);
+    --tenant-accent-ink: var(--tenant-dark-accent-ink);
+    --tenant-accent-ring: var(--tenant-dark-accent-ring);
+  }
 }
 
 @layer base {

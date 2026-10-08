@@ -3,5 +3,6 @@ packages:
   - "web"
 allowBuilds:
   bcrypt: false
+  mongodb-memory-server: true
   sharp: true
   unrs-resolver: true

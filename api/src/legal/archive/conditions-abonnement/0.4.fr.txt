@@ -1,0 +1,45 @@
+Conditions d'abonnement
+Version 0.4, mise à jour le 7 octobre 2026.
+Ces conditions décrivent l'essai gratuit et l'abonnement payant à Stock Master : ce qu'ils comprennent, leur durée, leur prix et ce qui se passe à leur échéance. Elles complètent les conditions d'utilisation.
+1. Ce que comprend l'abonnement
+Il existe une seule offre, avec toutes les fonctions de Stock Master. L'abonnement est pris pour un commerce, et non pour une personne :
+- tous les membres du commerce sont inclus, sans supplément par vendeur ;
+- chaque membre accède aux fonctions selon les droits que le commerce lui a donnés ;
+- l'abonnement est géré par le propriétaire du commerce, dans Organisation, puis Abonnement.
+2. Essai gratuit
+- Un essai gratuit de 7 jours démarre automatiquement à la création du commerce.
+- Aucun moyen de paiement n'est demandé pour l'essai.
+- Un commerce ne bénéficie que d'un seul essai.
+- Si les notifications « Fin d'essai ou d'abonnement » sont activées, un rappel est envoyé dans les 24 heures qui précèdent la fin.
+- À la fin de l'essai, l'accès au commerce est limité comme décrit à la section « Expiration ».
+3. Durées et prix
+Le montant indiqué est le total à payer pour la durée choisie, en francs CFA (XAF).
+Durées et prix de l'abonnement
+Durée | Total | Équivalent mensuel
+1 mois | 3 000 FCFA | Paiement mois par mois
+3 mois | 8 500 FCFA | 2 833 FCFA (500 FCFA d'économie)
+6 mois | 16 000 FCFA | 2 667 FCFA (2 000 FCFA d'économie)
+12 mois | 30 000 FCFA | 2 500 FCFA (6 000 FCFA d'économie)
+Le prix applicable est celui affiché au moment où la période est accordée. Une période déjà accordée n'est jamais modifiée par un changement de prix.
+4. Début et durée d'une période
+- Une période se compte en mois du calendrier : une période d'un mois commencée le 10 mars se termine le 10 avril à la même heure. Si le jour n'existe pas (31), elle se termine le dernier jour du mois.
+- Une période accordée avant la fin de l'essai ou de la période en cours commence à la fin de celle-ci : le temps déjà accordé n'est jamais perdu.
+- L'état de l'abonnement et ses dates sont visibles dans Organisation, puis Abonnement.
+5. Paiement et renouvellement
+Le paiement en ligne n'est pas encore activé. Pour toute demande de renouvellement, contactez support@stock-master.app.
+- Il n'y a aucun renouvellement ni prélèvement automatique : chaque nouvelle période est une décision du propriétaire.
+6. Expiration
+À la fin de l'essai ou de la dernière période payée, sans nouvelle période :
+- l'accès aux pages du commerce est bloqué pour tous ses membres, y compris sur les appareils déjà connectés ;
+- le propriétaire voit un écran qui l'invite à renouveler ; les autres membres sont invités à le contacter ;
+- les ventes enregistrées sans connexion et pas encore envoyées restent sur l'appareil ; elles sont envoyées lorsque l'accès est rétabli, dans la limite de 14 jours après leur saisie ;
+- les données du commerce ne sont pas supprimées automatiquement à l'expiration.
+7. Arrêt, rétractation et remboursement
+Comme rien n'est renouvelé automatiquement, il suffit de ne pas renouveler pour arrêter l'abonnement à la fin de la période en cours.
+8. Qui accepte ces conditions
+Ces conditions engagent la personne qui crée le commerce et en devient propriétaire. Elle les accepte en cochant la case prévue à l'inscription, avec les conditions d'utilisation. Cette case n'est jamais cochée d'avance.
+Les administrateurs et les vendeurs invités acceptent les conditions d'utilisation, pas ces conditions. Après un transfert de propriété, l'accord du nouveau propriétaire lui sera demandé dans l'application.
+La preuve de l'acceptation est enregistrée par le serveur comme décrit dans les conditions d'utilisation, avec le commerce concerné.
+9. Réclamations
+Pour toute question ou réclamation sur l'essai, une période ou un paiement, écrivez à support@stock-master.app en indiquant le nom du commerce et l'adresse e-mail du propriétaire.
+Ces conditions ne réduisent aucun droit que la loi vous reconnaît.

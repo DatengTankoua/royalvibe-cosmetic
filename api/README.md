@@ -1,6 +1,6 @@
-# RoyalVibe — API (NestJS)
+# Stock Master — API (NestJS)
 
-API REST + WebSocket de l'application **RoyalVibe Cosmétiques & Bijoux**.
+API REST + WebSocket de l'application **Stock Master**.
 
 ## Stack
 
@@ -43,16 +43,20 @@ Toutes les valeurs par défaut du `.env.example` sont compatibles avec le `docke
 | Variable | Défaut | Description |
 |---|---|---|
 | `PORT` | `4000` | Port d'écoute |
-| `MONGODB_URI` | `mongodb://localhost:27017/heyama` | URI de connexion MongoDB |
+| `MONGODB_URI` | `mongodb://localhost:27017/stockmaster` | URI de connexion MongoDB |
 | `JWT_SECRET` | `change-me-...` | Secret JWT — **changer en production** |
 | `CORS_ORIGIN` | `http://localhost:3000` | Origines autorisées (séparées par virgule) |
 | `S3_ENDPOINT` | `http://localhost:9000` | URL MinIO ou S3 |
 | `S3_REGION` | `us-east-1` | Région S3 |
 | `S3_ACCESS_KEY` | `minioadmin` | Clé d'accès S3 |
 | `S3_SECRET_KEY` | `minioadmin123` | Secret S3 |
-| `S3_BUCKET` | `heyama-objects` | Nom du bucket |
+| `S3_BUCKET` | `stockmaster-objects` | Nom du bucket |
 | `S3_FORCE_PATH_STYLE` | `true` | Obligatoire pour MinIO |
 | `S3_PUBLIC_URL` | _(vide)_ | URL publique des images si différente de `S3_ENDPOINT` |
+| `WEB_PUSH_ENABLED` | `false` | Notifications Web Push (1-16A) ; `true` exige les trois clés VAPID ci-dessous (démarrage refusé si invalides). Le centre de notifications (1-16A.1) fonctionne dans tous les cas ; la migration `migrate:push-notification-indexes` est requise en production et dès que le push est activé |
+| `WEB_PUSH_VAPID_PUBLIC_KEY` | _(vide)_ | Clé publique P-256 base64url, **stable** entre redémarrages |
+| `WEB_PUSH_VAPID_PRIVATE_KEY` | _(vide)_ | Clé privée correspondante — **secret**, jamais journalisée |
+| `WEB_PUSH_VAPID_SUBJECT` | _(vide)_ | Contact `mailto:` ou URL `https:` |
 
 ---
 
@@ -169,7 +173,7 @@ pnpm lint           # ESLint avec auto-fix
 ## Build production (Docker)
 
 ```bash
-docker build -t royalvibe-api ./api
+docker build -t stock-master-api ./api
 ```
 
 Voir `Dockerfile` pour les détails du build multi-stage.

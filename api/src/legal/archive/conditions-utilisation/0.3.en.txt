@@ -1,0 +1,61 @@
+Terms of Use
+Version 0.3, updated on 7 October 2026.
+These terms explain how to use Stock Master, what you can expect from the service and what is expected of you. They apply to anyone who creates an account or joins a shop. The rules specific to the subscription are set out in the Subscription Terms.
+1. The service
+Stock Master is an online stock and sales management application, designed for shops and small businesses. It is used in the browser of a phone, tablet or computer. In particular, it lets you:
+- organise your products by category and track your stock;
+- record sales, including without a connection within the limits described in the guide;
+- invite members and choose their rights;
+- view analytics calculated from the sales;
+- receive notifications in the application and, if you turn them on, on the device.
+The service is operated by Stock Master, a business established in Cameroon (see the Legal notice).
+2. Who can use Stock Master
+Stock Master is intended for professional use: managing a shop's business. To create an account, you must be able to commit on your own behalf or on behalf of the shop you represent.
+Online sign-ups may be closed temporarily. In that case, only existing accounts and people invited by a shop can access the service.
+3. Your account
+- You provide a name, an email address that you actually use, and a password of 6 to 100 characters. Choose a password that you do not use anywhere else.
+- The email address must be confirmed with the link you receive before the first login. This link is valid for 24 hours.
+- The account is personal: do not share your login details. Each seller must have their own account, which makes it possible to know who recorded each sale.
+- A login stays open on the device until you log out or it expires (at most 7 days). Log out on a shared device.
+Changing your name or email address and deleting your account are not yet available in the application. For these requests, write to support@stock-master.app.
+4. Shops, roles and responsibilities
+When you sign up, you create a shop of which you become the owner. In each shop, a member has one of these roles:
+- Owner: all rights, including the subscription and transferring ownership to another member.
+- Administrator: all rights that can be delegated (catalogue, stock, sales, analytics, trash, members, shop branding).
+- Seller: records sales and sees their own. The owner or an administrator can add other rights one by one.
+The owner of the shop, and the administrators for their part:
+- decide who joins the shop and with which rights;
+- remove access for a member who should no longer have it (“Suspended” or “Revoked” status);
+- are responsible for the information entered in the shop: products, prices, stock, sales, photos and, where applicable, a buyer's name or contact details.
+When you record information about your own customers, it is your shop that decides how it is used. Stock Master processes it on your behalf, under the conditions of the Data Processing Agreement.
+5. Permitted use
+You agree not to:
+- use the service for an illegal activity;
+- try to access another shop's data or functions for which you have not been given a right;
+- disrupt the service, deliberately overload it, or query it in an automated way without agreement;
+- upload images you do not have the rights to, or content that is against the law;
+- record information about people when it is not needed for your business.
+6. Security
+Stock Master protects access to the service: passwords stored in encrypted form (hashing), confirmation and invitation links with a limited lifetime, each shop's data kept separate from the others, rights checked by the server for every action. The Privacy Policy describes these measures.
+On your side:
+- keep your password secret;
+- report without delay to support@stock-master.app any access you did not authorise;
+- on a shared device, log out and delete the offline data (Organisation, then Offline).
+7. Availability and changes to the service
+Stock Master does what is necessary to keep the service accessible and your data stored. Interruptions may occur, in particular for maintenance or if a provider has an outage.
+The service changes over time: functions may be added or modified.
+8. Suspension and ending use
+You can stop using Stock Master at any time. The effects on the current subscription are described in the Subscription Terms.
+Access to an account or a shop may be suspended in the event of a serious breach of these terms, a threat to the security of the service or a request from an authority.
+9. Intellectual property
+You may use Stock Master for your shop's needs for as long as you have access. The content you add remains yours: you only allow Stock Master to store it and to display it to the members of your shop, for the sole purpose of providing the service.
+10. Complaints and applicable rights
+For a complaint, write to support@stock-master.app stating the shop concerned and the problem encountered, or use Organisation, then Support. All contact details are on the Contact page.
+These terms do not reduce any right that the law gives you, in particular as a consumer or as a person whose data is processed. A clause contrary to these rights would have no effect.
+11. Acceptance of these terms
+You accept these terms by ticking the box provided when you create your account, whether you create a shop or join a shop by invitation. This box is never ticked in advance, and the account is not created without it.
+The Stock Master server then records the proof of your acceptance: your account, the shop concerned, the date and time set by the server, the language, the version of the text and its digital fingerprint. This fingerprint makes it possible to find the exact text you accepted. Each accepted version is archived, and a new version replaces neither the previous texts nor the proofs already recorded.
+If your account existed before this acceptance was put in place, or if a new version concerns you, your agreement will be requested in the application. No acceptance is recorded on your behalf.
+12. Changes to the terms
+Each version is dated. A significant change will be announced before it comes into force, and the applicable version will remain available on this page.
+Language: this text was written in French.

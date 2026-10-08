@@ -1,0 +1,1142 @@
+import 'reflect-metadata';
+import { createHash } from 'crypto';
+import { Model, Types } from 'mongoose';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import { getModelToken } from '@nestjs/mongoose';
+import { JwtService } from '@nestjs/jwt';
+import { ThrottlerStorage } from '@nestjs/throttler';
+import * as bcrypt from 'bcryptjs';
+import request from 'supertest';
+import { App } from 'supertest/types';
+import { AppModule } from './../src/app.module';
+import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
+import { AUTH_RATE_LIMIT_CODE } from './../src/common/auth-rate-limiting';
+import { UserDocument } from './../src/users/schemas/user.schema';
+import { Organization } from './../src/organizations/schemas/organization.schema';
+import type { OrganizationDocument } from './../src/organizations/schemas/organization.schema';
+import { OrganizationMembership } from './../src/organizations/schemas/membership.schema';
+import type { OrganizationMembershipDocument } from './../src/organizations/schemas/membership.schema';
+import { OrganizationInvitation } from './../src/organizations/schemas/invitation.schema';
+import type { OrganizationInvitationDocument } from './../src/organizations/schemas/invitation.schema';
+import {
+  startEphemeralMongo,
+  stopEphemeralMongoSafe,
+  validatedEphemeralUri,
+} from './e2e/ephemeral-mongodb';
+import {
+  buildOriginAllowlist,
+  parseCORSOrigin,
+  buildHttpCorsOptions,
+} from './../src/events/origin.helpers';
+import { EMAIL_SENDER } from '../src/email-verification/email-sender';
+import {
+  E2E_EMAIL_VERIFIED_AT,
+  autoConfirmVerificationEmails,
+  createE2eEmailSender,
+} from './e2e/email-verification-fixtures';
+import { INVITATION_TERMS, OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+
+// 1-13A : expéditeur simulé, liens confirmés via le service réel.
+const emailSender = createE2eEmailSender();
+
+/**
+ * E2E (1-6B.1) — émission/liste/révocation d'invitations tenant-scopées,
+ * sur `MongoMemoryReplSet` réel (2 organisations A/B, aucun mock de driver).
+ */
+
+const TEST_JWT_SECRET = 'invitations-e2e-only-static-secret';
+const E2E_CORS_ORIGIN = 'https://invitations-e2e.example.com';
+
+const OWNER_A_EMAIL = 'owner-a-16b1@royalvibe.test';
+const OWNER_B_EMAIL = 'owner-b-16b1@royalvibe.test';
+const ADMIN_A_EMAIL = 'admin-a-16b1@royalvibe.test';
+const SELLER_A_EMAIL = 'seller-a-16b1@royalvibe.test';
+const PASSWORD = 'owner-16b1-pw-!1x';
+// 1-12G : origine publique des liens d'invitation (jamais l'en-tête Host).
+const E2E_PUBLIC_APP_URL = 'https://app.invitations-e2e.test';
+
+/** Token brut extrait du lien renvoyé à la création (1-12G). */
+function tokenOf(res: { body: { invitationUrl?: unknown } }): string {
+  return (
+    new URL(String(res.body.invitationUrl)).searchParams.get('token') ?? ''
+  );
+}
+
+describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', () => {
+  let moduleFixture: TestingModule;
+  let app: INestApplication<App>;
+
+  let userModel: Model<UserDocument>;
+  let organizationModel: Model<OrganizationDocument>;
+  let membershipModel: Model<OrganizationMembershipDocument>;
+  let invitationModel: Model<OrganizationInvitationDocument>;
+  let jwtService: JwtService;
+
+  let orgAId = '';
+  let orgBId = '';
+  let ownerAToken = '';
+  let ownerBToken = '';
+  let adminAToken = '';
+  let sellerAToken = '';
+
+  const invite = (token: string, body: Record<string, unknown>) =>
+    request(app.getHttpServer())
+      .post('/organizations/invitations')
+      .set('Authorization', `Bearer ${token}`)
+      .send(body);
+  const list = (token: string) =>
+    request(app.getHttpServer())
+      .get('/organizations/invitations')
+      .set('Authorization', `Bearer ${token}`);
+  const revoke = (token: string, id: string) =>
+    request(app.getHttpServer())
+      .post(`/organizations/invitations/${id}/revoke`)
+      .set('Authorization', `Bearer ${token}`);
+
+  // Correction sécurité 1-10B : `POST /organizations/invitations` porte
+  // désormais une fenêtre `invitation-create` (5/60 s, tracker user+org)
+  // partageant le MÊME stockage mémoire que le rate limiting existant
+  // (0B.6). Réinitialisé avant CHAQUE test de ce fichier — sans cela, les
+  // nombreux appels `invite()` réutilisant les mêmes acteurs/organisations
+  // d'un test à l'autre épuiseraient ce quota (le comportement de limite
+  // lui-même est testé isolément dans invitation-rate-limiting.e2e-spec.ts).
+  beforeEach(() => {
+    moduleFixture.get(ThrottlerStorage).onApplicationShutdown();
+  });
+
+  beforeAll(async () => {
+    const replSet = await startEphemeralMongo();
+    try {
+      process.env.MONGODB_URI = validatedEphemeralUri(replSet);
+      process.env.JWT_SECRET = TEST_JWT_SECRET;
+      process.env.S3_ENDPOINT = 'http://127.0.0.1:65535';
+      process.env.S3_REGION = 'us-east-1';
+      process.env.S3_ACCESS_KEY = 'e2e-local';
+      process.env.S3_SECRET_KEY = 'e2e-local';
+      process.env.S3_BUCKET = 'e2e-local';
+      process.env.S3_FORCE_PATH_STYLE = 'true';
+      process.env.CORS_ORIGIN = E2E_CORS_ORIGIN;
+      process.env.PUBLIC_APP_URL = E2E_PUBLIC_APP_URL;
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+
+      moduleFixture = await Test.createTestingModule({
+        imports: [AppModule],
+      })
+        .overrideProvider(EMAIL_SENDER)
+        .useValue(emailSender)
+        .compile();
+      app = moduleFixture.createNestApplication();
+      app.enableCors(
+        buildHttpCorsOptions(
+          buildOriginAllowlist(parseCORSOrigin(E2E_CORS_ORIGIN, 'development')),
+        ),
+      );
+      app.useGlobalPipes(
+        new ValidationPipe({
+          whitelist: true,
+          forbidNonWhitelisted: true,
+          transform: true,
+        }),
+      );
+      app.useGlobalFilters(new HttpExceptionFilter());
+      await app.init();
+      autoConfirmVerificationEmails(app, emailSender);
+
+      userModel = moduleFixture.get(getModelToken('User'));
+      organizationModel = moduleFixture.get(getModelToken(Organization.name));
+      membershipModel = moduleFixture.get(
+        getModelToken(OrganizationMembership.name),
+      );
+      invitationModel = moduleFixture.get(
+        getModelToken(OrganizationInvitation.name),
+      );
+      jwtService = moduleFixture.get(JwtService);
+
+      // ---- Owner A + Owner B : onboarding atomique réel (1-6A) ----
+      const regA = await request(app.getHttpServer())
+        .post('/auth/register')
+        .send({
+          ...OWNER_TERMS,
+          name: 'Owner A',
+          email: OWNER_A_EMAIL,
+          password: PASSWORD,
+          organizationName: 'Org A 16B1',
+        });
+      expect(regA.status).toBe(201);
+      orgAId = regA.body.organization._id as string;
+
+      const regB = await request(app.getHttpServer())
+        .post('/auth/register')
+        .send({
+          ...OWNER_TERMS,
+          name: 'Owner B',
+          email: OWNER_B_EMAIL,
+          password: PASSWORD,
+          organizationName: 'Org B 16B1',
+        });
+      expect(regB.status).toBe(201);
+      orgBId = regB.body.organization._id as string;
+
+      const loginOwnerA = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: OWNER_A_EMAIL, password: PASSWORD });
+      expect(loginOwnerA.status).toBe(201);
+      ownerAToken = loginOwnerA.body.access_token as string;
+
+      const loginOwnerB = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: OWNER_B_EMAIL, password: PASSWORD });
+      expect(loginOwnerB.status).toBe(201);
+      ownerBToken = loginOwnerB.body.access_token as string;
+
+      // ---- Admin/Seller de A (membres actifs directs, hors register) ----
+      const adminA = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
+        name: 'Admin A',
+        email: ADMIN_A_EMAIL,
+        password: await bcrypt.hash(PASSWORD, 10),
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgAId),
+        userId: adminA._id,
+        role: 'admin',
+        status: 'active',
+      });
+      const sellerA = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
+        name: 'Seller A',
+        email: SELLER_A_EMAIL,
+        password: await bcrypt.hash(PASSWORD, 10),
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgAId),
+        userId: sellerA._id,
+        role: 'seller',
+        status: 'active',
+      });
+
+      const loginAdminA = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: ADMIN_A_EMAIL,
+          password: PASSWORD,
+          organizationId: orgAId,
+        });
+      expect(loginAdminA.status).toBe(201);
+      adminAToken = loginAdminA.body.access_token as string;
+
+      const loginSellerA = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: SELLER_A_EMAIL,
+          password: PASSWORD,
+          organizationId: orgAId,
+        });
+      expect(loginSellerA.status).toBe(201);
+      sellerAToken = loginSellerA.body.access_token as string;
+    } catch (err) {
+      if (moduleFixture) await moduleFixture.close().catch(() => undefined);
+      await stopEphemeralMongoSafe();
+      throw err;
+    }
+  }, 180_000);
+
+  afterAll(async () => {
+    if (app) await app.close().catch(() => undefined);
+    await stopEphemeralMongoSafe();
+  }, 60_000);
+
+  describe('Autorisation — members.invite (1-7B, ex owner-only)', () => {
+    it('admin (permission par défaut) : 201/200 sur les 3 routes', async () => {
+      const created = await invite(adminAToken, {
+        email: `admin-delegate-${Date.now()}@royalvibe.test`,
+        role: 'seller',
+      });
+      expect(created.status).toBe(201);
+
+      const listed = await list(adminAToken);
+      expect(listed.status).toBe(200);
+
+      const revoked = await revoke(
+        adminAToken,
+        created.body.invitation._id as string,
+      );
+      expect(revoked.status).toBe(200);
+    });
+
+    it('seller sans délégation → 403 PERMISSION_DENIED sur les 3 routes, service jamais muté', async () => {
+      const before = await invitationModel.countDocuments();
+      for (const res of [
+        await invite(sellerAToken, {
+          email: `refused-${Date.now()}@royalvibe.test`,
+          role: 'admin',
+        }),
+        await list(sellerAToken),
+        await revoke(sellerAToken, new Types.ObjectId().toString()),
+      ]) {
+        expect(res.status).toBe(403);
+        expect(res.body.code).toBe('PERMISSION_DENIED');
+      }
+      expect(await invitationModel.countDocuments()).toBe(before);
+    });
+
+    it('seller DÉLÉGUÉ members.invite (membership.permissions) → 201/200 sur les 3 routes', async () => {
+      const delegatedEmail = `delegated-seller-17b-${Date.now()}@royalvibe.test`;
+      const delegated = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
+        name: 'Delegated Seller',
+        email: delegatedEmail,
+        password: await bcrypt.hash(PASSWORD, 10),
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgAId),
+        userId: delegated._id,
+        role: 'seller',
+        status: 'active',
+        permissions: ['members.invite'],
+      });
+      const loginDelegated = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: delegatedEmail,
+          password: PASSWORD,
+          organizationId: orgAId,
+        });
+      expect(loginDelegated.status).toBe(201);
+      const delegatedToken = loginDelegated.body.access_token as string;
+
+      const created = await invite(delegatedToken, {
+        email: `delegated-invite-${Date.now()}@royalvibe.test`,
+        role: 'seller',
+      });
+      expect(created.status).toBe(201);
+      const listed = await list(delegatedToken);
+      expect(listed.status).toBe(200);
+      const revoked = await revoke(
+        delegatedToken,
+        created.body.invitation._id as string,
+      );
+      expect(revoked.status).toBe(200);
+    });
+
+    it('sans JWT → 401 (jamais 403)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/organizations/invitations')
+        .send({ email: 'x@royalvibe.test', role: 'admin' });
+      expect(res.status).toBe(401);
+    });
+  });
+
+  describe('Émission (POST) — cycle du token', () => {
+    it('owner : 201, réponse exacte { invitation, invitationUrl }, lien PUBLIC_APP_URL, hash SHA-256 exact en base, jamais le clair', async () => {
+      const email = `invite-ok-${Date.now()}@royalvibe.test`;
+      const res = await invite(ownerAToken, { email, role: 'admin' });
+      expect(res.status).toBe(201);
+
+      const body = res.body as Record<string, unknown>;
+      expect(Object.keys(body).sort()).toEqual(['invitation', 'invitationUrl']);
+      expect(Object.keys(body.invitation as object).sort()).toEqual([
+        '_id',
+        'email',
+        'expiresAt',
+        'permissions',
+        'role',
+        'status',
+      ]);
+      expect(res.body.invitation.email).toBe(email);
+      expect(res.body.invitation.status).toBe('pending');
+      // 1-12G : lien construit depuis PUBLIC_APP_URL, jamais depuis Host.
+      const token = tokenOf(res);
+      expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(res.body.invitationUrl).toBe(
+        `${E2E_PUBLIC_APP_URL}/auth/invitations/accept?token=${encodeURIComponent(token)}`,
+      );
+      expect(JSON.stringify(res.body)).not.toContain('tokenHash');
+
+      // Le hash en base (select:false) correspond exactement au token brut.
+      const stored = await invitationModel
+        .findOne({ _id: new Types.ObjectId(res.body.invitation._id as string) })
+        .select('+tokenHash')
+        .exec();
+      expect(stored).toBeTruthy();
+      expect(stored!.tokenHash).not.toBe(token);
+      expect(stored!.tokenHash).toBe(
+        createHash('sha256').update(token).digest('hex'),
+      );
+      // Token brut jamais persisté ni relisible : ni en base, ni en liste.
+      expect(JSON.stringify(stored!.toObject())).not.toContain(token);
+      const listed = await request(app.getHttpServer())
+        .get('/organizations/invitations')
+        .set('Authorization', `Bearer ${ownerAToken}`);
+      expect(listed.status).toBe(200);
+      expect(JSON.stringify(listed.body)).not.toContain(token);
+      expect(JSON.stringify(listed.body)).not.toContain('invitationUrl');
+    });
+
+    it('en-tête Host forgé : le lien garde l’origine PUBLIC_APP_URL', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/organizations/invitations')
+        .set('Authorization', `Bearer ${ownerAToken}`)
+        .set('Host', 'evil.example.com')
+        .set('X-Forwarded-Host', 'evil.example.com')
+        .send({
+          email: `invite-host-${Date.now()}@royalvibe.test`,
+          role: 'seller',
+        });
+      expect(res.status).toBe(201);
+      expect(new URL(res.body.invitationUrl as string).origin).toBe(
+        E2E_PUBLIC_APP_URL,
+      );
+    });
+
+    it('champs interdits (organizationId/role owner/permission inconnue) → 400 avant toute écriture', async () => {
+      const before = await invitationModel.countDocuments();
+      const rejections = await Promise.all([
+        invite(ownerAToken, {
+          email: 'forbidden-1@royalvibe.test',
+          role: 'admin',
+          organizationId: orgBId,
+        }),
+        invite(ownerAToken, {
+          email: 'forbidden-2@royalvibe.test',
+          role: 'owner',
+        }),
+        invite(ownerAToken, {
+          email: 'forbidden-3@royalvibe.test',
+          role: 'admin',
+          permissions: ['ownership.transfer'],
+        }),
+        invite(ownerAToken, {
+          email: 'forbidden-4@royalvibe.test',
+          role: 'admin',
+          permissions: ['sales.record', 'sales.record'],
+        }),
+      ]);
+      for (const res of rejections) expect(res.status).toBe(400);
+      expect(await invitationModel.countDocuments()).toBe(before);
+    });
+
+    it('membre actif existant dans cette org → 409 stable', async () => {
+      const res = await invite(ownerAToken, {
+        email: ADMIN_A_EMAIL,
+        role: 'admin',
+      });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('MEMBER_ALREADY_ACTIVE');
+    });
+
+    it('seconde invitation pending pour le même email → 409, puis expiration → réinvitation acceptée', async () => {
+      const email = `dup-pending-${Date.now()}@royalvibe.test`;
+      const first = await invite(ownerAToken, { email, role: 'seller' });
+      expect(first.status).toBe(201);
+
+      const dup = await invite(ownerAToken, { email, role: 'admin' });
+      expect(dup.status).toBe(409);
+      expect(dup.body.code).toBe('INVITATION_ALREADY_PENDING');
+
+      // Simule l'expiration (horloge testable au niveau service — ici on
+      // vieillit directement le document, sans sleep réel).
+      await invitationModel.updateOne(
+        { _id: new Types.ObjectId(first.body.invitation._id as string) },
+        { expiresAt: new Date(Date.now() - 1000) },
+      );
+
+      const reinvite = await invite(ownerAToken, { email, role: 'admin' });
+      expect(reinvite.status).toBe(201);
+      expect(reinvite.body.invitation.role).toBe('admin');
+
+      const original = await invitationModel
+        .findById(first.body.invitation._id as string)
+        .exec();
+      expect(original!.status).toBe('expired');
+    });
+
+    it("falsification organizationId (body/header/query) sans effet : l'org reste celle du JWT", async () => {
+      const email = `forged-${Date.now()}@royalvibe.test`;
+      const res = await request(app.getHttpServer())
+        .post('/organizations/invitations?organizationId=' + orgBId)
+        .set('Authorization', `Bearer ${ownerAToken}`)
+        .set('x-organization-id', orgBId)
+        .send({ email, role: 'admin' });
+      expect(res.status).toBe(201);
+
+      const stored = await invitationModel.findOne({ email }).exec();
+      expect(stored!.organizationId.toString()).toBe(orgAId);
+      expect(stored!.organizationId.toString()).not.toBe(orgBId);
+    });
+  });
+
+  describe('Isolation A/B — liste et révocation', () => {
+    it('owner A ne voit JAMAIS les invitations de B, et réciproquement', async () => {
+      const emailA = `isoa-${Date.now()}@royalvibe.test`;
+      const emailB = `isob-${Date.now()}@royalvibe.test`;
+      const createdA = await invite(ownerAToken, {
+        email: emailA,
+        role: 'admin',
+      });
+      const createdB = await invite(ownerBToken, {
+        email: emailB,
+        role: 'admin',
+      });
+      expect(createdA.status).toBe(201);
+      expect(createdB.status).toBe(201);
+
+      const listA = await list(ownerAToken);
+      expect(listA.status).toBe(200);
+      expect(
+        (listA.body as Array<{ email: string }>).some(
+          (i) => i.email === emailB,
+        ),
+      ).toBe(false);
+      expect(
+        (listA.body as Array<{ email: string }>).some(
+          (i) => i.email === emailA,
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(listA.body)).not.toContain('token');
+
+      const listB = await list(ownerBToken);
+      expect(
+        (listB.body as Array<{ email: string }>).some(
+          (i) => i.email === emailA,
+        ),
+      ).toBe(false);
+    });
+
+    it('owner A ne peut jamais révoquer une invitation de B → 404 (même 404 que absente)', async () => {
+      const emailB = `revoke-b-${Date.now()}@royalvibe.test`;
+      const created = await invite(ownerBToken, {
+        email: emailB,
+        role: 'admin',
+      });
+      const bId = created.body.invitation._id as string;
+
+      const foreign = await revoke(ownerAToken, bId);
+      const missing = await revoke(
+        ownerAToken,
+        new Types.ObjectId().toString(),
+      );
+      expect(foreign.status).toBe(404);
+      expect(missing.status).toBe(404);
+      expect(foreign.status).toBe(missing.status);
+
+      // Intacte côté B (jamais révoquée par A) :
+      const stillPending = await invitationModel.findById(bId).exec();
+      expect(stillPending!.status).toBe('pending');
+    });
+
+    it('owner A révoque sa propre invitation → 200, vue sans token, statut `revoked` en base', async () => {
+      const email = `revoke-ok-${Date.now()}@royalvibe.test`;
+      const created = await invite(ownerAToken, { email, role: 'seller' });
+      const id = created.body.invitation._id as string;
+
+      const res = await revoke(ownerAToken, id);
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('revoked');
+      expect(JSON.stringify(res.body)).not.toContain('token');
+
+      const stored = await invitationModel.findById(id).exec();
+      expect(stored!.status).toBe('revoked');
+
+      // Une invitation déjà révoquée ne peut plus être révoquée deux fois :
+      const second = await revoke(ownerAToken, id);
+      expect(second.status).toBe(404);
+    });
+  });
+
+  // CORRECTION SÉCURITÉ (1-9C) : `PermissionGuard` ne vérifie que la
+  // permission `members.invite` de l'acteur, jamais que le rôle/permissions
+  // DE L'INVITATION restent dans ses droits effectifs. Ces requêtes sont
+  // envoyées directement via `supertest` — un client HTTP brut, AUCUN
+  // frontend en jeu — la preuve que l'API refuse l'escalade indépendamment
+  // de tout filtrage côté client.
+  describe('Anti-escalade des invitations (1-9C) — requêtes API forgées, frontend non-autorité', () => {
+    const escalationEmail = (label: string) =>
+      `escalation-${label}-${Date.now()}@royalvibe.test`;
+
+    it('seller délégué members.invite SEUL tente role=admin (requête forgée) → 403 PERMISSION_DENIED, zéro écriture', async () => {
+      const email = escalationEmail('admin-role');
+      const inviteOnlyEmail = `invite-only-a-${Date.now()}@royalvibe.test`;
+      const inviteOnly = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
+        name: 'Invite Only Seller',
+        email: inviteOnlyEmail,
+        password: await bcrypt.hash(PASSWORD, 10),
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgAId),
+        userId: inviteOnly._id,
+        role: 'seller',
+        status: 'active',
+        permissions: ['members.invite'],
+      });
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: inviteOnlyEmail,
+          password: PASSWORD,
+          organizationId: orgAId,
+        });
+      expect(login.status).toBe(201);
+      const inviteOnlyToken = login.body.access_token as string;
+
+      const before = await invitationModel.countDocuments();
+      // Requête forgée : un client HTTP brut peut envoyer n'importe quel
+      // `role`/`permissions` autorisé par le DTO — la validation de forme
+      // (whitelist) laisse passer `role: 'admin'`, seule l'autorisation
+      // métier doit le refuser.
+      const res = await invite(inviteOnlyToken, { email, role: 'admin' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('PERMISSION_DENIED');
+      expect(await invitationModel.countDocuments()).toBe(before);
+      expect(await invitationModel.findOne({ email }).exec()).toBeNull();
+    });
+
+    it('seller délégué members.invite SEUL tente de greffer une permission qu’il ne possède pas → 403, zéro écriture', async () => {
+      const email = escalationEmail('extra-perm');
+      const inviteOnlyEmail = `invite-only-b-${Date.now()}@royalvibe.test`;
+      const inviteOnly = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
+        name: 'Invite Only Seller 2',
+        email: inviteOnlyEmail,
+        password: await bcrypt.hash(PASSWORD, 10),
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgAId),
+        userId: inviteOnly._id,
+        role: 'seller',
+        status: 'active',
+        permissions: ['members.invite'],
+      });
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: inviteOnlyEmail,
+          password: PASSWORD,
+          organizationId: orgAId,
+        });
+      expect(login.status).toBe(201);
+      const inviteOnlyToken = login.body.access_token as string;
+
+      const before = await invitationModel.countDocuments();
+      const res = await invite(inviteOnlyToken, {
+        email,
+        role: 'seller',
+        permissions: ['members.manage'],
+      });
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('PERMISSION_DENIED');
+      expect(await invitationModel.countDocuments()).toBe(before);
+    });
+
+    it('seller invite un seller avec un sous-ensemble strictement autorisé de ses propres permissions → 201', async () => {
+      const email = escalationEmail('allowed-subset');
+      const delegatedEmail = `invite-analytics-${Date.now()}@royalvibe.test`;
+      const delegated = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
+        name: 'Invite Analytics',
+        email: delegatedEmail,
+        password: await bcrypt.hash(PASSWORD, 10),
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgAId),
+        userId: delegated._id,
+        role: 'seller',
+        status: 'active',
+        permissions: ['members.invite', 'analytics.read'],
+      });
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: delegatedEmail,
+          password: PASSWORD,
+          organizationId: orgAId,
+        });
+      expect(login.status).toBe(201);
+      const delegatedToken = login.body.access_token as string;
+
+      const res = await invite(delegatedToken, {
+        email,
+        role: 'seller',
+        permissions: ['analytics.read'],
+      });
+
+      expect(res.status).toBe(201);
+      expect(res.body.invitation.permissions).toEqual(['analytics.read']);
+    });
+
+    it('isolation : admin de l’organisation B, seulement seller+members.invite dans A, ne peut PAS exploiter son rôle B depuis A', async () => {
+      const email = escalationEmail('cross-org');
+      const crossEmail = `cross-org-admin-${Date.now()}@royalvibe.test`;
+      const crossUser = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
+        name: 'Cross Org User',
+        email: crossEmail,
+        password: await bcrypt.hash(PASSWORD, 10),
+      });
+      // Admin ACTIF réel dans B (permissions par défaut = tout le délégable) :
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgBId),
+        userId: crossUser._id,
+        role: 'admin',
+        status: 'active',
+      });
+      // Seulement `members.invite` dans A — jamais admin ici :
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgAId),
+        userId: crossUser._id,
+        role: 'seller',
+        status: 'active',
+        permissions: ['members.invite'],
+      });
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: crossEmail,
+          password: PASSWORD,
+          organizationId: orgAId,
+        });
+      expect(login.status).toBe(201);
+      const crossToken = login.body.access_token as string;
+
+      const before = await invitationModel.countDocuments();
+      // Contexte HTTP = organisation A (JWT) : la relecture serveur de
+      // l'acteur doit filtrer par (organizationId=A, userId) — jamais par
+      // userId seul, sinon la membership `admin` de B fuiterait ici.
+      const res = await invite(crossToken, { email, role: 'admin' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('PERMISSION_DENIED');
+      expect(await invitationModel.countDocuments()).toBe(before);
+    });
+
+    it('owner A conserve la capacité normale d’inviter admin (contrôle positif, non régressé)', async () => {
+      const email = escalationEmail('owner-control');
+      const res = await invite(ownerAToken, { email, role: 'admin' });
+      expect(res.status).toBe(201);
+      expect(res.body.invitation.role).toBe('admin');
+    });
+  });
+
+  describe('Acceptation (POST /auth/invitations/accept) — 1-6B.2', () => {
+    const clearThrottle = (): void => {
+      moduleFixture.get(ThrottlerStorage).onApplicationShutdown();
+    };
+    beforeEach(clearThrottle);
+
+    // 1-16C.2 : un corps qui CRÉE un compte (mot de passe fourni) porte
+    // l'acceptation du web ; `{ token }` seul reste inchangé.
+    const accept = (body: Record<string, unknown>) =>
+      request(app.getHttpServer())
+        .post('/auth/invitations/accept')
+        .send('password' in body ? { ...INVITATION_TERMS, ...body } : body);
+
+    it('publique même si PUBLIC_REGISTRATION_ENABLED=false (jamais bloquée par ce flag)', async () => {
+      delete process.env.PUBLIC_REGISTRATION_ENABLED;
+      const res = await accept({ token: 'unknown-token' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+    });
+
+    it('parcours du lien (1-12G), inscription publique fermée : { token } → ACCOUNT_DETAILS_REQUIRED sans consommer, puis compte créé, rejeu refusé, mot de passe non trimé', async () => {
+      delete process.env.PUBLIC_REGISTRATION_ENABLED;
+      try {
+        const email = `link-flow-${Date.now()}@royalvibe.test`;
+        const issued = await invite(ownerAToken, {
+          email,
+          role: 'seller',
+          permissions: ['analytics.read'],
+        });
+        expect(issued.status).toBe(201);
+        const token = tokenOf(issued);
+
+        const first = await accept({ token });
+        expect(first.status).toBe(400);
+        expect(first.body.code).toBe('ACCOUNT_DETAILS_REQUIRED');
+        const pending = await invitationModel.findOne({ email }).exec();
+        expect(pending!.status).toBe('pending');
+        expect(await userModel.countDocuments({ email })).toBe(0);
+
+        // Espaces de bord conservés : le mot de passe n'est jamais trimé.
+        const password = '  link-flow pw !1  ';
+        const second = await accept({ token, name: '  Lien  ', password });
+        expect(second.status).toBe(200);
+        expect(second.body.user).toMatchObject({ email, name: 'Lien' });
+        expect(second.body.organization._id).toBe(orgAId);
+        expect(second.body.membership).toEqual({
+          role: 'seller',
+          status: 'active',
+        });
+        const membership = await membershipModel
+          .findOne({
+            userId: new Types.ObjectId(second.body.user._id as string),
+          })
+          .exec();
+        expect(membership!.permissions).toEqual(['analytics.read']);
+
+        const replay = await accept({ token, name: 'Autre', password });
+        expect(replay.status).toBe(400);
+        expect(replay.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
+        expect(await userModel.countDocuments({ email })).toBe(1);
+
+        const trimmed = await request(app.getHttpServer())
+          .post('/auth/login')
+          .send({ email, password: password.trim() });
+        expect(trimmed.status).toBe(401);
+        const login = await request(app.getHttpServer())
+          .post('/auth/login')
+          .send({ email, password });
+        expect(login.status).toBe(201);
+        const payload = jwtService.decode(String(login.body.access_token));
+        expect(String(payload.orgId)).toBe(orgAId);
+      } finally {
+        process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+      }
+    });
+
+    it('token inconnu → 400 générique, zéro écriture', async () => {
+      const usersBefore = await userModel.countDocuments();
+      const res = await accept({ token: 'totally-unknown-token' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
+      expect(await userModel.countDocuments()).toBe(usersBefore);
+    });
+
+    it('nouveau user : triplet atomique, password haché, rôle legacy `seller` (jamais admin), rôle/permissions/invitedBy copiés, réponse sans donnée sensible', async () => {
+      const email = `accept-new-${Date.now()}@royalvibe.test`;
+      const issued = await invite(ownerAToken, {
+        email,
+        role: 'admin',
+        permissions: ['analytics.read'],
+      });
+      expect(issued.status).toBe(201);
+
+      const res = await accept({
+        token: tokenOf(issued),
+        name: 'New User',
+        password: 'accept-pw-!1x',
+      });
+      expect(res.status).toBe(200);
+      const body = res.body as Record<string, unknown>;
+      expect(Object.keys(body).sort()).toEqual([
+        'emailVerification',
+        'membership',
+        'organization',
+        'user',
+      ]);
+      // 1-13A : compte créé non vérifié, lien envoyé après le commit.
+      expect(res.body.emailVerification).toEqual({ status: 'sent' });
+      expect(res.body.user.email).toBe(email);
+      expect(res.body.organization._id).toBe(orgAId);
+      expect(res.body.membership.role).toBe('admin');
+      expect(res.body.membership.status).toBe('active');
+      const flat = JSON.stringify(res.body);
+      expect(flat).not.toContain('password');
+      expect(flat).not.toContain('access_token');
+      expect(flat).not.toContain('tokenHash');
+      expect(flat).not.toContain('permissions'); // membership ne renvoie que role+status
+
+      // Rôle LEGACY `User.role` : seller — jamais promu même pour un invite `admin`.
+      const userDoc = await userModel
+        .findOne({ email })
+        .select('+password')
+        .exec();
+      expect(userDoc!.role).toBe('seller');
+      expect(userDoc!.password).not.toBe('accept-pw-!1x');
+      await expect(
+        bcrypt.compare('accept-pw-!1x', userDoc!.password),
+      ).resolves.toBe(true);
+
+      // role/permissions/invitedById EXACTEMENT copiés de l'invitation :
+      const membership = await membershipModel
+        .findOne({
+          organizationId: new Types.ObjectId(orgAId),
+          userId: userDoc!._id,
+        })
+        .exec();
+      expect(membership!.role).toBe('admin');
+      expect(membership!.permissions).toEqual(['analytics.read']);
+      const ownerADoc = await userModel
+        .findOne({ email: OWNER_A_EMAIL })
+        .exec();
+      expect(membership!.invitedById!.toString()).toBe(
+        ownerADoc!._id.toString(),
+      );
+
+      const invitationDoc = await invitationModel
+        .findById(issued.body.invitation._id as string)
+        .exec();
+      expect(invitationDoc!.status).toBe('accepted');
+      expect(invitationDoc!.acceptedAt).toBeTruthy();
+    });
+
+    it('user existant : aucune modification du User (password/name/role intacts)', async () => {
+      const before = await userModel
+        .findOne({ email: SELLER_A_EMAIL })
+        .select('+password')
+        .exec();
+      // sellerA n'a AUCUNE membership dans B : l'émission y est acceptée.
+      const issued = await invite(ownerBToken, {
+        email: SELLER_A_EMAIL,
+        role: 'seller',
+      });
+      expect(issued.status).toBe(201);
+
+      const res = await accept({ token: tokenOf(issued) });
+      expect(res.status).toBe(200);
+      expect(res.body.user.name).toBe(before!.name);
+      expect(res.body.organization._id).toBe(orgBId);
+
+      const after = await userModel
+        .findOne({ email: SELLER_A_EMAIL })
+        .select('+password')
+        .exec();
+      expect(after!.password).toBe(before!.password);
+      expect(after!.name).toBe(before!.name);
+      expect(after!.role).toBe(before!.role);
+
+      const membership = await membershipModel
+        .findOne({
+          organizationId: new Types.ObjectId(orgBId),
+          userId: after!._id,
+        })
+        .exec();
+      expect(membership).toBeTruthy();
+      expect(membership!.role).toBe('seller');
+    });
+
+    it('token expiré/révoqué/déjà accepté → même 400, zéro écriture', async () => {
+      // expiré :
+      const emailExp = `accept-exp-${Date.now()}@royalvibe.test`;
+      const issuedExp = await invite(ownerAToken, {
+        email: emailExp,
+        role: 'seller',
+      });
+      await invitationModel.updateOne(
+        { _id: new Types.ObjectId(issuedExp.body.invitation._id as string) },
+        { expiresAt: new Date(Date.now() - 1000) },
+      );
+      const usersBefore = await userModel.countDocuments();
+      const resExp = await accept({
+        token: tokenOf(issuedExp),
+        name: 'X',
+        password: 'accept-pw-!1x',
+      });
+      expect(resExp.status).toBe(400);
+      expect(resExp.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
+      expect(await userModel.countDocuments()).toBe(usersBefore);
+
+      // révoqué :
+      const emailRev = `accept-rev-${Date.now()}@royalvibe.test`;
+      const issuedRev = await invite(ownerAToken, {
+        email: emailRev,
+        role: 'seller',
+      });
+      await revoke(ownerAToken, issuedRev.body.invitation._id as string);
+      const resRev = await accept({
+        token: tokenOf(issuedRev),
+        name: 'X',
+        password: 'accept-pw-!1x',
+      });
+      expect(resRev.status).toBe(400);
+      expect(resRev.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
+
+      // déjà accepté (réutilisation du même token) :
+      const emailAcc = `accept-acc-${Date.now()}@royalvibe.test`;
+      const issuedAcc = await invite(ownerAToken, {
+        email: emailAcc,
+        role: 'seller',
+      });
+      const firstAccept = await accept({
+        token: tokenOf(issuedAcc),
+        name: 'Y',
+        password: 'accept-pw-!1x',
+      });
+      expect(firstAccept.status).toBe(200);
+      const secondAccept = await accept({
+        token: tokenOf(issuedAcc),
+        name: 'Y2',
+        password: 'accept-pw-!1x',
+      });
+      expect(secondAccept.status).toBe(400);
+      expect(secondAccept.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
+    });
+
+    it('organisation suspendue → même 400 générique', async () => {
+      const email = `accept-susp-${Date.now()}@royalvibe.test`;
+      const issued = await invite(ownerAToken, { email, role: 'seller' });
+      await organizationModel.updateOne(
+        { _id: new Types.ObjectId(orgAId) },
+        { status: 'suspended' },
+      );
+      try {
+        const res = await accept({
+          token: tokenOf(issued),
+          name: 'Z',
+          password: 'accept-pw-!1x',
+        });
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
+      } finally {
+        await organizationModel.updateOne(
+          { _id: new Types.ObjectId(orgAId) },
+          { status: 'active' },
+        );
+      }
+    });
+
+    it('membership déjà existante (même révoquée) → 409, AUCUNE réactivation silencieuse', async () => {
+      const email = `accept-conflict-${Date.now()}@royalvibe.test`;
+      const revokedUser = await userModel.create({
+        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
+        name: 'Revoked',
+        email,
+        password: await bcrypt.hash(PASSWORD, 10),
+      });
+      await membershipModel.create({
+        organizationId: new Types.ObjectId(orgAId),
+        userId: revokedUser._id,
+        role: 'seller',
+        status: 'revoked',
+      });
+
+      // Émission acceptée : le pré-check d'émission n'exclut QUE les membres ACTIFS.
+      const issued = await invite(ownerAToken, { email, role: 'admin' });
+      expect(issued.status).toBe(201);
+
+      const res = await accept({ token: tokenOf(issued) });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('MEMBERSHIP_ALREADY_EXISTS');
+
+      const membership = await membershipModel
+        .findOne({
+          organizationId: new Types.ObjectId(orgAId),
+          userId: revokedUser._id,
+        })
+        .exec();
+      expect(membership!.status).toBe('revoked');
+    });
+
+    it('rollback après création User + Membership (garde finale) → aucune trace', async () => {
+      const email = `accept-rollback-${Date.now()}@royalvibe.test`;
+      const issued = await invite(ownerAToken, { email, role: 'seller' });
+      const membershipsBefore = await membershipModel.countDocuments({
+        organizationId: new Types.ObjectId(orgAId),
+      });
+
+      const originalCount = membershipModel.countDocuments.bind(
+        membershipModel,
+      ) as (filter?: unknown, opts?: { session?: unknown }) => Promise<number>;
+      membershipModel.countDocuments = ((
+        filter?: unknown,
+        opts?: { session?: unknown },
+      ) => {
+        if (opts?.session) {
+          return Promise.resolve(2); // force l'invariant à échouer
+        }
+        return originalCount(filter, opts);
+      }) as unknown as typeof membershipModel.countDocuments;
+
+      let res: request.Response;
+      try {
+        res = await accept({
+          token: tokenOf(issued),
+          name: 'Rollback',
+          password: 'accept-pw-!1x',
+        });
+      } finally {
+        membershipModel.countDocuments =
+          originalCount as unknown as typeof membershipModel.countDocuments;
+      }
+      expect(res.status).toBeGreaterThanOrEqual(500);
+      expect(await userModel.countDocuments({ email })).toBe(0);
+      expect(
+        await membershipModel.countDocuments({
+          organizationId: new Types.ObjectId(orgAId),
+        }),
+      ).toBe(membershipsBefore);
+    });
+
+    it('acceptation concurrente (même token) : exactement une réussite, aucune duplication', async () => {
+      const email = `accept-race-${Date.now()}@royalvibe.test`;
+      const issued = await invite(ownerAToken, { email, role: 'seller' });
+      const body = {
+        token: tokenOf(issued),
+        name: 'Race',
+        password: 'accept-pw-!1x',
+      };
+      const [a, b] = await Promise.all([accept(body), accept(body)]);
+      const statuses = [a.status, b.status].sort();
+      expect(statuses).toEqual([200, 400]);
+      expect(await userModel.countDocuments({ email })).toBe(1);
+      const user = await userModel.findOne({ email }).exec();
+      expect(
+        await membershipModel.countDocuments({
+          organizationId: new Types.ObjectId(orgAId),
+          userId: user!._id,
+        }),
+      ).toBe(1);
+    }, 20_000);
+
+    it('émission concurrente (même org+email) → 201/409, jamais 500', async () => {
+      const email = `issue-race-${Date.now()}@royalvibe.test`;
+      const [a, b] = await Promise.all([
+        invite(ownerAToken, { email, role: 'seller' }),
+        invite(ownerAToken, { email, role: 'admin' }),
+      ]);
+      const statuses = [a.status, b.status].sort((x, y) => x - y);
+      expect(statuses).toEqual([201, 409]);
+      const conflict = a.status === 409 ? a : b;
+      expect(conflict.body.code).toBe('INVITATION_ALREADY_PENDING');
+      expect(
+        await invitationModel.countDocuments({ email, status: 'pending' }),
+      ).toBe(1);
+    }, 20_000);
+
+    it('login après acceptation retourne un JWT avec le bon orgId', async () => {
+      const email = `accept-login-${Date.now()}@royalvibe.test`;
+      const password = 'accept-pw-!1x';
+      const issued = await invite(ownerAToken, { email, role: 'seller' });
+      const acc = await accept({
+        token: tokenOf(issued),
+        name: 'Login Test',
+        password,
+      });
+      expect(acc.status).toBe(200);
+
+      const loginRes = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email, password });
+      expect(loginRes.status).toBe(201);
+      const payload = jwtService.decode(String(loginRes.body.access_token));
+      expect(String(payload.orgId)).toBe(orgAId);
+    });
+
+    it('champs interdits (role/organizationId/permissions/invitedById) → 400 avant toute écriture', async () => {
+      const email = `accept-forbidden-${Date.now()}@royalvibe.test`;
+      const issued = await invite(ownerAToken, { email, role: 'seller' });
+      const usersBefore = await userModel.countDocuments();
+      const res = await accept({
+        token: tokenOf(issued),
+        name: 'F',
+        password: 'accept-pw-!1x',
+        role: 'owner',
+      });
+      expect(res.status).toBe(400);
+      expect(await userModel.countDocuments()).toBe(usersBefore);
+    });
+
+    it('rate limiting existant (429) s’applique aussi à /auth/invitations/accept', async () => {
+      let last: request.Response | undefined;
+      for (let i = 0; i < 11; i++) {
+        last = await accept({ token: `rl-${i}-${Date.now()}` });
+      }
+      expect(last!.status).toBe(429);
+      expect(last!.body.code).toBe(AUTH_RATE_LIMIT_CODE);
+    });
+  });
+});

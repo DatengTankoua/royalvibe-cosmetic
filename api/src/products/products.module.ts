@@ -1,4 +1,9 @@
 import { Module } from '@nestjs/common';
+import {
+  PurgedStockAdjustment,
+  PurgedStockAdjustmentSchema,
+} from './schemas/purged-stock-adjustment.schema';
+
 import { MongooseModule } from '@nestjs/mongoose';
 import { Product, ProductSchema } from './schemas/product.schema';
 import { Sale, SaleSchema } from '../sales/schemas/sale.schema';
@@ -15,6 +20,11 @@ import { Section, SectionSchema } from '../sections/schemas/section.schema';
       { name: Product.name, schema: ProductSchema },
       { name: Sale.name, schema: SaleSchema },
       { name: Section.name, schema: SectionSchema },
+      // 1-15D : écart figé à la purge (vue d'ensemble).
+      {
+        name: PurgedStockAdjustment.name,
+        schema: PurgedStockAdjustmentSchema,
+      },
     ]),
     S3Module,
     EventsModule,

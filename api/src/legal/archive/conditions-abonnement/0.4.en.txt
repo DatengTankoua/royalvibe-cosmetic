@@ -1,0 +1,45 @@
+Subscription Terms
+Version 0.4, updated on 7 October 2026.
+These terms describe the free trial and the paid subscription to Stock Master: what they include, how long they last, their price and what happens when they end. They supplement the Terms of Use.
+1. What the subscription includes
+There is a single offer, with all the functions of Stock Master. The subscription is taken out for a shop, not for a person:
+- all members of the shop are included, with no extra charge per seller;
+- each member accesses the functions according to the rights the shop has given them;
+- the subscription is managed by the shop owner, in Organisation, then Subscription.
+2. Free trial
+- A free trial of 7 days starts automatically when the shop is created.
+- No means of payment is requested for the trial.
+- A shop is entitled to only one trial.
+- If the “End of trial or subscription” notifications are turned on, a reminder is sent within the 24 hours before the end.
+- At the end of the trial, access to the shop is limited as described in the “Expiry” section.
+3. Lengths and prices
+The amount shown is the total to pay for the chosen length, in CFA francs (XAF).
+Subscription lengths and prices
+Length | Total | Monthly equivalent
+1 month | 3,000 FCFA | Pay month by month
+3 months | 8,500 FCFA | 2,833 FCFA (500 FCFA saved)
+6 months | 16,000 FCFA | 2,667 FCFA (2,000 FCFA saved)
+12 months | 30,000 FCFA | 2,500 FCFA (6,000 FCFA saved)
+The applicable price is the one displayed when the period is granted. A period already granted is never changed by a price change.
+4. Start and length of a period
+- A period is counted in calendar months: a one-month period started on 10 March ends on 10 April at the same time. If the day does not exist (31st), it ends on the last day of the month.
+- A period granted before the end of the trial or of the current period starts at the end of that period: time already granted is never lost.
+- The subscription status and its dates are shown in Organisation, then Subscription.
+5. Payment and renewal
+Online payment is not yet available. For any renewal request, contact support@stock-master.app.
+- There is no automatic renewal or automatic payment: each new period is the owner's decision.
+6. Expiry
+At the end of the trial or of the last paid period, without a new period:
+- access to the shop's pages is blocked for all its members, including on devices already logged in;
+- the owner sees a screen inviting them to renew; the other members are asked to contact the owner;
+- sales recorded without a connection and not yet sent stay on the device; they are sent when access is restored, within 14 days of being entered;
+- the shop's data is not deleted automatically on expiry.
+7. Stopping, withdrawal and refunds
+As nothing is renewed automatically, simply not renewing is enough to stop the subscription at the end of the current period.
+8. Who accepts these terms
+These terms bind the person who creates the shop and becomes its owner. They accept them by ticking the box provided at sign-up, together with the Terms of Use. This box is never ticked in advance.
+Invited administrators and sellers accept the Terms of Use, not these terms. After a transfer of ownership, the new owner's agreement will be requested in the application.
+The proof of acceptance is recorded by the server as described in the Terms of Use, together with the shop concerned.
+9. Complaints
+For any question or complaint about the trial, a period or a payment, write to support@stock-master.app stating the name of the shop and the owner's email address.
+These terms do not reduce any right that the law gives you.

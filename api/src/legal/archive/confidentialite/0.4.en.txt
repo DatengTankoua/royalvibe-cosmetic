@@ -1,0 +1,111 @@
+Privacy Policy
+Version 0.4, updated on 8 October 2026.
+This page explains which data Stock Master processes, why, with whom it is shared, how long it is kept and how to exercise your rights. It distinguishes the data of your account, managed by Stock Master, from the data that your shop records in the application, processed on the shop's behalf.
+1. Who is responsible for your data
+Your account data
+For accounts, subscriptions, notifications and the security of the service, the data controller is the operator of Stock Master: Stock Master, a business established in Cameroon (locations: Bijou Maképé, Douala, Cameroun; Carrefour GP Melen, après l'ancien commissariat du 13e, Yaoundé, Cameroun).
+Data entered by a shop
+For the products, stock, sales, photos and buyer information that a shop records, it is the shop that decides how they are used: it is responsible for them. Stock Master processes them on its behalf, as a processor, under the Data Processing Agreement.
+Contact for your data
+confidentialite@stock-master.app.
+2. The data processed
+Account and login
+- name, email address, date the address was confirmed;
+- password, stored only in hashed form (never in plain text);
+- confirmation and reset links, stored in hashed form, with their sending and expiry dates and the number of recent sends;
+- chosen language (French or English), used for the application and for the emails and notifications sent to you.
+Acceptance of the terms
+- identifier of your account and, where applicable, of the shop concerned;
+- date and time of acceptance, set by the server;
+- language, versions and digital fingerprints of the accepted texts and of this policy as it was presented to you.
+Reading this policy is not an agreement: it informs you. No optional permission (for example for marketing messages) is requested at sign-up, and turning on notifications on a device remains a separate choice.
+Shop and members
+- shop name, logo, colour, currency, status;
+- for each member: role, rights, access status, who sent the invitation, date joined;
+- invitations: invited email address, proposed role and rights, status, expiry date.
+Subscription
+- trial and subscription periods: length, dates, origin;
+- amount, chosen length, transaction references, status, and the payer's phone number in masked form.
+Notifications
+- in-app notifications: type, date, read status;
+- your choices of notification categories, per shop;
+- if you turn on notifications on a device: the technical address and the keys provided by the browser for that device.
+Support requests
+- from Organisation, then Support: category, subject and message that you write;
+- added automatically by the server: your name and email address, the shop's name and identifier, your role and rights, the identifiers of your account and membership, the date, a request reference and, if known, the page of the application concerned. No sale, no buyer contact, no file, password or token is attached.
+Data entered by the shop
+- categories, products, prices, quantities, photos;
+- sales: product, quantity, price, date, member who recorded it and, if the shop enters them, the buyer's name and contact details;
+- history of actions (who changed what and when) and calculated monthly summaries.
+Technical data
+- IP address: used to limit repeated login attempts. These counters are kept in memory and disappear when the server restarts;
+What the application keeps on your device is described on the Cookies and storage on your device page.
+3. Why this data is processed
+Law No. 2024/017 makes prior, free, informed and specific consent the rule (section 9). It provides for exceptions, in particular compliance with a legal obligation. Each use below therefore has its own basis: no global agreement covers all uses.
+Purposes and legal bases
+Use | Proposed basis
+Create and manage your account, log you in, send confirmation and reset emails | Your consent
+Keep proof of your acceptance of the terms | Legal obligation: the burden of proving that information was given and accepted lies with the provider (Law No. 2010/021, section 26; Decree No. 2011/1521/PM, section 12).
+Run the shop: members, rights, catalogue, sales, analytics | Processing on behalf of the shop, on its instructions (Data Processing Agreement)
+Manage the trial and the subscription, keep proof of transactions | Owner's consent; legal obligation to keep certain transactions (Decree No. 2011/1521/PM, sections 8 and 22).
+Secure the service: limit abuse, keep a record of actions on the data | Legal security obligation (Law No. 2024/017, section 27).
+Answer your support requests | Your consent: you choose to write to customer support
+Alert you on your device (push notifications) | Your specific consent: turned on by you and authorised by the browser. It can be withdrawn at any time.
+Stock Master does not send marketing, does not sell your data and does not show advertising. The analytics (revenue, product and seller rankings) are calculations made from the sales, for the shop that views them.
+4. Who can see the data
+- The members of your shop, according to the rights the shop has given them. A seller without additional rights only sees their own sales.
+- The technical providers that host the service or send its emails, only for this service (list below).
+- The browser's notification service (for example Google's, Mozilla's or Apple's), if you turn on notifications on a device: it delivers the message to that device.
+- Stock Master customer support, for your support requests: the message is sent by Resend to the address support@stock-master.app. Its reply reaches you at your account's email address.
+- An authority, when the law requires it.
+Technical providers
+Provider | Role
+Vercel | Hosting of the web application
+Railway | Hosting of the API (server)
+MongoDB Atlas | Database
+Supabase Storage | Image storage (logos, product photos)
+Resend | Sending emails (confirmation, password reset)
+5. Data hosted outside Cameroon
+The providers listed above are foreign companies. Your data may therefore be hosted or transferred outside Cameroon. The countries concerned will be stated as soon as they have been verified.
+Law No. 2024/017 makes any transfer of data to a foreign State subject to prior authorisation from the Personal Data Protection Authority (section 32).
+6. How long the data is kept
+Retention periods
+Data | Period
+Email address confirmation link | Valid for 24 hours
+Password reset link | Valid for 1 hour
+Invitation link | Valid for 72 hours; the invitation then remains in the shop's history.
+Login on a device | 7 days at most, or until you log out
+Record of a support request (reference, attached context, sending status; neither the subject nor the message) | Expires 30 days after the request. It is then erased by an automatic database clean-up, which runs in the background and may happen a little later. The message received by customer support is kept separately, in its mailbox (next row).
+Support message received by customer support | Kept in the customer support mailbox
+Read notifications | Deleted 48 hours to 30 days after being read, depending on their type
+Notifications on a device | Until they are turned off. A device that can no longer be reached is turned off automatically.
+Account | As long as the account exists.
+Proof of acceptance of the terms and accepted texts | Kept as long as the account exists. Nothing is deleted automatically today.
+Shop data, sales and history of actions | As long as the shop uses the service. Nothing is deleted automatically today.
+Subscription transactions of at least 20,000 FCFA | 10 years, the period set by Decree No. 2011/1521/PM (section 8).
+Law No. 2024/017 provides that maximum periods are set by a framework issued by the Authority (sections 13 and 28). They will be adjusted when this framework is published.
+7. How the data is protected
+- passwords and sensitive links stored in hashed form;
+- confirmation, reset and invitation links with a limited lifetime;
+- each shop's data kept separate: every request is checked by the server for the shop and the member's rights;
+- limits on repeated login attempts;
+- on the device, offline data erased on logout (except sales not yet sent).
+8. In the event of an incident
+If a data breach is found, Law No. 2024/017 requires the Authority and the people concerned to be informed without delay (section 22).
+9. Your rights
+Law No. 2024/017 allows you in particular to request:
+- access to your data and a copy (section 39);
+- correction of inaccurate or incomplete data (section 42);
+- erasure of your data or an end to its distribution (sections 37 and 38);
+- restriction of processing if its accuracy or use is disputed (section 46);
+- to object to processing, in the cases provided for by law (section 40);
+- the data you provided, in a machine-readable format (section 43);
+- to give instructions for your data after your death (sections 21 and 45).
+To exercise these rights, write to confidentialite@stock-master.app from your account's address. The law requires that your identity can be verified (section 42): you may be asked to confirm your request from that address.
+The application does not yet offer a button to download your data or delete your account: these requests are handled by email.
+For data that a shop has recorded about you, for example as a buyer, contact that shop first. Stock Master helps it answer you.
+You can also refer the matter to the Personal Data Protection Authority (section 53).
+10. Minors
+Stock Master is intended for shops. Under Law No. 2024/017, the consent of a person under 18 is valid only together with that of their parents or legal representative (section 9).
+11. Changes to this policy
+Each version is dated at the top of the page.

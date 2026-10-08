@@ -1,0 +1,80 @@
+{
+  "schema": 1,
+  "documents": {
+    "conditions-utilisation": {
+      "route": "/conditions-utilisation",
+      "current": "0.3",
+      "versions": {
+        "0.3": {
+          "publishedAt": "2026-10-07",
+          "locales": {
+            "fr": {
+              "file": "conditions-utilisation/0.3.fr.txt",
+              "sha256": "5c2e4c36edc0ecbd545659a0e12fcb50c36b543277819629ad5dc33c63dec2c2"
+            },
+            "en": {
+              "file": "conditions-utilisation/0.3.en.txt",
+              "sha256": "52ec39f1ab81d46bdcb03a62b27c0f3c635c2abc1a8dbdc89dfac81cfdbbbfb7"
+            }
+          }
+        }
+      }
+    },
+    "conditions-abonnement": {
+      "route": "/conditions-abonnement",
+      "current": "0.4",
+      "versions": {
+        "0.3": {
+          "publishedAt": "2026-10-07",
+          "locales": {
+            "fr": {
+              "file": "conditions-abonnement/0.3.fr.txt",
+              "sha256": "7efc7db353af8c9b842e798fb810c8b0082f16d9fe2c0bf116e7218c45a50e72"
+            }
+          }
+        },
+        "0.4": {
+          "publishedAt": "2026-10-07",
+          "locales": {
+            "fr": {
+              "file": "conditions-abonnement/0.4.fr.txt",
+              "sha256": "bade5d4650c93eed40481082ce6780f3b99073cd5bfc31bc141ca862b392e4ee"
+            },
+            "en": {
+              "file": "conditions-abonnement/0.4.en.txt",
+              "sha256": "5559b27b80d540ffbed5bb7bd2e22eb5f1b01730324c60248c63b6a56c49ebde"
+            }
+          }
+        }
+      }
+    },
+    "confidentialite": {
+      "route": "/confidentialite",
+      "current": "0.4",
+      "versions": {
+        "0.3": {
+          "publishedAt": "2026-10-07",
+          "locales": {
+            "fr": {
+              "file": "confidentialite/0.3.fr.txt",
+              "sha256": "941a2c17b62003c13668af353cf262dbc01616aa7a548c590fe5fb7dc841d082"
+            }
+          }
+        },
+        "0.4": {
+          "publishedAt": "2026-10-08",
+          "locales": {
+            "fr": {
+              "file": "confidentialite/0.4.fr.txt",
+              "sha256": "4370f183352f3ac13ef5fa34246e153fe35bdf032dfbc952fd26788ba4378de1"
+            },
+            "en": {
+              "file": "confidentialite/0.4.en.txt",
+              "sha256": "9d52182daee5db08df3cce68361eaff999ba42b643742f728a5aff4a95ba9969"
+            }
+          }
+        }
+      }
+    }
+  }
+}
