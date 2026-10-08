@@ -195,6 +195,15 @@ const catalogFr = {
       productsDeleted_one: "{{count}} produit supprimé définitivement",
       productsDeleted_many: "{{count}} produits supprimés définitivement",
       productsDeleted_other: "{{count}} produits supprimés définitivement",
+      // R2 privé : produit supprimé, mais sa photo n'a pas pu être effacée.
+      photoNotDeleted:
+        "La photo n'a pas pu être effacée du stockage ; elle y reste pour l'instant.",
+      photosNotDeleted_one:
+        "{{count}} photo n'a pas pu être effacée du stockage ; elle y reste pour l'instant.",
+      photosNotDeleted_many:
+        "{{count}} photos n'ont pas pu être effacées du stockage ; elles y restent pour l'instant.",
+      photosNotDeleted_other:
+        "{{count}} photos n'ont pas pu être effacées du stockage ; elles y restent pour l'instant.",
     },
     confirm: {
       restoreSectionTitle: "Restaurer ce catalogue ?",

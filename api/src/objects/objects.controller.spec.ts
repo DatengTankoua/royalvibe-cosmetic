@@ -1,7 +1,7 @@
+import { GoneException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ObjectsController } from './objects.controller';
 import { ObjectsService } from './objects.service';
-import { S3Service } from '../s3/s3.service';
 
 describe('ObjectsController', () => {
   let controller: ObjectsController;
@@ -12,11 +12,6 @@ describe('ObjectsController', () => {
     remove: jest.fn(),
   };
 
-  const mockS3Service = {
-    uploadFile: jest.fn(),
-    deleteFile: jest.fn(),
-  };
-
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [ObjectsController],
@@ -24,10 +19,6 @@ describe('ObjectsController', () => {
         {
           provide: ObjectsService,
           useValue: mockObjectsService,
-        },
-        {
-          provide: S3Service,
-          useValue: mockS3Service,
         },
       ],
     }).compile();
@@ -37,5 +28,9 @@ describe('ObjectsController', () => {
 
   it('should be defined', () => {
     expect(controller).toBeDefined();
+  });
+
+  it('création refusée (410) : aucun envoi au stockage, aucune URL publique fabriquée', () => {
+    expect(() => controller.create()).toThrow(GoneException);
   });
 });

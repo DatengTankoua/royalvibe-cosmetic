@@ -187,6 +187,12 @@ const catalogEn: Translation<typeof catalogFr> = {
       productsRestored_other: "{{count}} products restored",
       productsDeleted_one: "{{count}} product permanently deleted",
       productsDeleted_other: "{{count}} products permanently deleted",
+      photoNotDeleted:
+        "The photo could not be erased from storage; it remains there for now.",
+      photosNotDeleted_one:
+        "{{count}} photo could not be erased from storage; it remains there for now.",
+      photosNotDeleted_other:
+        "{{count}} photos could not be erased from storage; they remain there for now.",
     },
     confirm: {
       restoreSectionTitle: "Restore this catalogue?",

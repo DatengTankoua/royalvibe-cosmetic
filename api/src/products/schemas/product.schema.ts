@@ -31,8 +31,22 @@ export class Product {
   @Prop({ required: true, trim: true })
   name: string;
 
-  @Prop({ required: true })
-  imageUrl: string;
+  /**
+   * Ancienne référence (URL publique d'avant R2), conservée telle quelle :
+   * jamais convertie ni fabriquée. Les nouveaux produits n'en ont pas.
+   */
+  @Prop({ type: String, required: false })
+  imageUrl?: string;
+
+  /**
+   * Photo (R2 privé) : clé de l'objet et identité du stockage qui l'a reçu
+   * (`S3Service.storage`). Jamais d'URL signée en base.
+   */
+  @Prop({ type: String, default: null })
+  imageKey: string | null;
+
+  @Prop({ type: String, default: null })
+  imageStorage: string | null;
 
   @Prop({ required: true, min: 0 })
   purchasePrice: number;

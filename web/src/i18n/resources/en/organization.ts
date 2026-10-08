@@ -80,6 +80,8 @@ const organizationEn: Translation<typeof organizationFr> = {
   branding: {
     updated: "Branding updated",
     logoRemoved: "Logo removed",
+    oldLogoNotDeleted:
+      "The previous logo file could not be erased from storage; it remains there for now.",
     logoAlt: "Organisation logo",
     noLogo: "No logo",
     colorLabel: "Colour {{color}}",

@@ -12,6 +12,7 @@ import {
   type ApiTrashedProduct,
 } from "@/lib/api";
 import { useLiveRefresh } from "@/hooks/use-live-refresh";
+import { useImageRenewal } from "@/hooks/use-image-renewal";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
 import { useSocket } from "@/contexts/socket-context";
 
@@ -72,6 +73,8 @@ export function useTrash(enabled = true) {
     () => (enabled ? load({ silent: true }) : Promise.resolve()),
     enabled ? loadedAt : undefined,
   );
+  // R2 privé : photo non chargeable (lien signé expiré) → relecture bornée.
+  useImageRenewal(scheduleRefresh, enabled);
   const socket = useSocket();
   useEffect(() => {
     if (!socket || !enabled) return;
@@ -118,9 +121,11 @@ export function useTrash(enabled = true) {
     setProducts((prev) => prev.filter((p) => p._id !== id));
   }, []);
 
+  // Renvoie le sort du fichier (`failed` = photo non effacée du stockage).
   const doPermanentDeleteProduct = useCallback(async (id: string) => {
-    await permanentDeleteProduct(id);
+    const cleanup = await permanentDeleteProduct(id);
     setProducts((prev) => prev.filter((p) => p._id !== id));
+    return cleanup;
   }, []);
 
   const doBulkRestoreSections = useCallback(async (ids: string[]) => {
@@ -138,9 +143,11 @@ export function useTrash(enabled = true) {
     setProducts((prev) => prev.filter((p) => !ids.includes(p._id)));
   }, []);
 
+  // Renvoie le nombre de photos non effacées du stockage.
   const doBulkDeleteProducts = useCallback(async (ids: string[]) => {
-    await Promise.all(ids.map(permanentDeleteProduct));
+    const cleanups = await Promise.all(ids.map(permanentDeleteProduct));
     setProducts((prev) => prev.filter((p) => !ids.includes(p._id)));
+    return cleanups.filter((c) => c === "failed").length;
   }, []);
 
   const reload = useCallback(() => load(), [load]);

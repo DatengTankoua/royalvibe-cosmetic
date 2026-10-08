@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test:coordinator": "node scripts/test-refresh-coordinator.mjs",
+    "test:image-renewal": "node scripts/test-image-renewal.mjs",
     "test:tenant-brand": "node scripts/test-tenant-brand.mjs",
     "test:i18n": "node scripts/check-i18n.mjs",
     "i18n:coverage": "node scripts/i18n-coverage.mjs --fail"

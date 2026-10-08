@@ -92,23 +92,50 @@ async function uiLogin(page, email) {
   await page.click('button[type=submit]');
 }
 
-/** Opérations outbox de l'origine (lecture IDB brute, dans la page). */
+/**
+ * Opérations outbox de l'origine (lecture IDB brute, dans la page).
+ *
+ * LECTURE SEULE, sans jamais créer la base : `indexedDB.open(nom)` sans
+ * version CRÉE une base vide (version 1, sans store) si l'application ne l'a
+ * pas encore créée — l'application l'ouvrait ensuite en version 1 sans
+ * mise à niveau, sans store, et refusait la vente (« Stockage local
+ * indisponible » : cause de l'instabilité de RT7). La création est donc
+ * annulée (`upgradeneeded` → abandon : la base n'existe toujours pas) et la
+ * connexion de lecture est toujours refermée.
+ */
 async function outboxOps(page) {
   return page.evaluate(
     () =>
       new Promise((resolve) => {
+        let absent = false;
         const req = indexedDB.open('stockmaster-offline-sales-outbox');
+        req.onupgradeneeded = () => {
+          absent = true;
+          req.transaction.abort();
+        };
         req.onsuccess = () => {
           const dbx = req.result;
-          if (!dbx.objectStoreNames.contains('operations'))
+          if (
+            !dbx.objectStoreNames.contains('operations') ||
+            !dbx.objectStoreNames.contains('meta')
+          ) {
+            dbx.close();
             return resolve({ ops: [], metas: [] });
+          }
           const tx = dbx.transaction(['operations', 'meta'], 'readonly');
           const ops = tx.objectStore('operations').getAll();
           const metas = tx.objectStore('meta').getAll();
-          tx.oncomplete = () =>
+          tx.oncomplete = () => {
+            dbx.close();
             resolve({ ops: ops.result, metas: metas.result });
+          };
+          tx.onerror = () => {
+            dbx.close();
+            resolve(null);
+          };
         };
-        req.onerror = () => resolve(null);
+        // Création annulée : la base n'existe pas encore → aucune opération.
+        req.onerror = () => resolve(absent ? { ops: [], metas: [] } : null);
       }),
   );
 }

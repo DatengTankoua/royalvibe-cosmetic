@@ -1,5 +1,5 @@
 import Link from "next/link";
-import Image from "next/image";
+import { StoredImage } from "@/components/products/stored-image";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ApiProduct } from "@/lib/api";
 
@@ -16,13 +16,7 @@ export function ObjectCard({ object }: ObjectCardProps) {
         href={`/app/catalog/products/${object._id}`}
         className="relative block aspect-video w-full overflow-hidden bg-muted"
       >
-        <Image
-          src={object.imageUrl}
-          alt={object.name}
-          fill
-          unoptimized
-          className="object-cover"
-        />
+        <StoredImage src={object.imageUrl} alt={object.name} />
       </Link>
       <CardHeader>
         <CardTitle>

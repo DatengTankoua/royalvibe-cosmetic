@@ -44,6 +44,14 @@ export class Organization {
   logoKey: string | null;
 
   /**
+   * Identité du stockage qui a reçu `logoKey` (`S3Service.storage`).
+   * `null` sur un logo antérieur : stockage inconnu, jamais lu ni supprimé
+   * dans le stockage courant.
+   */
+  @Prop({ type: String, default: null })
+  logoStorage: string | null;
+
+  /**
    * Couleur d'accent `#RRGGBB` ; une seule couleur (décision D7).
    * Défaut `#FF6A00` (1-8A, palette Stock Master) — l'ancien défaut
    * RoyalVibe `#b8960c` n'est PAS migré (aucune organisation en production).

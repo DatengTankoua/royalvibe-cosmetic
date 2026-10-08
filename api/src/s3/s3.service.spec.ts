@@ -1,8 +1,27 @@
 import { ConfigService } from '@nestjs/config';
-import type { DeleteObjectCommand } from '@aws-sdk/client-s3';
-import { S3Service } from './s3.service';
+import type {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+} from '@aws-sdk/client-s3';
+import {
+  DEFAULT_SIGNED_URL_TTL_SECONDS,
+  S3Service,
+  StorageConfigError,
+  storageIdentity,
+} from './s3.service';
 
 const mockSend = jest.fn().mockResolvedValue({});
+const mockGetSignedUrl = jest.fn(
+  (
+    _client: unknown,
+    command: GetObjectCommand,
+    options: { expiresIn: number },
+  ) =>
+    Promise.resolve(
+      `https://signed.example/${command.input.Key}?X-Amz-Expires=${options.expiresIn}`,
+    ),
+);
 
 jest.mock('@aws-sdk/client-s3', () => {
   const actual =
@@ -15,14 +34,24 @@ jest.mock('@aws-sdk/client-s3', () => {
   };
 });
 
+jest.mock('@aws-sdk/s3-request-presigner', () => ({
+  getSignedUrl: (
+    client: unknown,
+    command: GetObjectCommand,
+    options: { expiresIn: number },
+  ) => mockGetSignedUrl(client, command, options),
+}));
+
+const ENDPOINT = 'https://account123.eu.r2.cloudflarestorage.com';
+const STORAGE = 'account123.eu.r2.cloudflarestorage.com/stockmaster-prod';
+
 function createService(overrides: Record<string, string> = {}): S3Service {
   const config: Record<string, string> = {
-    S3_BUCKET: 'heyama-objects',
-    S3_ENDPOINT: 'http://localhost:9000',
-    S3_REGION: 'us-east-1',
-    S3_ACCESS_KEY: 'minioadmin',
-    S3_SECRET_KEY: 'minioadmin123',
-    S3_FORCE_PATH_STYLE: 'true',
+    S3_BUCKET: 'stockmaster-prod',
+    S3_ENDPOINT: ENDPOINT,
+    S3_REGION: 'auto',
+    S3_ACCESS_KEY: 'fake-access',
+    S3_SECRET_KEY: 'fake-secret',
     ...overrides,
   };
   return new S3Service({
@@ -30,275 +59,197 @@ function createService(overrides: Record<string, string> = {}): S3Service {
   } as ConfigService);
 }
 
-function file(originalname: string): Express.Multer.File {
-  return {
-    originalname,
-    buffer: Buffer.from('fake'),
-    mimetype: 'image/jpeg',
-  } as Express.Multer.File;
-}
-
 const PRODUCTS_A = 'organizations/aaaaaaaaaaaaaaaaaaaaaaaa/products';
 const PRODUCTS_B = 'organizations/bbbbbbbbbbbbbbbbbbbbbbbb/products';
+const IMAGE = { extension: 'jpg', contentType: 'image/jpeg' };
 
-describe('S3Service', () => {
+describe('S3Service (R2 privé)', () => {
   beforeEach(() => {
     mockSend.mockClear();
+    mockSend.mockResolvedValue({});
+    mockGetSignedUrl.mockClear();
   });
 
-  it('should be defined', () => {
-    expect(createService()).toBeDefined();
-  });
+  describe('identité du stockage', () => {
+    it('hôte (+ chemin) de l’endpoint et bucket ; juridiction comprise', () => {
+      expect(storageIdentity(ENDPOINT, 'stockmaster-prod')).toBe(STORAGE);
+      expect(
+        storageIdentity('https://ACCOUNT123.r2.cloudflarestorage.com/', 'b'),
+      ).toBe('account123.r2.cloudflarestorage.com/b');
+      expect(
+        storageIdentity('https://proj.supabase.co/storage/v1/s3', 'royal'),
+      ).toBe('proj.supabase.co/storage/v1/s3/royal');
+    });
 
-  describe('uploadFile — clé préfixée par tenant', () => {
-    it('construit une clé sous exactement le préfixe fourni par l’appelant', async () => {
-      const service = createService();
-      const url = await service.uploadFile(file('photo.jpg'), PRODUCTS_A);
-      expect(url).toMatch(
-        new RegExp(
-          `^http://localhost:9000/heyama-objects/${PRODUCTS_A}/[0-9a-f-]+-photo\\.jpg$`,
+    it('autre juridiction, autre compte ou autre bucket : identités distinctes', () => {
+      const ids = new Set([
+        storageIdentity(ENDPOINT, 'stockmaster-prod'),
+        storageIdentity(
+          'https://account123.r2.cloudflarestorage.com',
+          'stockmaster-prod',
         ),
+        storageIdentity(ENDPOINT, 'autre'),
+      ]);
+      expect(ids.size).toBe(3);
+    });
+
+    it('endpoint ou bucket absent / invalide : aucune identité', () => {
+      expect(storageIdentity(undefined, 'b')).toBeNull();
+      expect(storageIdentity(ENDPOINT, undefined)).toBeNull();
+      expect(storageIdentity('pas une url', 'b')).toBeNull();
+    });
+  });
+
+  describe('configuration explicite', () => {
+    it('durée de signature : 900 s par défaut, valeur entière bornée sinon refus', () => {
+      expect(createService().signedUrlTtlSeconds).toBe(
+        DEFAULT_SIGNED_URL_TTL_SECONDS,
       );
-      const [command] = mockSend.mock.calls[0] as [{ input: unknown }];
       expect(
-        (command.input as { Key: string }).Key.startsWith(`${PRODUCTS_A}/`),
-      ).toBe(true);
+        createService({ S3_SIGNED_URL_TTL_SECONDS: '120' }).signedUrlTtlSeconds,
+      ).toBe(120);
+      for (const bad of ['59', '3601', '1.5', 'abc']) {
+        expect(() => createService({ S3_SIGNED_URL_TTL_SECONDS: bad })).toThrow(
+          StorageConfigError,
+        );
+      }
     });
 
-    it('deux organisations distinctes obtiennent des préfixes de clé distincts', async () => {
-      const service = createService();
-      const urlA = await service.uploadFile(file('photo.jpg'), PRODUCTS_A);
-      const urlB = await service.uploadFile(file('photo.jpg'), PRODUCTS_B);
-      expect(urlA).toContain(`${PRODUCTS_A}/`);
-      expect(urlB).toContain(`${PRODUCTS_B}/`);
-      expect(urlA.includes(PRODUCTS_B)).toBe(false);
-      expect(urlB.includes(PRODUCTS_A)).toBe(false);
-    });
-
-    it('builds the public URL from S3_ENDPOINT when S3_PUBLIC_URL is not set', async () => {
-      const service = createService();
-      const url = await service.uploadFile(file('photo.jpg'), PRODUCTS_A);
-      expect(url).toMatch(
-        /^http:\/\/localhost:9000\/heyama-objects\/.+-photo\.jpg$/,
-      );
-    });
-
-    it('builds the public URL from S3_PUBLIC_URL when set (e.g. Supabase)', async () => {
-      const service = createService({
-        S3_PUBLIC_URL:
-          'https://proj.supabase.co/storage/v1/object/public/heyama-objects/',
-      });
-      const url = await service.uploadFile(file('photo.jpg'), PRODUCTS_A);
-      expect(url).toMatch(
-        /^https:\/\/proj\.supabase\.co\/storage\/v1\/object\/public\/heyama-objects\/.+-photo\.jpg$/,
+    it('mode de somme de contrôle : défaut du SDK, when_required explicite, sinon refus', () => {
+      expect(() => createService()).not.toThrow();
+      expect(() =>
+        createService({ S3_CHECKSUM_MODE: 'when_required' }),
+      ).not.toThrow();
+      expect(() => createService({ S3_CHECKSUM_MODE: 'off' })).toThrow(
+        StorageConfigError,
       );
     });
   });
 
-  describe('uploadFile — sanitisation du nom de fichier', () => {
+  describe('uploadValidatedImage', () => {
+    it('clé serveur sous le préfixe exact, ContentType canonique, identité du stockage renvoyée', async () => {
+      const ref = await createService().uploadValidatedImage(
+        Buffer.from('x'),
+        PRODUCTS_A,
+        IMAGE,
+      );
+      expect(ref.storage).toBe(STORAGE);
+      expect(ref.key).toMatch(
+        new RegExp(`^${PRODUCTS_A}/[0-9a-f-]{36}\\.jpg$`),
+      );
+      const command = mockSend.mock.calls[0][0] as PutObjectCommand;
+      expect(command.input).toMatchObject({
+        Bucket: 'stockmaster-prod',
+        Key: ref.key,
+        ContentType: 'image/jpeg',
+      });
+      // Aucune ACL (non implémentée par R2) : le bucket reste privé.
+      expect(command.input).not.toHaveProperty('ACL');
+    });
+
+    it('stockage non configuré : aucun envoi', async () => {
+      await expect(
+        createService({ S3_ENDPOINT: '' }).uploadValidatedImage(
+          Buffer.from('x'),
+          PRODUCTS_A,
+          IMAGE,
+        ),
+      ).rejects.toThrow();
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('signedReadUrl — lecture privée', () => {
+    it('signe la clé du stockage courant sous le préfixe exact, avec la durée explicite', async () => {
+      const url = await createService().signedReadUrl(
+        { key: `${PRODUCTS_A}/k.jpg`, storage: STORAGE },
+        PRODUCTS_A,
+      );
+      expect(url).toBe(
+        `https://signed.example/${PRODUCTS_A}/k.jpg?X-Amz-Expires=900`,
+      );
+      const command = mockGetSignedUrl.mock.calls[0][1];
+      expect(command.input).toEqual({
+        Bucket: 'stockmaster-prod',
+        Key: `${PRODUCTS_A}/k.jpg`,
+      });
+    });
+
     it.each([
-      ['../../etc/passwd', 'passwd'],
-      ['..\\..\\windows\\evil.exe', 'evil.exe'],
-      ['a/b/c.png', 'c.png'],
-      ['a\\b\\c.png', 'c.png'],
-      ['mon fichier avec espaces.png', 'mon-fichier-avec-espaces.png'],
-      ['photo café été.jpg', 'photo-caf-t.jpg'],
-      ['\u0000\u0001control.png', 'control.png'],
-      ['...', 'file'],
-      ['', 'file'],
-    ])(
-      'neutralise "%s" en clé sûre se terminant par "%s"',
-      async (input, expectedSuffix) => {
-        const service = createService();
-        const url = await service.uploadFile(file(input), PRODUCTS_A);
-        const [command] = mockSend.mock.calls[
-          mockSend.mock.calls.length - 1
-        ] as [{ input: unknown }];
-        const key = (command.input as { Key: string }).Key;
-        const filenamePart = key.split('/').pop() ?? '';
-        // Aucun slash/backslash/".." ni caractère de contrôle ne survit
-        // dans le SEGMENT nom de fichier (le préfixe org/products, lui,
-        // contient légitimement des "/").
-        // eslint-disable-next-line no-control-regex -- vérifie l'ABSENCE de caractères de contrôle
-        expect(filenamePart).not.toMatch(/[\\]|\.\.|[\x00-\x1f\x7f]/);
-        expect(key.endsWith(expectedSuffix)).toBe(true);
-        expect(url.endsWith(expectedSuffix)).toBe(true);
-      },
-    );
-  });
-
-  describe('deleteFile — suppression bornée par préfixe de tenant', () => {
-    it('supprime la clé A avec la commande bucket/key exacte quand elle appartient au préfixe A', async () => {
-      const service = createService();
-      await service.deleteFile(
-        `http://localhost:9000/heyama-objects/${PRODUCTS_A}/abc-photo.jpg`,
-        PRODUCTS_A,
-      );
-      expect(mockSend).toHaveBeenCalledTimes(1);
-      const [command] = mockSend.mock.calls[0] as [DeleteObjectCommand];
-      expect(command.input).toEqual({
-        Bucket: 'heyama-objects',
-        Key: `${PRODUCTS_A}/abc-photo.jpg`,
-      });
+      ['autre organisation', { key: `${PRODUCTS_B}/k.jpg`, storage: STORAGE }],
+      [
+        'préfixe voisin sans séparateur',
+        { key: `${PRODUCTS_A}-legacy/k.jpg`, storage: STORAGE },
+      ],
+      ['préfixe seul', { key: `${PRODUCTS_A}/`, storage: STORAGE }],
+      [
+        'autre stockage (ancien fournisseur)',
+        { key: `${PRODUCTS_A}/k.jpg`, storage: 'proj.supabase.co/old' },
+      ],
+      [
+        'stockage inconnu (ancien logoKey)',
+        { key: `${PRODUCTS_A}/k.jpg`, storage: null },
+      ],
+    ])('%s → aucune URL, aucune signature', async (_label, ref) => {
+      expect(await createService().signedReadUrl(ref, PRODUCTS_A)).toBeNull();
+      expect(mockGetSignedUrl).not.toHaveBeenCalled();
     });
 
-    it('refuse de supprimer une clé de l’organisation B avec le préfixe A : DeleteObject jamais appelé', async () => {
-      const service = createService();
-      await service.deleteFile(
-        `http://localhost:9000/heyama-objects/${PRODUCTS_B}/abc-photo.jpg`,
-        PRODUCTS_A,
-      );
-      expect(mockSend).not.toHaveBeenCalled();
+    it('sans référence : null', async () => {
+      expect(await createService().signedReadUrl(null, PRODUCTS_A)).toBeNull();
     });
 
-    it('refuse une clé legacy plate (sans préfixe organisationnel)', async () => {
-      const service = createService();
-      await service.deleteFile(
-        'http://localhost:9000/heyama-objects/abc-legacy.jpg',
-        PRODUCTS_A,
-      );
-      expect(mockSend).not.toHaveBeenCalled();
-    });
-
-    it('refuse une URL malformée/hors bucket (clé introuvable)', async () => {
-      const service = createService();
-      await service.deleteFile(
-        'https://totally-unrelated.example.com/whatever.jpg',
-        PRODUCTS_A,
-      );
-      expect(mockSend).not.toHaveBeenCalled();
-    });
-
-    it('n’utilise jamais un startsWith nu : un préfixe voisin sans séparateur ne matche pas', async () => {
-      const service = createService();
-      const neighbourOrgPrefix =
-        'organizations/aaaaaaaaaaaaaaaaaaaaaaaaXX/products';
-      await service.deleteFile(
-        `http://localhost:9000/heyama-objects/${neighbourOrgPrefix}/abc.jpg`,
-        PRODUCTS_A,
-      );
-      expect(mockSend).not.toHaveBeenCalled();
-    });
-
-    it('refuse une origine étrangère même si bucket et préfixe apparaissent dans le chemin (évite le split naïf)', async () => {
-      const service = createService();
-      await service.deleteFile(
-        `https://evil.example/heyama-objects/${PRODUCTS_A}/victim.jpg`,
-        PRODUCTS_A,
-      );
-      expect(mockSend).not.toHaveBeenCalled();
-    });
-
-    it('refuse un chemin de base voisin sur la MÊME origine (bucket différent du bucket réellement configuré)', async () => {
-      const service = createService();
-      await service.deleteFile(
-        `http://localhost:9000/heyama-objects-other/${PRODUCTS_A}/abc.jpg`,
-        PRODUCTS_A,
-      );
-      expect(mockSend).not.toHaveBeenCalled();
-    });
-
-    it('refuse une URL portant des credentials embarqués', async () => {
-      const service = createService();
-      await service.deleteFile(
-        `http://attacker:secret@localhost:9000/heyama-objects/${PRODUCTS_A}/abc.jpg`,
-        PRODUCTS_A,
-      );
-      expect(mockSend).not.toHaveBeenCalled();
-    });
-
-    it('refuse un encodage invalide dans le chemin', async () => {
-      const service = createService();
-      await service.deleteFile(
-        `http://localhost:9000/heyama-objects/${PRODUCTS_A}/%E0%A4%A`,
-        PRODUCTS_A,
-      );
-      expect(mockSend).not.toHaveBeenCalled();
-    });
-
-    it('respecte le chemin de base Supabase complet (pas seulement le nom du bucket)', async () => {
-      const service = createService({
-        S3_PUBLIC_URL:
-          'https://proj.supabase.co/storage/v1/object/public/heyama-objects/',
-      });
-      await service.deleteFile(
-        `https://proj.supabase.co/storage/v1/object/public/heyama-objects/${PRODUCTS_A}/abc.jpg`,
-        PRODUCTS_A,
-      );
-      expect(mockSend).toHaveBeenCalledTimes(1);
-      const [command] = mockSend.mock.calls[0] as [DeleteObjectCommand];
-      expect(command.input).toEqual({
-        Bucket: 'heyama-objects',
-        Key: `${PRODUCTS_A}/abc.jpg`,
-      });
-    });
-  });
-
-  const BRANDING_A = 'organizations/aaaaaaaaaaaaaaaaaaaaaaaa/branding';
-  const BRANDING_B = 'organizations/bbbbbbbbbbbbbbbbbbbbbbbb/branding';
-
-  describe('uploadStoredFile — {key,url} (1-8A)', () => {
-    it('retourne une clé sous le préfixe fourni et une URL cohérente avec cette clé', async () => {
-      const service = createService();
-      const { key, url } = await service.uploadStoredFile(
-        file('logo.png'),
-        BRANDING_A,
-      );
-      expect(key.startsWith(`${BRANDING_A}/`)).toBe(true);
-      expect(key.endsWith('logo.png')).toBe(true);
-      expect(url).toBe(`http://localhost:9000/heyama-objects/${key}`);
-    });
-
-    it('appelle PutObjectCommand exactement comme uploadFile (même mécanisme)', async () => {
-      const service = createService();
-      await service.uploadStoredFile(file('logo.png'), BRANDING_A);
-      expect(mockSend).toHaveBeenCalledTimes(1);
-      const [command] = mockSend.mock.calls[0] as [{ input: unknown }];
+    it('signature impossible : null, jamais une exception', async () => {
+      mockGetSignedUrl.mockRejectedValueOnce(new Error('boom'));
       expect(
-        (command.input as { Key: string }).Key.startsWith(`${BRANDING_A}/`),
-      ).toBe(true);
+        await createService().signedReadUrl(
+          { key: `${PRODUCTS_A}/k.jpg`, storage: STORAGE },
+          PRODUCTS_A,
+        ),
+      ).toBeNull();
     });
   });
 
-  describe('publicUrlForKey (1-8A)', () => {
-    it('déduit l’URL publique d’une clé déjà connue, sans appel réseau', () => {
-      const service = createService();
-      expect(service.publicUrlForKey(`${BRANDING_A}/logo.png`)).toBe(
-        `http://localhost:9000/heyama-objects/${BRANDING_A}/logo.png`,
+  describe('deleteStoredObject — après l’écriture MongoDB', () => {
+    it('supprime la clé exacte du stockage courant → deleted', async () => {
+      const outcome = await createService().deleteStoredObject(
+        { key: `${PRODUCTS_A}/k.jpg`, storage: STORAGE },
+        PRODUCTS_A,
       );
-      expect(mockSend).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('deleteStoredKey — suppression par clé déjà connue (1-8A)', () => {
-    it('supprime une clé appartenant exactement au préfixe autorisé', async () => {
-      const service = createService();
-      await service.deleteStoredKey(`${BRANDING_A}/old.png`, BRANDING_A);
-      expect(mockSend).toHaveBeenCalledTimes(1);
-      const [command] = mockSend.mock.calls[0] as [DeleteObjectCommand];
+      expect(outcome).toBe('deleted');
+      const command = mockSend.mock.calls[0][0] as DeleteObjectCommand;
       expect(command.input).toEqual({
-        Bucket: 'heyama-objects',
-        Key: `${BRANDING_A}/old.png`,
+        Bucket: 'stockmaster-prod',
+        Key: `${PRODUCTS_A}/k.jpg`,
       });
     });
 
-    it('refuse une clé de l’organisation B avec le préfixe A : jamais appelé', async () => {
-      const service = createService();
-      await service.deleteStoredKey(`${BRANDING_B}/old.png`, BRANDING_A);
+    it('aucune référence → not_needed', async () => {
+      expect(await createService().deleteStoredObject(null, PRODUCTS_A)).toBe(
+        'not_needed',
+      );
       expect(mockSend).not.toHaveBeenCalled();
     });
 
-    it('refuse un préfixe voisin sans séparateur (jamais un startsWith nu)', async () => {
-      const service = createService();
-      const neighbour = 'organizations/aaaaaaaaaaaaaaaaaaaaaaaaXX/branding';
-      await service.deleteStoredKey(`${neighbour}/old.png`, BRANDING_A);
+    it.each([
+      ['autre stockage', { key: `${PRODUCTS_A}/k.jpg`, storage: 'old/b' }],
+      ['stockage inconnu', { key: `${PRODUCTS_A}/k.jpg`, storage: null }],
+      ['autre organisation', { key: `${PRODUCTS_B}/k.jpg`, storage: STORAGE }],
+    ])('%s → retained, aucun appel', async (_label, ref) => {
+      expect(await createService().deleteStoredObject(ref, PRODUCTS_A)).toBe(
+        'retained',
+      );
       expect(mockSend).not.toHaveBeenCalled();
     });
 
-    it('refuse une clé plate (legacy, sans préfixe)', async () => {
-      const service = createService();
-      await service.deleteStoredKey('legacy-logo.png', BRANDING_A);
-      expect(mockSend).not.toHaveBeenCalled();
+    it('échec du stockage → failed (objet conservé), jamais deleted ni exception', async () => {
+      mockSend.mockRejectedValueOnce(new Error('network'));
+      expect(
+        await createService().deleteStoredObject(
+          { key: `${PRODUCTS_A}/k.jpg`, storage: STORAGE },
+          PRODUCTS_A,
+        ),
+      ).toBe('failed');
     });
   });
 });

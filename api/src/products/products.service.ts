@@ -14,7 +14,11 @@ import { Sale, SaleDocument } from '../sales/schemas/sale.schema';
 import { SALE_ERROR_CODES } from '../sales/sale-error-codes';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
-import { S3Service } from '../s3/s3.service';
+import {
+  S3Service,
+  type StorageCleanup,
+  type StoredObjectRef,
+} from '../s3/s3.service';
 import { EventsGateway } from '../events/events.gateway';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/schemas/audit-log.schema';
@@ -34,6 +38,42 @@ import {
 } from './product-projection';
 
 export type { ProductStatus } from './product-projection';
+
+/** Préfixe des photos d'une organisation (clé serveur, jamais cliente). */
+export function productImagePrefix(organizationId: string): string {
+  return `organizations/${organizationId}/products`;
+}
+
+/** Ancienne URL (avant R2) : renvoyée telle quelle si http(s), jamais convertie. */
+function legacyImageUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:'
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Champs de photo lus sur un document produit. */
+interface ProductImageFields {
+  imageUrl?: string | null;
+  imageKey?: string | null;
+  imageStorage?: string | null;
+}
+
+function storedImageRef(p: ProductImageFields): StoredObjectRef | null {
+  return p.imageKey
+    ? { key: p.imageKey, storage: p.imageStorage ?? null }
+    : null;
+}
+
+/** Sort du fichier précédent, renvoyé avec la réponse (jamais un succès supposé). */
+export interface StorageCleanupResult {
+  storageCleanup: StorageCleanup;
+}
 
 /** 1-16A.1 — résultat d'un ajustement de stock (détection des seuils). */
 export interface StockAdjustment {
@@ -167,10 +207,14 @@ export class ProductsService {
           products.map((p) => p._id),
         )
       : new Map<string, number>();
-    return products.map((p) =>
+    const images = await Promise.all(
+      products.map((p) => this.imageUrlFor(organizationId, p)),
+    );
+    return products.map((p, index) =>
       toProductMetricsView(
         p,
         visibility,
+        images[index],
         visibility.financials
           ? (revenues.get(p._id.toString()) ?? 0)
           : undefined,
@@ -178,10 +222,60 @@ export class ProductsService {
     );
   }
 
+  /**
+   * URL de lecture d'une photo, calculée À CHAQUE réponse pour un produit
+   * déjà lu dans l'organisation du demandeur : signée (durée explicite) si
+   * la photo est dans le stockage courant et sous le préfixe exact de cette
+   * organisation ; ancienne URL telle quelle sinon ; `null` si aucune.
+   */
+  private async imageUrlFor(
+    organizationId: string,
+    p: ProductImageFields,
+  ): Promise<string | null> {
+    const ref = storedImageRef(p);
+    if (ref) {
+      return this.s3Service.signedReadUrl(
+        ref,
+        productImagePrefix(organizationId),
+      );
+    }
+    return legacyImageUrl(p.imageUrl);
+  }
+
+  /** Une photo est-elle référencée par un produit de l'organisation ? */
+  async isImageReferenced(
+    organizationId: string,
+    key: string,
+  ): Promise<boolean> {
+    const found = await this.productModel
+      .exists({
+        organizationId: new Types.ObjectId(organizationId),
+        imageKey: key,
+      })
+      .exec();
+    return found !== null;
+  }
+
+  /**
+   * Suppression APRÈS l'écriture MongoDB. Une ancienne URL (avant R2) n'est
+   * jamais supprimée : son stockage n'est pas celui de la configuration.
+   */
+  private async cleanupPreviousImage(
+    organizationId: string,
+    previous: ProductImageFields,
+  ): Promise<StorageCleanup> {
+    const ref = storedImageRef(previous);
+    if (!ref) return previous.imageUrl ? 'retained' : 'not_needed';
+    return this.s3Service.deleteStoredObject(
+      ref,
+      productImagePrefix(organizationId),
+    );
+  }
+
   async create(
     organizationId: string,
     dto: CreateProductDto,
-    imageUrl: string,
+    image: StoredObjectRef,
     actorId: string,
     visibility: ProductVisibility = COMMON_VISIBILITY,
   ): Promise<ProductView> {
@@ -220,7 +314,8 @@ export class ProductsService {
       organizationId: new Types.ObjectId(organizationId),
       sectionId: new Types.ObjectId(dto.sectionId),
       name: dto.name,
-      imageUrl,
+      imageKey: image.key,
+      imageStorage: image.storage,
       purchasePrice: dto.purchasePrice,
       salePrice: dto.salePrice,
       initialQuantity: dto.initialQuantity,
@@ -238,13 +333,15 @@ export class ProductsService {
         initialQuantity: dto.initialQuantity,
       },
     );
-    // 1-12H — diffusion commune : champs standard uniquement.
+    // 1-12H — diffusion commune : champs standard uniquement (photo signée,
+    // room de l'organisation seulement).
+    const imageUrl = await this.imageUrlFor(organizationId, product);
     this.emitBestEffort(
       organizationId,
       'product:created',
-      toProductMetricsView(product, COMMON_VISIBILITY),
+      toProductMetricsView(product, COMMON_VISIBILITY, imageUrl),
     );
-    return toProductView(product, visibility);
+    return toProductView(product, visibility, imageUrl);
   }
 
   async findAll(
@@ -330,9 +427,9 @@ export class ProductsService {
     id: string,
     dto: UpdateProductDto,
     actorId: string,
-    newImageUrl?: string,
+    newImage?: StoredObjectRef,
     visibility: ProductVisibility = COMMON_VISIBILITY,
-  ): Promise<ProductMetricsView> {
+  ): Promise<ProductMetricsView & Partial<StorageCleanupResult>> {
     // §4 — relecture composite tenant : produit étranger = 404, pas de fuite.
     const product = await this.productModel
       .findOne({
@@ -343,8 +440,17 @@ export class ProductsService {
     if (!product) throw new NotFoundException(`Product ${id} not found`);
 
     const changes: Record<string, unknown> = {};
-    const previousImageUrl = product.imageUrl;
-    if (newImageUrl) product.imageUrl = newImageUrl;
+    // Ancienne photo : lue AVANT la mutation, supprimée APRÈS l'écriture.
+    // Une ancienne URL (avant R2) reste telle quelle en base.
+    const previousImage: ProductImageFields = {
+      imageUrl: product.imageUrl,
+      imageKey: product.imageKey,
+      imageStorage: product.imageStorage,
+    };
+    if (newImage) {
+      product.imageKey = newImage.key;
+      product.imageStorage = newImage.storage;
+    }
 
     if (dto.name && dto.name !== product.name) {
       changes.name = { from: product.name, to: dto.name };
@@ -457,26 +563,26 @@ export class ProductsService {
             )
             .exec();
     if (!saved) throw new NotFoundException(`Product ${id} not found`);
-    // Ancienne image supprimée SEULEMENT après succès de la mutation.
-    if (newImageUrl && previousImageUrl !== newImageUrl) {
-      await this.s3Service.deleteFile(
-        previousImageUrl,
-        `organizations/${organizationId}/products`,
-      );
-    }
+    // Ancienne photo supprimée SEULEMENT après succès de la mutation ; son
+    // sort est renvoyé tel quel (un échec n'est jamais présenté comme une
+    // suppression).
+    const storageCleanup = newImage
+      ? await this.cleanupPreviousImage(organizationId, previousImage)
+      : undefined;
     // 1-12H — diffusion commune (standard seul) ; chaque client recharge
     // ses champs étendus via l'API selon ses propres permissions.
+    const imageUrl = await this.imageUrlFor(organizationId, saved);
     this.emitBestEffort(
       organizationId,
       'product:updated',
-      toProductMetricsView(saved, COMMON_VISIBILITY),
+      toProductMetricsView(saved, COMMON_VISIBILITY, imageUrl),
     );
     const [view] = await this.toMetricsViews(
       organizationId,
       [saved],
       visibility,
     );
-    return view;
+    return storageCleanup ? { ...view, storageCleanup } : view;
   }
 
   async remove(
@@ -506,7 +612,11 @@ export class ProductsService {
       },
     );
     this.emitBestEffort(organizationId, 'product:deleted', id);
-    return toProductView(product, visibility);
+    return toProductView(
+      product,
+      visibility,
+      await this.imageUrlFor(organizationId, product),
+    );
   }
 
   async findTrashed(
@@ -520,7 +630,12 @@ export class ProductsService {
       })
       .sort({ deletedAt: -1 })
       .exec();
-    return products.map((p) => toProductView(p, visibility));
+    const images = await Promise.all(
+      products.map((p) => this.imageUrlFor(organizationId, p)),
+    );
+    return products.map((p, index) =>
+      toProductView(p, visibility, images[index]),
+    );
   }
 
   async restore(
@@ -539,35 +654,28 @@ export class ProductsService {
       )
       .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
+    const imageUrl = await this.imageUrlFor(organizationId, product);
     this.emitBestEffort(
       organizationId,
       'product:created',
-      toProductMetricsView(product, COMMON_VISIBILITY),
+      toProductMetricsView(product, COMMON_VISIBILITY, imageUrl),
     );
-    return toProductView(product, visibility);
+    return toProductView(product, visibility, imageUrl);
   }
 
   async permanentDelete(
     organizationId: string,
     id: string,
     visibility: ProductVisibility = COMMON_VISIBILITY,
-  ): Promise<ProductView> {
+  ): Promise<ProductView & StorageCleanupResult> {
     const orgOid = new Types.ObjectId(organizationId);
     // §6 — le produit est d'abord localisé par filtre composite tenant :
-    // un produit étranger/absent provoque un 404 AVANT tout traitement,
-    // donc `s3Service.deleteFile` n'est JAMAIS appelé sur une ressource
-    // non rattachée à l'organisation demandée.
+    // un produit étranger/absent provoque un 404 AVANT tout traitement :
+    // aucun fichier d'une autre organisation n'est jamais touché.
     const product = await this.productModel
       .findOne({ _id: id, organizationId: orgOid })
       .exec();
     if (!product) throw new NotFoundException(`Product ${id} not found`);
-    // Fichier supprimé AVANT et HORS de la transaction (jamais dans un
-    // callback rejouable) : un échec ultérieur laisse le produit en place et
-    // la purge reste relançable, sans fichier orphelin.
-    await this.s3Service.deleteFile(
-      product.imageUrl,
-      `organizations/${organizationId}/products`,
-    );
     // 1-15D — suppression du document ET conservation de l'historique de
     // ses ventes dans la MÊME transaction. Une vente concurrente écrit le
     // même document produit (décrément du stock) : l'une des deux
@@ -594,12 +702,22 @@ export class ProductsService {
     // (`product:deleted`) : le produit n'est plus restaurable. Identifiant
     // seul, émis seulement si cette requête a réellement supprimé le
     // document (aucune émission sur 404 ni sur échec), après le commit.
+    // Fichier supprimé APRÈS le commit, HORS de la transaction (jamais dans
+    // un callback rejouable), et seulement par la requête qui a réellement
+    // supprimé le document. Un échec de suppression laisse un objet orphelin
+    // journalisé et renvoyé (`failed`), jamais un succès supposé.
+    const storageCleanup = removed
+      ? await this.cleanupPreviousImage(organizationId, removed)
+      : 'not_needed';
     if (removed) {
       this.emitBestEffort(organizationId, 'product:purged', {
         _id: String(removed._id),
       });
     }
-    return toProductView(removed ?? product, visibility);
+    return {
+      ...toProductView(removed ?? product, visibility, null),
+      storageCleanup,
+    };
   }
 
   /**

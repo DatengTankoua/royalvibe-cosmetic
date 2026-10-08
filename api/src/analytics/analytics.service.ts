@@ -61,7 +61,6 @@ export interface ProductRankingRow {
   productId: Types.ObjectId;
   productName: string | null;
   productDeleted: boolean;
-  imageUrl: string | null;
   /** Stock courant ; `null` pour un produit supprimé. */
   remainingQuantity: number | null;
   totalUnitsSold: number;
@@ -448,7 +447,8 @@ export class AnalyticsService {
             ],
           },
           productDeleted: 1,
-          imageUrl: { $ifNull: ['$product.imageUrl', null] },
+          // R2 privé : aucune URL de photo ici (non affichée par l'Analyse ;
+          // une photo n'est lisible que par URL signée à la lecture produit).
           // Stock courant : inexistant pour un produit supprimé (`null`).
           remainingQuantity: { $ifNull: ['$product.remainingQuantity', null] },
           totalUnitsSold: 1,

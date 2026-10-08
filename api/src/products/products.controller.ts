@@ -4,6 +4,7 @@ import {
   Delete,
   ForbiddenException,
   Get,
+  Logger,
   Param,
   Patch,
   Post,
@@ -12,13 +13,11 @@ import {
   UseInterceptors,
   BadRequestException,
 } from '@nestjs/common';
-// 1-12D : FileInterceptor + limites multipart durcies (GHSA-535w).
-import { SafeFileInterceptor } from '../common/upload/safe-file-interceptor';
-import { ProductsService } from './products.service';
+import { ProductsService, productImagePrefix } from './products.service';
 import type { SalesHistoryScope } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
-import { S3Service } from '../s3/s3.service';
+import { S3Service, type StoredObjectRef } from '../s3/s3.service';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
@@ -31,8 +30,9 @@ import {
 import { User } from '../users/schemas/user.schema';
 import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
 import { productVisibility } from './product-projection';
-
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+import { validateProductImage } from './product-image-validation';
+// 1-12D : limites multipart durcies (GHSA-535w) ; 413 stable (R2).
+import { ProductImageUploadInterceptor } from './product-image-upload.interceptor';
 
 // Matrice audit 1A §3 : stock+prix ⇒ `stock.adjust`, catalogue/images ⇒
 // `products.manage`. Un PATCH ne portant AUCUN champ reconnu retombe sur
@@ -60,30 +60,71 @@ function requiredPermissionsForUpdate(
  */
 @Controller('products')
 export class ProductsController {
+  private readonly logger = new Logger(ProductsController.name);
+
   constructor(
     private readonly productsService: ProductsService,
     private readonly s3Service: S3Service,
   ) {}
 
-  // Clé serveur (1-5B) : jamais dérivée du DTO/nom de fichier client.
-  private imageKeyPrefix(organizationId: string): string {
-    return `organizations/${organizationId}/products`;
+  /**
+   * Photo contrôlée (format, décodage, dimensions) PUIS envoyée au stockage
+   * sous le préfixe de l'organisation (clé serveur, jamais dérivée du DTO
+   * ni du nom de fichier client). Contenu reçu libéré ensuite.
+   */
+  private async storeProductImage(
+    file: Express.Multer.File,
+    organizationId: string,
+  ): Promise<StoredObjectRef> {
+    const validated = await validateProductImage(file);
+    try {
+      return await this.s3Service.uploadValidatedImage(
+        file.buffer,
+        productImagePrefix(organizationId),
+        validated,
+      );
+    } finally {
+      file.buffer = Buffer.alloc(0);
+    }
+  }
+
+  /**
+   * Écriture MongoDB échouée après l'upload : le nouvel objet est supprimé
+   * SEULEMENT si aucun produit de l'organisation ne le référence (une
+   * erreur survenue après l'écriture ne supprime jamais une photo en
+   * usage). Lecture impossible → objet conservé (orphelin journalisé).
+   */
+  private async discardUnreferencedImage(
+    organizationId: string,
+    image: StoredObjectRef,
+  ): Promise<void> {
+    let referenced: boolean;
+    try {
+      referenced = await this.productsService.isImageReferenced(
+        organizationId,
+        image.key,
+      );
+    } catch {
+      this.logger.warn(
+        `Photo conservée (vérification impossible) : ${image.key}`,
+      );
+      return;
+    }
+    if (referenced) return;
+    const cleanup = await this.s3Service.deleteStoredObject(
+      image,
+      productImagePrefix(organizationId),
+    );
+    if (cleanup !== 'deleted') {
+      this.logger.warn(
+        `Photo non référencée conservée (${cleanup}) : ${image.key}`,
+      );
+    }
   }
 
   @Post()
   @RequirePermissions('products.manage')
-  @UseInterceptors(
-    SafeFileInterceptor('image', {
-      limits: { fileSize: MAX_IMAGE_SIZE },
-      fileFilter: (_req, file, cb) => {
-        if (!file.mimetype.startsWith('image/')) {
-          cb(new BadRequestException('Only image files are allowed'), false);
-          return;
-        }
-        cb(null, true);
-      },
-    }),
-  )
+  @UseInterceptors(ProductImageUploadInterceptor)
   async create(
     @Body() dto: CreateProductDto,
     @UploadedFile() file: Express.Multer.File,
@@ -91,21 +132,19 @@ export class ProductsController {
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
     if (!file) throw new BadRequestException('Image file is required');
-    const prefix = this.imageKeyPrefix(organizationContext.organizationId);
-    // Si `uploadFile` échoue, aucune URL n'existe encore : rien à nettoyer.
-    const imageUrl = await this.s3Service.uploadFile(file, prefix);
+    const organizationId = organizationContext.organizationId;
+    // Si l'upload échoue, aucun objet n'existe encore : rien à nettoyer.
+    const image = await this.storeProductImage(file, organizationId);
     try {
       return await this.productsService.create(
-        organizationContext.organizationId,
+        organizationId,
         dto,
-        imageUrl,
+        image,
         user._id.toString(),
         productVisibility(organizationContext),
       );
     } catch (err) {
-      // Mutation échouée après upload : la nouvelle image ne doit jamais
-      // rester orpheline sur le tenant.
-      await this.s3Service.deleteFile(imageUrl, prefix);
+      await this.discardUnreferencedImage(organizationId, image);
       throw err;
     }
   }
@@ -151,18 +190,7 @@ export class ProductsController {
   }
 
   @Patch(':id')
-  @UseInterceptors(
-    SafeFileInterceptor('image', {
-      limits: { fileSize: MAX_IMAGE_SIZE },
-      fileFilter: (_req, file, cb) => {
-        if (!file.mimetype.startsWith('image/')) {
-          cb(new BadRequestException('Only image files are allowed'), false);
-          return;
-        }
-        cb(null, true);
-      },
-    }),
-  )
+  @UseInterceptors(ProductImageUploadInterceptor)
   async update(
     @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: UpdateProductDto,
@@ -176,23 +204,22 @@ export class ProductsController {
     if (!required.every((p) => hasPermission(organizationContext, p))) {
       throw new ForbiddenException(PERMISSION_DENIED_RESPONSE);
     }
-    const prefix = this.imageKeyPrefix(organizationContext.organizationId);
-    const newImageUrl = file
-      ? await this.s3Service.uploadFile(file, prefix)
+    const organizationId = organizationContext.organizationId;
+    const newImage = file
+      ? await this.storeProductImage(file, organizationId)
       : undefined;
     try {
       return await this.productsService.update(
-        organizationContext.organizationId,
+        organizationId,
         id,
         dto,
         user._id.toString(),
-        newImageUrl,
+        newImage,
         productVisibility(organizationContext),
       );
     } catch (err) {
-      // Mutation échouée après upload : la nouvelle image ne doit jamais
-      // rester orpheline sur le tenant.
-      if (newImageUrl) await this.s3Service.deleteFile(newImageUrl, prefix);
+      if (newImage)
+        await this.discardUnreferencedImage(organizationId, newImage);
       throw err;
     }
   }
