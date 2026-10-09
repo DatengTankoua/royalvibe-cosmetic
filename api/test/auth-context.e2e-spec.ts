@@ -30,6 +30,7 @@ import {
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -130,17 +131,15 @@ describe('GET /auth/context (e2e 1-9C)', () => {
         getModelToken(OrganizationMembership.name),
       );
 
-      const reg = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Owner',
-          email: OWNER_EMAIL,
-          password: PASSWORD,
-          organizationName: 'Context Org 19C',
-        });
-      expect(reg.status).toBe(201);
-      orgId = reg.body.organization._id as string;
+      const reg = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Owner',
+        email: OWNER_EMAIL,
+        password: PASSWORD,
+        organizationName: 'Context Org 19C',
+      });
+      expect(reg.status).toBe(202);
+      orgId = reg.owner!.organization._id;
 
       const loginOwner = await request(app.getHttpServer())
         .post('/auth/login')
@@ -198,17 +197,15 @@ describe('GET /auth/context (e2e 1-9C)', () => {
 
       // Organisation courante suspendue APRÈS émission du token : cette
       // route N'EST PAS `@SkipOrganizationContext` — doit rester 403.
-      const regStranded = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Stranded Owner',
-          email: STRANDED_OWNER_EMAIL,
-          password: PASSWORD,
-          organizationName: 'Stranded Context 19C',
-        });
-      expect(regStranded.status).toBe(201);
-      const strandedOrgId = regStranded.body.organization._id as string;
+      const regStranded = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Stranded Owner',
+        email: STRANDED_OWNER_EMAIL,
+        password: PASSWORD,
+        organizationName: 'Stranded Context 19C',
+      });
+      expect(regStranded.status).toBe(202);
+      const strandedOrgId = regStranded.owner!.organization._id;
       const loginStranded = await request(app.getHttpServer())
         .post('/auth/login')
         .send({ email: STRANDED_OWNER_EMAIL, password: PASSWORD });

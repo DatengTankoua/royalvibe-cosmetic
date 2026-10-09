@@ -49,6 +49,9 @@ import {
   createInvitedAccount,
 } from './e2e/invitation-acceptance-fixtures';
 
+import { postRegister } from './e2e/registration-fixtures';
+import { REGISTRATION_ACCEPTED_MESSAGE } from '../src/auth/auth.service';
+
 /**
  * E2E 1-13A — vérification des emails : `MongoMemoryReplSet` éphémère,
  * expéditeur SIMULÉ (aucun appel Resend : `fetch` toujours mocké quand
@@ -154,18 +157,17 @@ describe('Vérification des emails (e2e 1-13A)', () => {
     email: string,
     organizationName: string,
   ): Promise<{ orgId: string; body: Record<string, unknown> }> {
-    const res = await http()
-      .post('/auth/register')
-      .send({
-        ...OWNER_TERMS,
-        name: 'Owner',
-        email,
-        password: PASSWORD,
-        organizationName,
-      });
-    expect(res.status).toBe(201);
+    const res = await postRegister(app, {
+      ...OWNER_TERMS,
+      name: 'Owner',
+      email,
+      password: PASSWORD,
+      organizationName,
+    });
+    // 1-18E : 202 neutre ; organisation lue en base (jamais dans la réponse).
+    expect(res.status).toBe(202);
     return {
-      orgId: (res.body as { organization: { _id: string } }).organization._id,
+      orgId: res.owner!.organization._id,
       body: res.body as Record<string, unknown>,
     };
   }
@@ -295,7 +297,9 @@ describe('Vérification des emails (e2e 1-13A)', () => {
     it('parcours complet, preuve stockée en SHA-256 seulement, aucun JWT à la confirmation', async () => {
       const email = 'owner-1-13a@verify.test';
       const { orgId, body } = await registerOwner(email, 'Org 13A');
-      expect(body.emailVerification).toEqual({ status: 'sent' });
+      // 1-18E : envoi après la réponse ; corps neutre, sans état d'envoi.
+      expect(body).toEqual({ message: REGISTRATION_ACCEPTED_MESSAGE });
+      expect(recorder.sentTo(email)).toHaveLength(1);
       expect(JSON.stringify(body)).not.toMatch(/token|hash/i);
 
       const stored = await internals(email);
@@ -337,15 +341,13 @@ describe('Vérification des emails (e2e 1-13A)', () => {
     it('compte créé par invitation (1-18B) : adresse prouvée par le lien reçu, aucun lien de vérification, organisation et permissions conservées', async () => {
       const owner = await verifiedOwner('owner-2-13a@verify.test', 'Org Inv');
       process.env.PUBLIC_REGISTRATION_ENABLED = 'false';
-      const closed = await http()
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'X',
-          email: 'closed-13a@verify.test',
-          password: PASSWORD,
-          organizationName: 'X',
-        });
+      const closed = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'X',
+        email: 'closed-13a@verify.test',
+        password: PASSWORD,
+        organizationName: 'X',
+      });
       expect(closed.status).toBe(403);
 
       const invited = 'invited-13a@verify.test';
@@ -772,7 +774,8 @@ describe('Vérification des emails (e2e 1-13A)', () => {
         fetchMock.mockImplementation(behaviour);
 
         const { orgId, body } = await registerOwner(email, 'Org Fail');
-        expect(body.emailVerification).toEqual({ status: 'failed' });
+        // 1-18E : échec du fournisseur jamais exposé (envoi après réponse).
+        expect(body).toEqual({ message: REGISTRATION_ACCEPTED_MESSAGE });
         expect(JSON.stringify(body)).not.toMatch(/resend|http|422|503/i);
         expect(fetchMock).toHaveBeenCalledTimes(1); // aucune relance
         const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -783,16 +786,15 @@ describe('Vérification des emails (e2e 1-13A)', () => {
 
         expect(await userModel.countDocuments({ email })).toBe(1);
         expect((await internals(email))!.emailVerifiedAt ?? null).toBeNull();
-        const duplicate = await http()
-          .post('/auth/register')
-          .send({
-            ...OWNER_TERMS,
-            name: 'Owner',
-            email,
-            password: PASSWORD,
-            organizationName: 'Org Fail 2',
-          });
-        expect(duplicate.status).toBe(400);
+        const duplicate = await postRegister(app, {
+          ...OWNER_TERMS,
+          name: 'Owner',
+          email,
+          password: PASSWORD,
+          organizationName: 'Org Fail 2',
+        });
+        expect(duplicate.status).toBe(202);
+        expect(duplicate.body).toEqual(body);
         expect(await userModel.countDocuments({ email })).toBe(1);
         expect((await login(email, orgId)).body.code).toBe(
           'EMAIL_NOT_VERIFIED',
@@ -814,7 +816,7 @@ describe('Vérification des emails (e2e 1-13A)', () => {
       );
       const email = 'noconfig-13a@verify.test';
       const { body } = await registerOwner(email, 'Org NoConf');
-      expect(body.emailVerification).toEqual({ status: 'failed' });
+      expect(body).toEqual({ message: REGISTRATION_ACCEPTED_MESSAGE });
       expect(await userModel.countDocuments({ email })).toBe(1);
 
       const known = await requestLink(email);

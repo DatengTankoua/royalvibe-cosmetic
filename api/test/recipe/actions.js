@@ -78,24 +78,41 @@ async function registerOwner(label) {
       turnstileToken: `simulated-pass:register:${crypto.randomUUID()}`,
     },
   });
-  if (registered.status !== 201)
+  // 1-18E : 202 neutre, sans identifiant (adresse nouvelle ou existante).
+  if (registered.status !== 202)
     throw new Error(
       // 1-18C : l'inscription exige l'anti-robot (`start --anti-bot=simulated`).
       `inscription : HTTP ${registered.status} ${registered.text}`,
     );
+  // Lien envoyé APRÈS la réponse (1-18E) : attente bornée de l'e-mail.
+  let verificationToken = null;
+  for (let i = 0; i < 100 && !verificationToken; i++) {
+    try {
+      verificationToken = verificationTokenFor(email);
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  if (!verificationToken)
+    throw new Error(`Aucun e-mail de vérification pour ${email}`);
   const confirmed = await C.api('POST', '/auth/email-verification/confirm', {
-    body: { token: verificationTokenFor(email) },
+    body: { token: verificationToken },
   });
   if (confirmed.status !== 200)
     throw new Error(`vérification : HTTP ${confirmed.status}`);
   const login = await C.api('POST', '/auth/login', {
     body: { email, password: C.PASSWORD },
   });
+  const token = login.body && login.body.access_token;
+  // Identifiants lus depuis la session (jamais depuis l'inscription).
+  const claims = JSON.parse(
+    Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8'),
+  );
   return {
     email,
-    userId: String(registered.body.user._id),
-    orgId: String(registered.body.organization._id),
-    token: login.body && login.body.access_token,
+    userId: String(claims.sub),
+    orgId: String(claims.orgId),
+    token,
   };
 }
 

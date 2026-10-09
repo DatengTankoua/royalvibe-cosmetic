@@ -46,6 +46,7 @@ import {
 } from './e2e/legal-acceptance-fixtures';
 import { LegalAcceptanceContext } from '../src/legal/legal-documents';
 import { waitFor } from './e2e/invitation-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 /**
  * E2E 1-18C — protections anti-abus, sur l'application réelle (gardes,
@@ -139,16 +140,14 @@ describe('Anti-abus de l’authentification (e2e 1-18C)', () => {
     extra: Record<string, unknown>,
     organizationName = `Org ${seq}`,
   ) =>
-    request(server())
-      .post('/auth/register')
-      .send({
-        name: 'Owner',
-        email,
-        password: PASSWORD,
-        organizationName: organizationName.slice(0, 20),
-        legalAcceptance: OWNER_LEGAL,
-        ...extra,
-      });
+    postRegister(app, {
+      name: 'Owner',
+      email,
+      password: PASSWORD,
+      organizationName: organizationName.slice(0, 20),
+      legalAcceptance: OWNER_LEGAL,
+      ...extra,
+    });
 
   const login = (email: string, password: string, ip: string) =>
     request(server())
@@ -165,12 +164,12 @@ describe('Anti-abus de l’authentification (e2e 1-18C)', () => {
       { turnstileToken: simulatedTurnstileToken() },
       `Org ${label}`,
     );
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(202);
     const logged = await login(email, PASSWORD, '198.51.100.250');
     expect(logged.status).toBe(201);
     return {
       email,
-      orgId: res.body.organization._id as string,
+      orgId: res.owner!.organization._id,
       token: logged.body.access_token as string,
     };
   }
@@ -329,7 +328,7 @@ describe('Anti-abus de l’authentification (e2e 1-18C)', () => {
     it('validation réussie : siteverify appelé (secret, jeton, clé d’idempotence), compte créé et lien envoyé', async () => {
       const email = unique('cf-ok');
       const res = await register(email, { turnstileToken: 'cf-pass-ok' });
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(202);
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       expect(url).toBe(TURNSTILE_SITEVERIFY_URL);
@@ -349,7 +348,7 @@ describe('Anti-abus de l’authentification (e2e 1-18C)', () => {
       const first = unique('cf-replay-a');
       expect(
         (await register(first, { turnstileToken: 'cf-pass-replay' })).status,
-      ).toBe(201);
+      ).toBe(202);
       const second = unique('cf-replay-b');
       const res = await register(
         second,
@@ -419,7 +418,7 @@ describe('Anti-abus de l’authentification (e2e 1-18C)', () => {
         { turnstileToken: 'cf-pass-retry' },
         'Org Hang',
       );
-      expect(retry.status).toBe(201);
+      expect(retry.status).toBe(202);
     });
 
     it('non configuré (aucune clé) : 503, jamais d’inscription non validée', async () => {
@@ -456,7 +455,7 @@ describe('Anti-abus de l’authentification (e2e 1-18C)', () => {
       const token = simulatedTurnstileToken();
       expect(
         (await register(unique('sim-a'), { turnstileToken: token })).status,
-      ).toBe(201);
+      ).toBe(202);
       const replay = await register(unique('sim-b'), { turnstileToken: token });
       expect([replay.status, replay.body.code]).toEqual([
         400,

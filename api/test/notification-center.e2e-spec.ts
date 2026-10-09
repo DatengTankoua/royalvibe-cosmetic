@@ -80,6 +80,7 @@ import {
 import { SimulatedPaymentProvider } from './e2e/simulated-payment-provider';
 import { until } from './e2e/barriers';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 /**
  * E2E 1-16A.1 — centre de notifications, seuil de 80 %, nouvelles ventes,
@@ -188,20 +189,18 @@ describe('Centre de notifications (e2e 1-16A.1)', () => {
     clearThrottle();
     seq += 1;
     const email = `${label}-${seq}-16a1@nc.test`;
-    const reg = await request(server())
-      .post('/auth/register')
-      .send({
-        ...OWNER_TERMS,
-        name: `Owner ${seq}`,
-        email,
-        password: PASSWORD,
-        organizationName: `Org ${label} ${seq}`.slice(0, 20),
-      });
-    expect(reg.status).toBe(201);
+    const reg = await postRegister(app, {
+      ...OWNER_TERMS,
+      name: `Owner ${seq}`,
+      email,
+      password: PASSWORD,
+      organizationName: `Org ${label} ${seq}`.slice(0, 20),
+    });
+    expect(reg.status).toBe(202);
     return {
       email,
-      orgId: reg.body.organization._id as string,
-      userId: String(reg.body.user._id),
+      orgId: reg.owner!.organization._id,
+      userId: String(reg.owner!.user._id),
       token: await login(email),
     };
   }

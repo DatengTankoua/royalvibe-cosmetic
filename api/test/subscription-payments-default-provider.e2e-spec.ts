@@ -43,6 +43,7 @@ import {
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 /**
  * E2E 1-14D.2B — fournisseur de paiement PAR DÉFAUT (aucun `overrideProvider`
@@ -120,17 +121,15 @@ describe('Paiements : fournisseur par défaut indisponible (e2e 1-14D.2B)', () =
   it('nouvelle initiation et consultation → 503, aucune écriture ; lectures locales et rejeu disponibles', async () => {
     clearThrottle();
     const email = `owner-default-14d2b@pay.test`;
-    const reg = await request(server())
-      .post('/auth/register')
-      .send({
-        ...OWNER_TERMS,
-        name: 'Owner',
-        email,
-        password: PASSWORD,
-        organizationName: 'Org default',
-      });
-    expect(reg.status).toBe(201);
-    const orgId = String(reg.body.organization._id);
+    const reg = await postRegister(app, {
+      ...OWNER_TERMS,
+      name: 'Owner',
+      email,
+      password: PASSWORD,
+      organizationName: 'Org default',
+    });
+    expect(reg.status).toBe(202);
+    const orgId = String(reg.owner!.organization._id);
     clearThrottle();
     const login = await request(server())
       .post('/auth/login')

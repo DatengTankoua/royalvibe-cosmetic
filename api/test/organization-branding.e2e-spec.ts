@@ -36,6 +36,7 @@ import {
 } from './e2e/email-verification-fixtures';
 import { createInvitedAccount } from './e2e/invitation-acceptance-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -169,29 +170,25 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       );
       s3Service = moduleFixture.get(S3Service);
 
-      const regA = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Owner A',
-          email: OWNER_A_EMAIL,
-          password: PASSWORD,
-          organizationName: 'Org A 18A',
-        });
-      expect(regA.status).toBe(201);
-      orgAId = regA.body.organization._id as string;
+      const regA = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Owner A',
+        email: OWNER_A_EMAIL,
+        password: PASSWORD,
+        organizationName: 'Org A 18A',
+      });
+      expect(regA.status).toBe(202);
+      orgAId = regA.owner!.organization._id;
 
-      const regB = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Owner B',
-          email: OWNER_B_EMAIL,
-          password: PASSWORD,
-          organizationName: 'Org B 18A',
-        });
-      expect(regB.status).toBe(201);
-      orgBId = regB.body.organization._id as string;
+      const regB = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Owner B',
+        email: OWNER_B_EMAIL,
+        password: PASSWORD,
+        organizationName: 'Org B 18A',
+      });
+      expect(regB.status).toBe(202);
+      orgBId = regB.owner!.organization._id;
 
       const loginOwnerA = await request(app.getHttpServer())
         .post('/auth/login')
@@ -548,9 +545,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
   // ─── 1-12C : noms + contrat logo ──────────────────────────────────────────
   describe('1-12C — validation des noms', () => {
     const register = (body: Record<string, unknown>) =>
-      request(app.getHttpServer())
-        .post('/auth/register')
-        .send({ ...OWNER_TERMS, password: PASSWORD, ...body });
+      postRegister(app, { ...OWNER_TERMS, password: PASSWORD, ...body });
     let seq = 0;
     const email = () => `names-${++seq}-112c@royalvibe.test`;
 
@@ -560,8 +555,8 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
         email: email(),
         organizationName: 'o'.repeat(20),
       });
-      expect(ok.status).toBe(201);
-      expect(ok.body.organization.name).toBe('o'.repeat(20));
+      expect(ok.status).toBe(202);
+      expect(ok.owner!.organization.name).toBe('o'.repeat(20));
       const ko = await register({
         name: 'Awa',
         email: email(),
@@ -576,8 +571,8 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
         email: email(),
         organizationName: 'Org 80',
       });
-      expect(ok.status).toBe(201);
-      expect(ok.body.user.name).toBe('u'.repeat(20));
+      expect(ok.status).toBe(202);
+      expect(ok.owner!.user.name).toBe('u'.repeat(20));
       const ko = await register({
         name: 'u'.repeat(21),
         email: email(),
@@ -593,11 +588,11 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
         email: addr,
         organizationName: '  Épicerie 李小龙 №1  ',
       });
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(202);
       const user = await userModel.findOne({ email: addr }).exec();
       expect(user!.name).toBe('Zoé   Ñandú');
       const org = await organizationModel
-        .findById(res.body.organization._id as string)
+        .findById(res.owner!.organization._id)
         .exec();
       expect(org!.name).toBe('Épicerie 李小龙 №1');
     });

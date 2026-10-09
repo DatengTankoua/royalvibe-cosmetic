@@ -52,6 +52,7 @@ import {
   OWNER_TERMS,
   simulatedTurnstileToken,
 } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 /**
  * E2E 1-13B — mot de passe oublié et réinitialisation : `MongoMemoryReplSet`
@@ -170,22 +171,20 @@ describe('Mot de passe oublié et réinitialisation (e2e 1-13B)', () => {
 
   /** Propriétaire vérifié par le parcours réel de 1-13A. */
   async function verifiedOwner(email: string, organizationName: string) {
-    const reg = await http()
-      .post('/auth/register')
-      .send({
-        ...OWNER_TERMS,
-        name: 'Owner',
-        email,
-        password: PASSWORD,
-        organizationName,
-      });
-    expect(reg.status).toBe(201);
+    const reg = await postRegister(app, {
+      ...OWNER_TERMS,
+      name: 'Owner',
+      email,
+      password: PASSWORD,
+      organizationName,
+    });
+    expect(reg.status).toBe(202);
     const sent = recorder.sentTo(email);
     const confirmed = await http()
       .post('/auth/email-verification/confirm')
       .send({ token: verificationTokenFrom(sent[sent.length - 1]) });
     expect(confirmed.status).toBe(200);
-    const orgId = reg.body.organization._id as string;
+    const orgId = reg.owner!.organization._id;
     const res = await login(email, PASSWORD, orgId);
     expect(res.status).toBe(201);
     return { orgId, token: res.body.access_token as string };
@@ -455,16 +454,14 @@ describe('Mot de passe oublié et réinitialisation (e2e 1-13B)', () => {
   describe('3. Compte non vérifié', () => {
     it('mot de passe changé, adresse toujours non vérifiée, connexion toujours soumise à 1-13A', async () => {
       const email = 'unverified-13b@reset.test';
-      const reg = await http()
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Unverified',
-          email,
-          password: PASSWORD,
-          organizationName: 'Org Unverified',
-        });
-      expect(reg.status).toBe(201);
+      const reg = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Unverified',
+        email,
+        password: PASSWORD,
+        organizationName: 'Org Unverified',
+      });
+      expect(reg.status).toBe(202);
       const before = await internals(email);
       await resetPassword(email);
       const after = await internals(email);

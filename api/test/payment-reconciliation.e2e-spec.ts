@@ -55,6 +55,7 @@ import {
   validatedEphemeralUri,
 } from './e2e/ephemeral-mongodb';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 /**
  * E2E 1-14D.2G — rapprochement OPÉRATEUR (CLI), exécuté par la couche CLI
@@ -166,22 +167,20 @@ describe('Rapprochement opérateur par CLI (e2e 1-14D.2G)', () => {
     clearThrottle();
     seq += 1;
     const email = `${label}-${seq}-14d2g@reconcile.test`;
-    const reg = await request(server())
-      .post('/auth/register')
-      .send({
-        ...OWNER_TERMS,
-        name: 'Owner',
-        email,
-        password: PASSWORD,
-        organizationName: `Org ${seq}`,
-      });
-    expect(reg.status).toBe(201);
+    const reg = await postRegister(app, {
+      ...OWNER_TERMS,
+      name: 'Owner',
+      email,
+      password: PASSWORD,
+      organizationName: `Org ${seq}`,
+    });
+    expect(reg.status).toBe(202);
     clearThrottle();
     const login = await request(server())
       .post('/auth/login')
       .send({ email, password: PASSWORD });
     return {
-      orgId: String(reg.body.organization._id),
+      orgId: String(reg.owner!.organization._id),
       token: String(login.body.access_token),
     };
   }

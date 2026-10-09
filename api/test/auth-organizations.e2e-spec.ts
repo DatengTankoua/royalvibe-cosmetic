@@ -31,6 +31,7 @@ import {
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -123,29 +124,25 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
         getModelToken(OrganizationMembership.name),
       );
 
-      const reg1 = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Owner 1',
-          email: OWNER1_EMAIL,
-          password: PASSWORD,
-          organizationName: 'Zebra Org 19B',
-        });
-      expect(reg1.status).toBe(201);
-      org1Id = reg1.body.organization._id as string;
+      const reg1 = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Owner 1',
+        email: OWNER1_EMAIL,
+        password: PASSWORD,
+        organizationName: 'Zebra Org 19B',
+      });
+      expect(reg1.status).toBe(202);
+      org1Id = reg1.owner!.organization._id;
 
-      const reg2 = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Owner 2',
-          email: OWNER2_EMAIL,
-          password: PASSWORD,
-          organizationName: 'Alpha Org 19B',
-        });
-      expect(reg2.status).toBe(201);
-      org2Id = reg2.body.organization._id as string;
+      const reg2 = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Owner 2',
+        email: OWNER2_EMAIL,
+        password: PASSWORD,
+        organizationName: 'Alpha Org 19B',
+      });
+      expect(reg2.status).toBe(202);
+      org2Id = reg2.owner!.organization._id;
 
       // Organisation active mais dont TOUTES les memberships de
       // EXCLUDED_USER seront non actives / non pertinentes.
@@ -241,18 +238,16 @@ describe('GET /auth/organizations + POST /auth/switch-organization (e2e 1-9B)', 
       // ENCORE active, une org de repli active, PUIS l'org du token est
       // suspendue — même convention que organization-branding.e2e-spec.ts
       // ("membership/organisation suspendue APRÈS émission du token").
-      const regStranded = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Stranded Owner',
-          email: STRANDED_OWNER_EMAIL,
-          password: PASSWORD,
-          organizationName: 'Stranded Current 19B',
-        });
-      expect(regStranded.status).toBe(201);
-      const strandedCurrentOrgId = regStranded.body.organization._id as string;
-      const strandedUserId = regStranded.body.user._id as string;
+      const regStranded = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Stranded Owner',
+        email: STRANDED_OWNER_EMAIL,
+        password: PASSWORD,
+        organizationName: 'Stranded Current 19B',
+      });
+      expect(regStranded.status).toBe(202);
+      const strandedCurrentOrgId = regStranded.owner!.organization._id;
+      const strandedUserId = regStranded.owner!.user._id;
 
       const strandedFallbackOrg = await organizationModel.create({
         name: 'Stranded Fallbk 19B',

@@ -81,6 +81,7 @@ import {
 } from './e2e/ephemeral-mongodb';
 import { SimulatedPaymentProvider } from './e2e/simulated-payment-provider';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 /**
  * E2E 1-16A — notifications Web Push métier, sur le replica set éphémère
@@ -212,20 +213,18 @@ describe('Notifications Web Push métier (e2e 1-16A)', () => {
     clearThrottle();
     seq += 1;
     const email = `${label}-${seq}-16a@wp.test`;
-    const reg = await request(server())
-      .post('/auth/register')
-      .send({
-        ...OWNER_TERMS,
-        name: 'Owner',
-        email,
-        password: PASSWORD,
-        organizationName: `Org ${label} ${seq}`.slice(0, 20),
-      });
-    expect(reg.status).toBe(201);
+    const reg = await postRegister(app, {
+      ...OWNER_TERMS,
+      name: 'Owner',
+      email,
+      password: PASSWORD,
+      organizationName: `Org ${label} ${seq}`.slice(0, 20),
+    });
+    expect(reg.status).toBe(202);
     return {
       email,
-      orgId: reg.body.organization._id as string,
-      userId: String(reg.body.user._id),
+      orgId: reg.owner!.organization._id,
+      userId: String(reg.owner!.user._id),
       token: await login(email),
     };
   }
