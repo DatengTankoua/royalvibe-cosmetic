@@ -20,9 +20,8 @@ import {
   EMAIL_VERIFICATION_REQUEST_ACCEPTED_MESSAGE,
 } from './auth.controller';
 import { EmailVerificationService } from '../email-verification/email-verification.service';
-import { EmailVerificationAddressThrottlerGuard } from '../email-verification/email-verification-rate-limiting';
+import { AddressRequestLimiter } from '../email-verification/email-verification-rate-limiting';
 import { PasswordResetService } from '../password-reset/password-reset.service';
-import { PasswordResetAddressThrottlerGuard } from '../password-reset/password-reset-rate-limiting';
 import { UsersService } from '../users/users.service';
 import { PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE } from './auth.controller';
 import { TurnstileService } from '../anti-bot/turnstile.service';
@@ -51,6 +50,7 @@ describe('AuthController', () => {
   let resetConfirmMock: jest.Mock;
   let setLocaleMock: jest.Mock;
   let turnstileVerifyMock: jest.Mock;
+  let addressConsumeMock: jest.Mock;
 
   const VALID_REG: RegisterDto = {
     name: 'E2E User',
@@ -94,6 +94,7 @@ describe('AuthController', () => {
     resetConfirmMock = jest.fn();
     setLocaleMock = jest.fn().mockResolvedValue(undefined);
     turnstileVerifyMock = jest.fn().mockResolvedValue(undefined);
+    addressConsumeMock = jest.fn().mockResolvedValue(undefined);
 
     const module: TestingModule = await Test.createTestingModule({
       // Garde 0B.6 : enregistrée pour que la DI du contrôleur se résolve
@@ -154,8 +155,11 @@ describe('AuthController', () => {
           },
         },
         AuthThrottlerGuard,
-        EmailVerificationAddressThrottlerGuard,
-        PasswordResetAddressThrottlerGuard,
+        // 1-18D : limite par adresse appelée APRÈS Turnstile.
+        {
+          provide: AddressRequestLimiter,
+          useValue: { consume: addressConsumeMock },
+        },
       ],
     }).compile();
 
@@ -395,13 +399,18 @@ describe('AuthController', () => {
   describe('email-verification (1-13A)', () => {
     it('request : réponse neutre, sans attendre l’envoi', async () => {
       // Envoi jamais résolu : la réponse ne doit pas en dépendre.
-      requestByEmailMock.mockResolvedValue({
+      requestByEmailMock.mockReturnValue({
         delivery: new Promise<void>(() => undefined),
       });
       const out = await controller.requestEmailVerification({
         email: 'ada@example.com',
+        turnstileToken: 'tok',
       });
       expect(requestByEmailMock).toHaveBeenCalledWith('ada@example.com');
+      expect(turnstileVerifyMock).toHaveBeenCalledWith(
+        'tok',
+        'email-verification',
+      );
       expect(out).toEqual({
         message: EMAIL_VERIFICATION_REQUEST_ACCEPTED_MESSAGE,
       });
@@ -445,15 +454,65 @@ describe('AuthController', () => {
     });
   });
 
+  // ---- 1-18D : ordre Turnstile → quota d'adresse → métier ----
+
+  describe('demandes de liens : ordre des contrôles (1-18D)', () => {
+    it.each([
+      ['requestEmailVerification', 'email-verification-address'],
+      ['requestPasswordReset', 'password-reset-address'],
+    ] as const)(
+      '%s : Turnstile, puis quota d’adresse, puis service',
+      async (handler, namespace) => {
+        const order: string[] = [];
+        turnstileVerifyMock.mockImplementation(() => {
+          order.push('turnstile');
+          return Promise.resolve();
+        });
+        addressConsumeMock.mockImplementation(() => {
+          order.push('address');
+          return Promise.resolve();
+        });
+        const service =
+          handler === 'requestEmailVerification'
+            ? requestByEmailMock
+            : resetRequestMock;
+        service.mockImplementation(() => {
+          order.push('service');
+          return { delivery: Promise.resolve() };
+        });
+        await controller[handler]({ email: 'a@b.co', turnstileToken: 'tok' });
+        expect(order).toEqual(['turnstile', 'address', 'service']);
+        expect(addressConsumeMock.mock.calls[0][0]).toBe(namespace);
+      },
+    );
+
+    it.each(['requestEmailVerification', 'requestPasswordReset'] as const)(
+      '%s : défi refusé → ni quota d’adresse ni service',
+      async (handler) => {
+        turnstileVerifyMock.mockRejectedValue(new BadRequestException());
+        await expect(
+          controller[handler]({ email: 'a@b.co', turnstileToken: 'bad' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(addressConsumeMock).not.toHaveBeenCalled();
+        expect(requestByEmailMock).not.toHaveBeenCalled();
+        expect(resetRequestMock).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   // ---- réinitialisation du mot de passe (1-13B) ----
 
   describe('password-reset (1-13B)', () => {
-    it('request : réponse neutre exacte, envoi non attendu', () => {
+    it('request : réponse neutre exacte, envoi non attendu', async () => {
       resetRequestMock.mockReturnValue({
         delivery: new Promise<void>(() => undefined),
       });
-      const out = controller.requestPasswordReset({ email: 'a@b.co' });
+      const out = await controller.requestPasswordReset({
+        email: 'a@b.co',
+        turnstileToken: 'tok',
+      });
       expect(resetRequestMock).toHaveBeenCalledWith('a@b.co');
+      expect(turnstileVerifyMock).toHaveBeenCalledWith('tok', 'password-reset');
       expect(out).toEqual({ message: PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE });
       expect(PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE).toBe(
         'Si un compte correspond à cette adresse, vous recevrez un lien pour réinitialiser votre mot de passe.',

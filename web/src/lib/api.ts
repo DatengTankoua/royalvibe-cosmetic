@@ -532,8 +532,15 @@ export async function createInvitationAccount(payload: {
 
 // 1-13A : (ré)envoi du lien de vérification — réponse neutre (202) quelle
 // que soit l'adresse ; 429 (limitation) ou 503 (envoi indisponible) sinon.
-export async function requestEmailVerification(email: string): Promise<void> {
-  await apiClient.post("/auth/email-verification/request", { email });
+// 1-18D : jeton Turnstile (action `email-verification`), à usage unique.
+export async function requestEmailVerification(
+  email: string,
+  turnstileToken: string,
+): Promise<void> {
+  await apiClient.post("/auth/email-verification/request", {
+    email,
+    turnstileToken,
+  });
 }
 
 // 1-13A : confirmation explicite (POST) — aucun JWT renvoyé, aucune session
@@ -544,8 +551,15 @@ export async function confirmEmailVerification(token: string): Promise<void> {
 
 // 1-13B : demande de réinitialisation — réponse neutre (202) pour toute
 // adresse ; 429 (limitation) ou 503 (envoi indisponible) sinon.
-export async function requestPasswordReset(email: string): Promise<void> {
-  await apiClient.post("/auth/password-reset/request", { email });
+// 1-18D : jeton Turnstile (action `password-reset`), à usage unique.
+export async function requestPasswordReset(
+  email: string,
+  turnstileToken: string,
+): Promise<void> {
+  await apiClient.post("/auth/password-reset/request", {
+    email,
+    turnstileToken,
+  });
 }
 
 // 1-13B : nouveau mot de passe (jamais trimé) — aucun JWT renvoyé, aucune

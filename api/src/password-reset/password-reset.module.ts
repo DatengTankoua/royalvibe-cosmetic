@@ -4,7 +4,6 @@ import { User, UserSchema } from '../users/schemas/user.schema';
 import { EmailVerificationModule } from '../email-verification/email-verification.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { PasswordResetService } from './password-reset.service';
-import { PasswordResetAddressThrottlerGuard } from './password-reset-rate-limiting';
 
 /**
  * 1-13B — Réinitialisation du mot de passe. Réutilise l'UNIQUE
@@ -17,7 +16,7 @@ import { PasswordResetAddressThrottlerGuard } from './password-reset-rate-limiti
     EmailVerificationModule,
     OrganizationsModule,
   ],
-  providers: [PasswordResetService, PasswordResetAddressThrottlerGuard],
-  exports: [PasswordResetService, PasswordResetAddressThrottlerGuard],
+  providers: [PasswordResetService],
+  exports: [PasswordResetService],
 })
 export class PasswordResetModule {}

@@ -41,7 +41,11 @@ import {
 } from '../organizations/invitation-acceptance.service';
 import { localeFromRequest } from '../common/i18n/locale';
 import { TurnstileService } from '../anti-bot/turnstile.service';
-import { TURNSTILE_REGISTER_ACTION } from '../anti-bot/turnstile-config';
+import {
+  TURNSTILE_EMAIL_VERIFICATION_ACTION,
+  TURNSTILE_PASSWORD_RESET_ACTION,
+  TURNSTILE_REGISTER_ACTION,
+} from '../anti-bot/turnstile-config';
 import { UpdateLocaleDto } from './dto/update-locale.dto';
 import { UsersService } from '../users/users.service';
 import { Public } from './decorators/public.decorator';
@@ -51,13 +55,20 @@ import { CurrentOrganization } from './decorators/current-organization.decorator
 import { User } from '../users/schemas/user.schema';
 import type { AuthenticatedPrincipal } from './strategies/jwt.strategy';
 import { EmailVerificationService } from '../email-verification/email-verification.service';
-import { EmailVerificationAddressThrottlerGuard } from '../email-verification/email-verification-rate-limiting';
+import {
+  AddressRequestLimiter,
+  EMAIL_VERIFICATION_ADDRESS_THROTTLER,
+  EMAIL_VERIFICATION_RATE_LIMIT_CODE,
+} from '../email-verification/email-verification-rate-limiting';
 import {
   ConfirmEmailVerificationDto,
   RequestEmailVerificationDto,
 } from '../email-verification/email-verification.dto';
 import { PasswordResetService } from '../password-reset/password-reset.service';
-import { PasswordResetAddressThrottlerGuard } from '../password-reset/password-reset-rate-limiting';
+import {
+  PASSWORD_RESET_ADDRESS_THROTTLER,
+  PASSWORD_RESET_RATE_LIMIT_CODE,
+} from '../password-reset/password-reset-rate-limiting';
 import {
   ConfirmPasswordResetDto,
   RequestPasswordResetDto,
@@ -104,6 +115,7 @@ export class AuthController {
     private usersService: UsersService,
     private invitationAcceptance: InvitationAcceptanceService,
     private turnstile: TurnstileService,
+    private addressLimiter: AddressRequestLimiter,
   ) {}
 
   // Rate limiting (0B.6) : MÊME garde/fenêtres que /auth/login, sans
@@ -257,18 +269,29 @@ export class AuthController {
     return this.invitationAcceptance.createAccount(dto);
   }
 
-  // 1-13A : (ré)envoi public du lien de vérification. Limité par IP
-  // (`AuthThrottlerGuard`, compteur propre à cette route) ET par adresse
-  // normalisée (clé SHA-256). Réponse neutre : compte inexistant, déjà
-  // vérifié, en cooldown ou échec fournisseur répondent à l'identique ;
-  // l'envoi n'est pas attendu (aucun écart de temps selon le compte).
+  // 1-13A : (ré)envoi public du lien de vérification. Réponse neutre :
+  // compte inexistant, déjà vérifié, en cooldown ou échec fournisseur
+  // répondent à l'identique ; l'envoi n'est pas attendu.
+  // 1-18D — Ordre : limite IP (garde) → validation du corps (pipe) →
+  // Turnstile (action `email-verification`) → limite par adresse → métier.
+  // Sans défi valide : ni quota d'adresse, ni jeton, ni e-mail. Un défi
+  // réussi ne prouve pas la possession de l'adresse et ne remet rien à zéro.
   @HttpCode(202)
   @Header('Cache-Control', 'no-store')
-  @UseGuards(AuthThrottlerGuard, EmailVerificationAddressThrottlerGuard)
+  @UseGuards(AuthThrottlerGuard)
   @Public()
   @Post('email-verification/request')
   async requestEmailVerification(@Body() dto: RequestEmailVerificationDto) {
-    const { delivery } = await this.emailVerificationService.requestByEmail(
+    await this.turnstile.verify(
+      dto.turnstileToken,
+      TURNSTILE_EMAIL_VERIFICATION_ACTION,
+    );
+    await this.addressLimiter.consume(
+      EMAIL_VERIFICATION_ADDRESS_THROTTLER,
+      EMAIL_VERIFICATION_RATE_LIMIT_CODE,
+      dto.email,
+    );
+    const { delivery } = this.emailVerificationService.requestByEmail(
       dto.email,
     );
     void delivery;
@@ -287,15 +310,24 @@ export class AuthController {
     return { verified: true };
   }
 
-  // 1-13B : demande de réinitialisation. Limitée par IP (compteur propre à
-  // la route) ET par adresse normalisée (namespace distinct). Réponse
-  // neutre ; recherche du compte et envoi après la réponse.
+  // 1-13B : demande de réinitialisation. Réponse neutre ; recherche du
+  // compte et envoi après la réponse.
+  // 1-18D — Même ordre que la vérification d'email, action `password-reset`.
   @HttpCode(202)
   @Header('Cache-Control', 'no-store')
-  @UseGuards(AuthThrottlerGuard, PasswordResetAddressThrottlerGuard)
+  @UseGuards(AuthThrottlerGuard)
   @Public()
   @Post('password-reset/request')
-  requestPasswordReset(@Body() dto: RequestPasswordResetDto) {
+  async requestPasswordReset(@Body() dto: RequestPasswordResetDto) {
+    await this.turnstile.verify(
+      dto.turnstileToken,
+      TURNSTILE_PASSWORD_RESET_ACTION,
+    );
+    await this.addressLimiter.consume(
+      PASSWORD_RESET_ADDRESS_THROTTLER,
+      PASSWORD_RESET_RATE_LIMIT_CODE,
+      dto.email,
+    );
     const { delivery } = this.passwordResetService.requestByEmail(dto.email);
     void delivery;
     return { message: PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE };

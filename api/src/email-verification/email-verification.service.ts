@@ -125,16 +125,20 @@ export class EmailVerificationService {
 
   /**
    * Demande publique de (ré)envoi. Réponse neutre dans tous les cas (compte
-   * inexistant, déjà vérifié, cooldown, échec fournisseur) : l'appelant ne
-   * reçoit que la promesse d'envoi, à ne PAS attendre dans la réponse HTTP
-   * (aucun écart de temps observable selon l'existence du compte).
-   * Seule une configuration globalement absente lève une erreur contrôlée,
-   * vérifiée AVANT toute lecture de l'adresse.
+   * inexistant, déjà vérifié, cooldown, échec fournisseur). Seule une
+   * configuration globalement absente lève une erreur contrôlée, vérifiée
+   * AVANT toute lecture de l'adresse.
+   *
+   * 1-18D — Même mécanisme que la réinitialisation (1-13B) : recherche du
+   * compte, réservation et envoi se déroulent APRÈS la réponse
+   * (`setImmediate`). La durée de la réponse ne dépend plus d'une lecture
+   * ou d'une écriture propre au compte ; pas de temps constant garanti
+   * (ordonnancement, charge). Réservation atomique et plafonds inchangés.
    */
-  async requestByEmail(
+  requestByEmail(
     email: string,
     now: Date = new Date(),
-  ): Promise<{ delivery: Promise<void> }> {
+  ): { delivery: Promise<void> } {
     if (!this.isDeliveryConfigured()) {
       this.logger.warn('Email verification: delivery is not configured');
       throw new ServiceUnavailableException({
@@ -144,16 +148,18 @@ export class EmailVerificationService {
       });
     }
     const normalized = email.trim().toLowerCase();
-    const claim = await this.claimIssuance({ email: normalized }, now);
-    if (claim.kind !== 'claimed') {
-      return { delivery: Promise.resolve() };
-    }
-    return {
-      delivery: this.deliver(claim).then(
+    const delivery = new Promise<void>((resolve) => setImmediate(resolve))
+      .then(() => this.claimIssuance({ email: normalized }, now))
+      .then((claim) =>
+        claim.kind === 'claimed' ? this.deliver(claim) : undefined,
+      )
+      .then(
         () => undefined,
-        () => undefined,
-      ),
-    };
+        () => {
+          this.logger.warn('Email verification: request processing failed');
+        },
+      );
+    return { delivery };
   }
 
   /**

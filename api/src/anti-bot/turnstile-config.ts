@@ -27,6 +27,9 @@ export const TURNSTILE_REGISTER_ACTION = 'register';
  * `credentials/accept`) après dépassement du plafond par compte.
  */
 export const TURNSTILE_LOGIN_ACTION = 'login';
+/** 1-18D — Demandes publiques de liens envoyés par e-mail (une action chacune). */
+export const TURNSTILE_PASSWORD_RESET_ACTION = 'password-reset';
+export const TURNSTILE_EMAIL_VERIFICATION_ACTION = 'email-verification';
 
 /** Longueur maximale d'un jeton (documentation Cloudflare). */
 export const TURNSTILE_TOKEN_MAX_LENGTH = 2048;

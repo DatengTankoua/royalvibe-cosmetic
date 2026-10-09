@@ -1,15 +1,11 @@
-import {
-  CanActivate,
-  ExecutionContext,
-  HttpException,
-  HttpStatus,
-  Injectable,
-} from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import { InjectThrottlerStorage, minutes } from '@nestjs/throttler';
 import type { ThrottlerStorage } from '@nestjs/throttler';
-import type { Request, Response } from 'express';
 import { createHash } from 'crypto';
-import { computeRetryAfterSeconds } from '../common/auth-rate-limiting';
+import {
+  RateLimitedException,
+  computeRetryAfterSeconds,
+} from '../common/auth-rate-limiting';
 
 /**
  * 1-13A — Limitation par ADRESSE normalisée de
@@ -44,53 +40,38 @@ export function emailVerificationAddressKey(email: string): string {
 /**
  * Base commune (1-13A, réutilisée en 1-13B) : 5 demandes / 15 min par
  * adresse normalisée, blocage 15 min, clé `namespace:SHA-256(adresse)`.
+ *
+ * 1-18D — Service (et non plus garde) : appelé dans le gestionnaire APRÈS
+ * la validation du corps et la vérification Turnstile, pour qu'une demande
+ * sans défi valide ne consomme jamais le quota d'une adresse. Même stockage,
+ * mêmes seuils, même réponse 429 (avec `Retry-After`).
  */
-export abstract class NormalizedAddressThrottlerGuard implements CanActivate {
-  protected abstract readonly namespace: string;
-  protected abstract readonly rateLimitCode: string;
+@Injectable()
+export class AddressRequestLimiter {
+  constructor(
+    @InjectThrottlerStorage() private readonly storage: ThrottlerStorage,
+  ) {}
 
-  constructor(private readonly storage: ThrottlerStorage) {}
-
-  async canActivate(context: ExecutionContext): Promise<boolean> {
-    const http = context.switchToHttp();
-    const body = http.getRequest<Request>().body as
-      { email?: unknown } | undefined;
-    // Adresse absente/mal typée : laissée à la validation (400), pas de clé.
-    if (typeof body?.email !== 'string' || body.email.trim() === '') {
-      return true;
-    }
+  async consume(
+    namespace: string,
+    rateLimitCode: string,
+    email: string,
+  ): Promise<void> {
     const record = await this.storage.increment(
-      hashedAddressKey(this.namespace, body.email),
+      hashedAddressKey(namespace, email),
       EMAIL_VERIFICATION_ADDRESS_TTL,
       EMAIL_VERIFICATION_ADDRESS_LIMIT,
       EMAIL_VERIFICATION_ADDRESS_BLOCK,
-      this.namespace,
+      namespace,
     );
-    if (!record.isBlocked) return true;
-
-    const retryAfter = computeRetryAfterSeconds(
-      record.timeToBlockExpire * 1000,
-    );
-    if (retryAfter !== undefined) {
-      http.getResponse<Response>().setHeader('Retry-After', String(retryAfter));
-    }
-    throw new HttpException(
+    if (!record.isBlocked) return;
+    throw new RateLimitedException(
       {
         statusCode: HttpStatus.TOO_MANY_REQUESTS,
-        code: this.rateLimitCode,
+        code: rateLimitCode,
         message: 'Trop de demandes. Réessayez plus tard.',
       },
-      HttpStatus.TOO_MANY_REQUESTS,
+      computeRetryAfterSeconds(record.timeToBlockExpire * 1000) ?? 1,
     );
-  }
-}
-
-@Injectable()
-export class EmailVerificationAddressThrottlerGuard extends NormalizedAddressThrottlerGuard {
-  protected readonly namespace = EMAIL_VERIFICATION_ADDRESS_THROTTLER;
-  protected readonly rateLimitCode = EMAIL_VERIFICATION_RATE_LIMIT_CODE;
-
-  constructor(@InjectThrottlerStorage() storage: ThrottlerStorage) {
-    super(storage);
   }
 }

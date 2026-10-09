@@ -267,8 +267,12 @@ dépôt) :
 1. Dans Cloudflare, créer UN widget Turnstile pour le domaine du web
    (`www.stock-master.app`, et le domaine Vercel s'il sert aussi les
    formulaires). Mode conseillé : *Managed*. Il sert à l'inscription
-   (action `register`) et au défi de récupération d'accès de la connexion
-   (action `login`) ; aucune action n'est à déclarer dans Cloudflare.
+   (action `register`), au défi de récupération d'accès de la connexion
+   (action `login`) et, depuis 1-18D, aux demandes de lien de
+   réinitialisation (`password-reset`) et de vérification d'e-mail
+   (`email-verification`) ; aucune action n'est à déclarer dans Cloudflare.
+   **Sans clé, ces deux demandes de lien sont refusées (503)** : configurer
+   Turnstile AVANT de déployer l'API 1-18D.
 2. Railway (API) : `TURNSTILE_SECRET_KEY` (secret) et
    `TURNSTILE_ALLOWED_HOSTNAMES` (mêmes noms d'hôte). Redémarrer : le mode
    effectif est journalisé (« Anti-robot de l'inscription : cloudflare »).
