@@ -38,8 +38,6 @@ import {
   subscriptionStatusUnavailableException,
   toSubscriptionAccessView,
 } from '../subscriptions/subscription-access';
-import type { InvitationAcceptanceResult } from '../organizations/organizations.service';
-import { AcceptInvitationDto } from './dto/accept-invitation.dto';
 import {
   EMAIL_NOT_VERIFIED,
   EMAIL_NOT_VERIFIED_MESSAGE,
@@ -83,11 +81,6 @@ export interface OwnerOnboardingResult {
   emailVerification: { status: EmailVerificationDelivery };
 }
 
-/** 1-13A : acceptation d'invitation + résultat de l'envoi éventuel du lien. */
-export type InvitationAcceptanceResponse = InvitationAcceptanceResult & {
-  emailVerification: { status: EmailVerificationDelivery };
-};
-
 // Session transactionnelle Mongoose (`mongodb.ClientSession`) : même
 // convention que `products.service.ts`/`audit.service.ts`.
 type MongooseSession = Awaited<ReturnType<Connection['startSession']>>;
@@ -125,21 +118,6 @@ export class AuthService {
    */
   async register(dto: RegisterDto): Promise<OwnerOnboardingResult> {
     const result = await this.registerOwner(dto);
-    const status = await this.emailVerificationService.issueForUser(
-      result.user._id,
-    );
-    return { ...result, emailVerification: { status } };
-  }
-
-  /**
-   * 1-13A : acceptation inchangée (transaction de 1-6B.2), puis, après le
-   * commit, envoi du lien si le compte n'est pas vérifié. Le lien
-   * d'invitation n'est JAMAIS une preuve d'accès à la boîte mail.
-   */
-  async acceptInvitation(
-    dto: AcceptInvitationDto,
-  ): Promise<InvitationAcceptanceResponse> {
-    const result = await this.organizationsService.acceptInvitation(dto);
     const status = await this.emailVerificationService.issueForUser(
       result.user._id,
     );
@@ -256,12 +234,21 @@ export class AuthService {
     }
   }
 
-  async login(dto: LoginDto): Promise<LoginResult> {
-    const user = await this.usersService.findByEmail(dto.email);
+  /**
+   * Preuve d'identité commune au login et, en 1-18B, à l'acceptation d'une
+   * invitation par identifiants : mêmes refus (401 générique, puis 403
+   * `EMAIL_NOT_VERIFIED` seulement après un mot de passe correct). Ne
+   * délivre aucun JWT et ne lit aucune organisation.
+   */
+  async verifyCredentials(
+    email: string,
+    password: string,
+  ): Promise<UserDocument> {
+    const user = await this.usersService.findByEmail(email);
     if (!user)
       throw new UnauthorizedException('Email ou mot de passe incorrect!');
 
-    const valid = await bcrypt.compare(dto.password, user.password);
+    const valid = await bcrypt.compare(password, user.password);
     if (!valid)
       throw new UnauthorizedException('Email ou mot de passe incorrect!');
 
@@ -273,6 +260,11 @@ export class AuthService {
         message: EMAIL_NOT_VERIFIED_MESSAGE,
       });
     }
+    return user;
+  }
+
+  async login(dto: LoginDto): Promise<LoginResult> {
+    const user = await this.verifyCredentials(dto.email, dto.password);
 
     const userId = user._id.toString();
 

@@ -25,3 +25,16 @@ export function parsePublicAppOrigin(value: string | undefined): string | null {
 export function buildInvitationUrl(origin: string, token: string): string {
   return `${origin}${INVITATION_ACCEPT_PATH}?token=${encodeURIComponent(token)}`;
 }
+
+/**
+ * 1-18B — Route frontend de création de compte : son lien n'est envoyé qu'à
+ * l'adresse invitée (jamais remis au créateur). Exclue du service worker.
+ */
+export const INVITATION_ACCOUNT_PATH = '/auth/invitations/create-account';
+
+export function buildInvitationAccountUrl(
+  origin: string,
+  token: string,
+): string {
+  return `${origin}${INVITATION_ACCOUNT_PATH}?token=${encodeURIComponent(token)}`;
+}

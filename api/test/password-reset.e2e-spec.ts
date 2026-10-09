@@ -47,6 +47,7 @@ import {
   RecordingEmailSender,
   verificationTokenFrom,
 } from './e2e/email-verification-fixtures';
+import { acceptWithSession } from './e2e/invitation-acceptance-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 /**
@@ -768,12 +769,10 @@ describe('Mot de passe oublié et réinitialisation (e2e 1-13B)', () => {
       const invToken = new URL(
         inv.body.invitationUrl as string,
       ).searchParams.get('token');
+      // 1-18B : compte existant → session de ce compte et accord explicite.
       expect(
-        (
-          await http()
-            .post('/auth/invitations/accept')
-            .send({ token: invToken })
-        ).status,
+        (await acceptWithSession(app.getHttpServer(), a.token, invToken!))
+          .status,
       ).toBe(200);
       const aInB = (await login(email, PASSWORD, other.orgId)).body
         .access_token as string;
@@ -945,7 +944,11 @@ describe('Mot de passe oublié et réinitialisation (e2e 1-13B)', () => {
       return { barrier, spy };
     }
 
-    async function joinSecondOrganization(email: string, inviterToken: string) {
+    async function joinSecondOrganization(
+      email: string,
+      inviterToken: string,
+      inviteeToken: string,
+    ) {
       const inv = await http()
         .post('/organizations/invitations')
         .set(auth(inviterToken))
@@ -955,7 +958,8 @@ describe('Mot de passe oublié et réinitialisation (e2e 1-13B)', () => {
         'token',
       );
       expect(
-        (await http().post('/auth/invitations/accept').send({ token })).status,
+        (await acceptWithSession(app.getHttpServer(), inviteeToken, token!))
+          .status,
       ).toBe(200);
     }
 
@@ -1053,7 +1057,7 @@ describe('Mot de passe oublié et réinitialisation (e2e 1-13B)', () => {
         'race-switch-b-13b@reset.test',
         'Org Race Switch B',
       );
-      await joinSecondOrganization(email, b.token);
+      await joinSecondOrganization(email, b.token, a.token);
 
       // Fonctionnement normal avant toute réinitialisation.
       const normal = await http()

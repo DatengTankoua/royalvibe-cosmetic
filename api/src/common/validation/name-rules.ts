@@ -2,7 +2,7 @@ import type { TransformFnParams } from 'class-transformer';
 
 /**
  * Limites de noms (1-12C), communes à TOUS les chemins d'écriture :
- * `POST /auth/register`, `POST /auth/invitations/accept`,
+ * `POST /auth/register`, `POST /auth/invitations/create-account`,
  * `PATCH /organizations/current/branding`. Comptées après trim, en unités
  * `String.length` (mêmes unités que l'attribut HTML `maxLength` côté web).
  * Unicode et accents autorisés ; aucune troncature silencieuse : un

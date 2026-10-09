@@ -23,6 +23,8 @@ import { S3Module } from '../s3/s3.module';
 import { StorageQuotaModule } from '../storage-quota/storage-quota.module';
 import { InvitationCreateThrottlerGuard } from '../common/invitation-rate-limiting';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
+import { EmailVerificationModule } from '../email-verification/email-verification.module';
+import { InvitationAcceptanceService } from './invitation-acceptance.service';
 
 @Module({
   imports: [
@@ -33,6 +35,8 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
     SubscriptionsModule,
     // 1-16C.2 : preuve d'acceptation dans la transaction d'invitation.
     LegalModule,
+    // 1-18B : expéditeur unique (lien de création de compte d'un invité).
+    EmailVerificationModule,
     MongooseModule.forFeature([
       { name: Organization.name, schema: OrganizationSchema },
       {
@@ -52,6 +56,8 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
   ],
   providers: [
     OrganizationsService,
+    // 1-18B : acceptation des invitations (compte existant, nouveau compte).
+    InvitationAcceptanceService,
     SocketRegistryService,
     // Rate limiting (1-10B) : garde de MÉTHODE (jamais globale), résolue
     // ici car `OrganizationsController` (qui l'utilise via `@UseGuards`)
@@ -60,6 +66,10 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
     // l'importer explicitement (`ThrottlerModule` est `@Global()`).
     InvitationCreateThrottlerGuard,
   ],
-  exports: [OrganizationsService, SocketRegistryService],
+  exports: [
+    OrganizationsService,
+    InvitationAcceptanceService,
+    SocketRegistryService,
+  ],
 })
 export class OrganizationsModule {}

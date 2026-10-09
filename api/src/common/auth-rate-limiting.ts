@@ -5,6 +5,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { createHash } from 'crypto';
 import type {
   ThrottlerLimitDetail,
   ThrottlerModuleOptions,
@@ -165,6 +166,32 @@ export class AuthThrottlerGuard extends ThrottlerGuard {
       buildAuthRateLimitBody(),
       HttpStatus.TOO_MANY_REQUESTS,
     );
+  }
+}
+
+/**
+ * 1-18B — Même garde, mêmes fenêtres, mais compteurs PARTAGÉS avec
+ * `POST /auth/login` (clé identique à celle de `AuthController.login`) :
+ * une route qui vérifie un mot de passe ne donne jamais d'essais
+ * supplémentaires par IP. Réservée aux routes publiques d'acceptation
+ * d'invitation par identifiants.
+ */
+export const LOGIN_THROTTLE_KEY_PREFIX = 'AuthController-login';
+
+export function loginThrottleKey(throttlerName: string, tracker: string) {
+  return createHash('sha256')
+    .update(`${LOGIN_THROTTLE_KEY_PREFIX}-${throttlerName}-${tracker}`)
+    .digest('hex');
+}
+
+@Injectable()
+export class LoginSharedThrottlerGuard extends AuthThrottlerGuard {
+  protected override generateKey(
+    _context: ExecutionContext,
+    suffix: string,
+    name: string,
+  ): string {
+    return loginThrottleKey(name, suffix);
   }
 }
 

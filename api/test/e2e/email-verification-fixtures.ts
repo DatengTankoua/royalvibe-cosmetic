@@ -72,5 +72,10 @@ export function autoConfirmVerificationEmails(
   sender: RecordingEmailSender,
 ): void {
   const verification = app.get(EmailVerificationService);
-  sender.onSent = (email) => verification.confirm(verificationTokenFrom(email));
+  // 1-18B : seuls les liens de vérification sont consommés (le lien de
+  // création d'un compte invité reste à la disposition du test).
+  sender.onSent = async (email) => {
+    if (!/\/auth\/verify-email\?token=/.test(email.text)) return;
+    await verification.confirm(verificationTokenFrom(email));
+  };
 }

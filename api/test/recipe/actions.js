@@ -108,20 +108,60 @@ async function inviteMember(ownerToken, role, label) {
   const token = new URL(invitation.body.invitationUrl).searchParams.get(
     'token',
   );
-  const accepted = await C.api('POST', '/auth/invitations/accept', {
+  await createInvitedAccount(token, email, label.slice(0, 20));
+  const login = await C.api('POST', '/auth/login', {
+    body: { email, password: C.PASSWORD },
+  });
+  const me = await C.api('GET', '/auth/me', {
+    token: login.body && login.body.access_token,
+  });
+  if (me.status !== 200) throw new Error(`identité : HTTP ${me.status}`);
+  return { email, userId: String(me.body._id) };
+}
+
+/** Dernier lien de création de compte reçu à une adresse (fichier d'envoi). */
+function accountTokenFor(email) {
+  const lines = fs.existsSync(C.MAIL_FILE)
+    ? fs.readFileSync(C.MAIL_FILE, 'utf8').split('\n').filter(Boolean)
+    : [];
+  const mail = lines
+    .map((line) => JSON.parse(line))
+    .filter((m) => m.to === email)
+    .pop();
+  const match =
+    mail &&
+    /\/auth\/invitations\/create-account\?token=([^\s"&]+)/.exec(mail.text);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/**
+ * 1-18B — Nouveau compte invité, comme le web : demande du lien (envoyé à
+ * l'adresse invitée, jamais au créateur), lecture de l'e-mail, création.
+ * Compte créé vérifié : aucune confirmation séparée.
+ */
+async function createInvitedAccount(invitationToken, email, name) {
+  const link = await C.api('POST', '/auth/invitations/account-link', {
+    body: { token: invitationToken },
+  });
+  if (link.status !== 202)
+    throw new Error(`lien de création : HTTP ${link.status} ${link.text}`);
+  let token = null;
+  for (let i = 0; i < 100 && !token; i++) {
+    token = accountTokenFor(email);
+    if (!token) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  if (!token) throw new Error(`Aucun lien de création pour ${email}`);
+  const created = await C.api('POST', '/auth/invitations/create-account', {
     body: {
       token,
-      name: label.slice(0, 20),
+      name,
       password: C.PASSWORD,
       legalAcceptance: legalAcceptance('invitation_account'),
     },
   });
-  if (accepted.status !== 200)
-    throw new Error(`acceptation : HTTP ${accepted.status} ${accepted.text}`);
-  await C.api('POST', '/auth/email-verification/confirm', {
-    body: { token: verificationTokenFor(email) },
-  });
-  return { email, userId: String(accepted.body.user._id) };
+  if (created.status !== 200)
+    throw new Error(`création : HTTP ${created.status} ${created.text}`);
+  return created.body;
 }
 
 // ─── Webhook ─────────────────────────────────────────────────────────────────
@@ -223,6 +263,7 @@ module.exports = {
   verificationTokenFor,
   registerOwner,
   inviteMember,
+  createInvitedAccount,
   buildNotification,
   postNotification,
   runReconciliation,

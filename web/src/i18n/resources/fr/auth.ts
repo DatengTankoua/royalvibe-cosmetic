@@ -117,15 +117,72 @@ const authFr = {
     missingToken:
       "Lien d'invitation incomplet. Ouvre à nouveau le lien reçu, en entier.",
     checking: "Vérification de l'invitation…",
+    // 1-18B : session du compte invité ou lien envoyé à l'adresse invitée.
+    chooseTitle: "Invitation à rejoindre un commerce",
+    chooseText:
+      "Pour accepter, connecte-toi avec le compte de l'adresse invitée. Si tu n'as pas encore de compte, reçois à cette adresse un lien pour le créer.",
+    loginToAccept: "Se connecter pour accepter",
+    noAccount: "Je n'ai pas de compte",
+    sendingLink: "Envoi…",
+    cancel: "Annuler",
+    linkSentTitle: "Vérifie ta boîte mail",
+    linkSent:
+      "Si l'adresse invitée n'a pas encore de compte, un lien pour le créer vient d'y être envoyé. Il est valable 24 heures au plus.",
+    linkSentExisting:
+      "Si tu as déjà un compte avec cette adresse, connecte-toi pour accepter l'invitation.",
+    linkErrors: {
+      rateLimited: "Trop de demandes. Réessaie plus tard.",
+      deliveryUnavailable:
+        "L'envoi d'emails est momentanément indisponible. Réessaie plus tard.",
+      network: "Connexion impossible. Vérifie ta connexion puis réessaie.",
+      generic: "La demande n'a pas pu être envoyée. Réessaie plus tard.",
+    },
+    confirmTitle: "Rejoindre {{organization}}",
+    confirmRole: "Rôle proposé : {{role}}",
+    roles: {
+      admin: "Administrateur",
+      seller: "Vendeur",
+    },
+    signedInAs: "Connecté en tant que {{email}}",
+    accept: "Accepter l'invitation",
+    accepting: "Acceptation…",
+    decline: "Pas maintenant",
+    acceptError: "L'invitation n'a pas pu être acceptée. Réessaie.",
+    mismatchTitle: "Ce n'est pas le bon compte",
+    mismatchText:
+      "Cette invitation est destinée à une autre adresse que celle de ton compte actuel. Connecte-toi avec le compte de l'adresse invitée.",
+    switchAccount: "Changer de compte",
+    sessionExpired:
+      "Ta session a expiré. Reconnecte-toi pour accepter l'invitation.",
+    alreadyMember: "Ton compte appartient déjà à ce commerce.",
+    openApp: "Ouvrir l'application",
     acceptedTitle: "Invitation acceptée",
     joined: "Tu as rejoint {{organization}}.",
-    joinedLogin: "Tu as rejoint {{organization}}. Connecte-toi pour continuer.",
-    loginToContinue: "Connecte-toi pour continuer.",
-    deliveryFailed:
-      "L'email de confirmation n'a pas pu être envoyé. Demande un nouvel envoi ci-dessous.",
-    finish: "Finalise la création de ton compte.",
-    submit: "Créer mon compte",
-    submitting: "Validation…",
+    joinedSwitch: "Pour y accéder, reconnecte-toi et choisis ce commerce.",
+    reconnect: "Se reconnecter",
+    cancelledTitle: "Invitation non acceptée",
+    cancelledText:
+      "Rien n'a été modifié. Tu peux rouvrir le lien d'invitation tant qu'il est valable.",
+    backHome: "Retour à l'accueil",
+    noOrganizationNotice:
+      "Ton compte n'appartient encore à aucun commerce actif. Accepte l'invitation pour rejoindre ce commerce ; tu seras ensuite connecté.",
+    accountLabel: "Compte : {{email}}",
+    loginNotice:
+      "Connecte-toi avec le compte de l'adresse invitée pour accepter l'invitation.",
+    create: {
+      title: "Créer ton compte",
+      text: "Choisis ton nom et ton mot de passe pour rejoindre le commerce qui t'a invité.",
+      submit: "Créer mon compte et rejoindre",
+      submitting: "Création…",
+      successTitle: "Compte créé",
+      success: "Tu as rejoint {{organization}}. Connecte-toi pour continuer.",
+      invalid:
+        "Ce lien de création est invalide ou a expiré. Rouvre le lien d'invitation et demande un nouveau lien.",
+      exists:
+        "Un compte existe déjà pour cette adresse. Connecte-toi, puis rouvre le lien d'invitation.",
+      missingToken:
+        "Lien de création incomplet. Ouvre à nouveau le lien reçu par email, en entier.",
+    },
   },
 } as const;
 

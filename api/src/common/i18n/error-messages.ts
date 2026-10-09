@@ -102,9 +102,19 @@ export const ERROR_MESSAGE_TRANSLATIONS: Readonly<
   'Une invitation est déjà en attente pour cet email.': {
     en: 'An invitation is already pending for this email.',
   },
-  'name et password sont requis pour créer un compte.': {
-    en: 'name and password are required to create an account.',
-  },
+  // 1-18B : acceptation des invitations.
+  "Cette invitation est destinée à un autre compte. Connectez-vous avec l'adresse invitée.":
+    {
+      en: 'This invitation is for another account. Sign in with the invited address.',
+    },
+  "Un compte existe déjà pour cette adresse. Connectez-vous, puis ouvrez de nouveau le lien d'invitation.":
+    {
+      en: 'An account already exists for this address. Sign in, then open the invitation link again.',
+    },
+  "Si l'adresse invitée n'a pas encore de compte, un lien pour le créer vient d'y être envoyé.":
+    {
+      en: 'If the invited address does not have an account yet, a link to create one has just been sent to it.',
+    },
   'Ce compte appartient déjà à cette organisation.': {
     en: 'This account already belongs to this organisation.',
   },

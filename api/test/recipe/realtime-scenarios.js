@@ -399,16 +399,9 @@ async function apiRevoke(token, id) {
   ok(res.status === 200 || res.status === 201, `révocation ${res.status}`);
 }
 
-async function apiAccept(rawToken, name) {
-  const res = await L.http('POST', '/auth/invitations/accept', {
-    body: {
-      token: rawToken,
-      name,
-      password: L.C.PASSWORD,
-      legalAcceptance: A.legalAcceptance('invitation_account'),
-    },
-  });
-  ok(res.status === 200, `acceptation ${res.status} ${res.text}`);
+// 1-18B : nouveau compte invité par le lien envoyé à l'adresse invitée.
+async function apiAccept(rawToken, email, name) {
+  await A.createInvitedAccount(rawToken, email, name);
 }
 
 /** Logo PNG factice local (validations de production inchangées). */
@@ -2094,7 +2087,7 @@ async function main() {
       await invitationRow(inv.page, b.email)
         .getByText('En attente')
         .waitFor({ timeout: 15000 });
-      await apiAccept(b.rawToken, 'Invite RT17');
+      await apiAccept(b.rawToken, b.email, 'Invite RT17');
       await invitationRow(inv.page, b.email)
         .getByText('Acceptée')
         .waitFor({ timeout: 15000 });
@@ -2372,7 +2365,7 @@ async function main() {
         .waitFor();
       const since = Date.now();
       const x = await apiInvite(ownerA.token, 'rt21-x', 'admin', []);
-      await apiAccept(x.rawToken, 'Invite RT21');
+      await apiAccept(x.rawToken, x.email, 'Invite RT21');
       await uploadBranding(ownerA.token, {
         logo: await pngLogo(128, 64, '#8e44ad'),
       });

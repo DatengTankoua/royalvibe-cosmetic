@@ -293,6 +293,7 @@ Elle lance dans l'ordre, et s'arrête au premier échec :
 | `create-push-notification-indexes.js` | 1-16A | Vérifiée au démarrage en production, même avec `WEB_PUSH_ENABLED=false` |
 | `create-support-request-indexes.js` | 1-16C.1 | Index TTL `createdAt_1_ttl` (`expireAfterSeconds = 2592000`, 30 jours) du registre `support_requests`. Non bloquante au démarrage : sans elle, l'assistance fonctionne mais le registre n'expire jamais |
 | `create-legal-acceptance-indexes.js` | 1-16C.2 | Collections `legal_acceptances` et `legal_document_versions`, index `{ userId, acceptedAt }`. Non bloquante au démarrage |
+| `create-invitation-account-token-index.js` | 1-18B | Index partiel `accountTokenHash_1` de `organizationinvitations` (lien de création de compte d'un invité). Migration d'index uniquement, aucune donnée. Index de performance, non bloquant au démarrage ; aussi déclaré dans le schéma (mêmes nom et options), donc compatible avec `autoIndex`. Lecture seule : `--check` |
 
 **Échec partiel :** chaque migration s'exécute à part et s'arrête au premier
 échec. Les index déjà créés par les étapes précédentes **restent en place**

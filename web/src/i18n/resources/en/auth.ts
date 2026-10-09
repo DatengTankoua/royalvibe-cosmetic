@@ -114,15 +114,72 @@ const authEn: Translation<typeof authFr> = {
     missingToken:
       "Incomplete invitation link. Open the link you received again, in full.",
     checking: "Checking the invitation…",
+    // 1-18B: session of the invited account or link sent to the invited address.
+    chooseTitle: "Invitation to join a shop",
+    chooseText:
+      "To accept, log in with the account of the invited address. If you do not have an account yet, get a link at that address to create one.",
+    loginToAccept: "Log in to accept",
+    noAccount: "I don't have an account",
+    sendingLink: "Sending…",
+    cancel: "Cancel",
+    linkSentTitle: "Check your inbox",
+    linkSent:
+      "If the invited address does not have an account yet, a link to create one has just been sent to it. It is valid for 24 hours at most.",
+    linkSentExisting:
+      "If you already have an account with this address, log in to accept the invitation.",
+    linkErrors: {
+      rateLimited: "Too many requests. Try again later.",
+      deliveryUnavailable:
+        "Email delivery is temporarily unavailable. Try again later.",
+      network: "Unable to connect. Check your connection and try again.",
+      generic: "The request could not be sent. Try again later.",
+    },
+    confirmTitle: "Join {{organization}}",
+    confirmRole: "Proposed role: {{role}}",
+    roles: {
+      admin: "Administrator",
+      seller: "Seller",
+    },
+    signedInAs: "Logged in as {{email}}",
+    accept: "Accept the invitation",
+    accepting: "Accepting…",
+    decline: "Not now",
+    acceptError: "The invitation could not be accepted. Try again.",
+    mismatchTitle: "This is not the right account",
+    mismatchText:
+      "This invitation is for a different address than your current account. Log in with the account of the invited address.",
+    switchAccount: "Switch account",
+    sessionExpired:
+      "Your session has expired. Log in again to accept the invitation.",
+    alreadyMember: "Your account already belongs to this shop.",
+    openApp: "Open the app",
     acceptedTitle: "Invitation accepted",
     joined: "You have joined {{organization}}.",
-    joinedLogin: "You have joined {{organization}}. Log in to continue.",
-    loginToContinue: "Log in to continue.",
-    deliveryFailed:
-      "The confirmation email could not be sent. Request a new email below.",
-    finish: "Finish creating your account.",
-    submit: "Create my account",
-    submitting: "Confirming…",
+    joinedSwitch: "To access it, log in again and choose this shop.",
+    reconnect: "Log in again",
+    cancelledTitle: "Invitation not accepted",
+    cancelledText:
+      "Nothing has changed. You can open the invitation link again while it is valid.",
+    backHome: "Back to home",
+    noOrganizationNotice:
+      "Your account does not belong to any active shop yet. Accept the invitation to join this shop; you will then be logged in.",
+    accountLabel: "Account: {{email}}",
+    loginNotice:
+      "Log in with the account of the invited address to accept the invitation.",
+    create: {
+      title: "Create your account",
+      text: "Choose your name and password to join the shop that invited you.",
+      submit: "Create my account and join",
+      submitting: "Creating…",
+      successTitle: "Account created",
+      success: "You have joined {{organization}}. Log in to continue.",
+      invalid:
+        "This account creation link is invalid or has expired. Open the invitation link again and request a new link.",
+      exists:
+        "An account already exists for this address. Log in, then open the invitation link again.",
+      missingToken:
+        "Incomplete account creation link. Open the link you received by email again, in full.",
+    },
   },
 };
 
