@@ -40,6 +40,8 @@ import {
   parsePublicAppOrigin,
 } from './invitation-link';
 import { buildInvitationAccountEmail } from './invitation-account-email';
+import { PersistentRateLimiter } from '../common/rate-limit/persistent-rate-limiter.service';
+import { resolveAntiAbuseConfig } from '../common/rate-limit/anti-abuse-config';
 import { UsersService } from '../users/users.service';
 import { UserRole, type UserDocument } from '../users/schemas/user.schema';
 import { LegalAcceptanceService } from '../legal/legal-acceptance.service';
@@ -144,6 +146,7 @@ export class InvitationAcceptanceService {
     private readonly legalAcceptance: LegalAcceptanceService,
     private readonly socketRegistry: SocketRegistryService,
     private readonly config: ConfigService,
+    private readonly rateLimiter: PersistentRateLimiter,
   ) {}
 
   // ─── Compte existant (session requise) ────────────────────────────────
@@ -467,6 +470,20 @@ export class InvitationAcceptanceService {
     const sendCount = invitation.accountLinkSendCount ?? 0;
     if (sendCount >= INVITATION_ACCOUNT_LINK_MAX_SENDS) return null;
 
+    // 1-18C — Plafond PAR DESTINATAIRE (adresse normalisée par le modèle),
+    // toutes invitations et organisations confondues, réservé atomiquement
+    // AVANT l'envoi : une nouvelle invitation ne le contourne pas. Plafond
+    // atteint → aucun envoi, réponse publique toujours neutre.
+    const recipient = await this.rateLimiter.consume(
+      resolveAntiAbuseConfig().invitationEmailRecipient,
+      invitation.email,
+      now,
+    );
+    if (!recipient.allowed) {
+      this.logger.warn('Invitation account link: recipient limit reached');
+      return null;
+    }
+
     const rawToken = randomBytes(32).toString('base64url');
     const expiresAt = new Date(
       Math.min(
@@ -491,7 +508,11 @@ export class InvitationAcceptanceService {
         },
       )
       .exec();
-    if (update.modifiedCount !== 1) return null;
+    if (update.modifiedCount !== 1) {
+      // Envoi concurrent déjà réservé pour cette invitation : place rendue.
+      await recipient.release();
+      return null;
+    }
     return {
       email: invitation.email,
       organizationName,

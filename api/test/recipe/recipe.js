@@ -18,7 +18,9 @@ const A = require('./actions');
 const HELP = `Recette locale des paiements (1-14D.2H) — tout est fictif, aucun appel CamPay réel.
 
 Stack (terminal 1, reste au premier plan ; Ctrl+C nettoie) :
-  start [--provider=simulated|campay] [--keep-logs]
+  start [--provider=simulated|campay] [--keep-logs] [--anti-bot=simulated]
+        (--anti-bot=simulated : inscription et défi de connexion simulés ;
+         API en NODE_ENV=development, la simulation étant refusée en production)
 
 Pilotage (terminal 2, recette démarrée) :
   status                          état, URLs, fournisseur
@@ -251,6 +253,12 @@ async function main(argv) {
         throw new Error(
           '--reuse-web-build est retiré : le build a lieu dans une copie isolée, refaite à chaque démarrage.',
         );
+      }
+      if (flags['anti-bot'] !== undefined) {
+        if (flags['anti-bot'] !== 'simulated') {
+          throw new Error('--anti-bot : seule la valeur simulated est admise.');
+        }
+        process.env.RECIPE_ANTI_BOT = 'simulated';
       }
       await require('./launcher').start({
         provider: flags.provider,

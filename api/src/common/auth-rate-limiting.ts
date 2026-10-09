@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { createHash } from 'crypto';
+import { isIP } from 'net';
 import type {
   ThrottlerLimitDetail,
   ThrottlerModuleOptions,
@@ -56,6 +57,68 @@ export function buildAuthRateLimitBody(): {
     code: AUTH_RATE_LIMIT_CODE,
     message: AUTH_RATE_LIMIT_MESSAGE,
   };
+}
+
+/**
+ * 1-18C — Plafond par compte atteint, défi de récupération possible : même
+ * statut et même `Retry-After` que le refus temporaire, code distinct pour
+ * que l'interface propose la vérification. Identique pour un compte connu
+ * ou inconnu (clé = identifiant saisi).
+ */
+export const AUTH_CHALLENGE_REQUIRED_CODE = 'AUTH_CHALLENGE_REQUIRED';
+export const AUTH_CHALLENGE_REQUIRED_MESSAGE =
+  'Trop de tentatives pour ce compte. Validez la vérification anti-robot pour réessayer.';
+
+export function buildAuthChallengeRequiredBody(): {
+  statusCode: number;
+  code: string;
+  message: string;
+} {
+  return {
+    statusCode: HttpStatus.TOO_MANY_REQUESTS,
+    code: AUTH_CHALLENGE_REQUIRED_CODE,
+    message: AUTH_CHALLENGE_REQUIRED_MESSAGE,
+  };
+}
+
+/**
+ * Clé client des essais après défi : même agrégation que le throttler
+ * (IPv4 exacte, IPv4 mappée ramenée à IPv4, IPv6 réduite à son /64).
+ */
+export function clientKeyFor(ip: string | undefined): string {
+  if (!ip) return 'unknown';
+  const bare = ip.split('%')[0].toLowerCase();
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(bare);
+  if (mapped) return mapped[1];
+  if (isIP(bare) !== 6) return bare;
+  const [head, tail] = bare.split('::');
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  const groups =
+    tail === undefined
+      ? left
+      : [
+          ...left,
+          ...new Array<string>(8 - left.length - right.length).fill('0'),
+          ...right,
+        ];
+  return `${groups
+    .slice(0, 4)
+    .map((group) => parseInt(group, 16).toString(16))
+    .join(':')}::/64`;
+}
+
+/**
+ * 1-18C — Refus 429 levé hors d'un garde (plafond persistant par compte) :
+ * le filtre global émet `Retry-After` depuis `retryAfterSeconds`.
+ */
+export class RateLimitedException extends HttpException {
+  constructor(
+    body: { statusCode: number; code: string; message: string },
+    readonly retryAfterSeconds: number,
+  ) {
+    super(body, HttpStatus.TOO_MANY_REQUESTS);
+  }
 }
 
 /**

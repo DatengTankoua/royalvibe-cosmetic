@@ -8,6 +8,19 @@ import { InjectConnection } from '@nestjs/mongoose';
 import type { Connection } from 'mongoose';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
+import { PASSWORD_HASH_ROUNDS, dummyPasswordHash } from './password-hashing';
+import { PersistentRateLimiter } from '../common/rate-limit/persistent-rate-limiter.service';
+import {
+  normalizeAccountEmail,
+  resolveAntiAbuseConfig,
+} from '../common/rate-limit/anti-abuse-config';
+import {
+  RateLimitedException,
+  buildAuthChallengeRequiredBody,
+  buildAuthRateLimitBody,
+} from '../common/auth-rate-limiting';
+import { TurnstileService } from '../anti-bot/turnstile.service';
+import { TURNSTILE_LOGIN_ACTION } from '../anti-bot/turnstile-config';
 import { UsersService } from '../users/users.service';
 import { LegalAcceptanceService } from '../legal/legal-acceptance.service';
 import { LegalAcceptanceContext } from '../legal/legal-documents';
@@ -109,6 +122,8 @@ export class AuthService {
     private emailVerificationService: EmailVerificationService,
     private subscriptionsService: SubscriptionsService,
     private legalAcceptance: LegalAcceptanceService,
+    private rateLimiter: PersistentRateLimiter,
+    private turnstile: TurnstileService,
   ) {}
 
   /**
@@ -142,7 +157,7 @@ export class AuthService {
       LegalAcceptanceContext.OWNER_REGISTRATION,
       dto.legalAcceptance,
     );
-    const hashed = await bcrypt.hash(dto.password, 10);
+    const hashed = await bcrypt.hash(dto.password, PASSWORD_HASH_ROUNDS);
     const session = await this.connection.startSession();
     let created:
       | {
@@ -239,18 +254,80 @@ export class AuthService {
    * invitation par identifiants : mêmes refus (401 générique, puis 403
    * `EMAIL_NOT_VERIFIED` seulement après un mot de passe correct). Ne
    * délivre aucun JWT et ne lit aucune organisation.
+   *
+   * 1-18C — Plafond PERSISTANT d'échecs par identifiant normalisé (fenêtre
+   * fixe, partagée par les trois routes, toutes IP confondues, comptes
+   * connus ou non) : une tentative est réservée AVANT la vérification
+   * (atomique, aucune course ne dépasse le plafond), puis rendue si le mot
+   * de passe est correct. Au-delà du plafond : même 429 que la limite par
+   * IP, jusqu'à la fin de la fenêtre seulement. Compte inconnu : comparaison
+   * à une empreinte factice de même coût (aucun délai artificiel).
+   *
+   * Récupération d'accès (plafond atteint) : un tiers ne peut pas imposer
+   * l'attente au titulaire. Chaque essai exige alors un défi Turnstile NEUF
+   * (action `login`, usage unique) ET reste plafonné par compte ET client
+   * (IP ou /64) ; les limites par IP passent toujours avant. Un défi seul ne
+   * remet rien à zéro : seule la combinaison défi réussi + bon mot de passe
+   * ferme la fenêtre du compte. Sans Turnstile disponible, aucun défi n'est
+   * proposé (refus temporaire jusqu'à la fin de la fenêtre).
    */
   async verifyCredentials(
     email: string,
     password: string,
+    access: { challengeToken?: string; clientKey?: string } = {},
   ): Promise<UserDocument> {
-    const user = await this.usersService.findByEmail(email);
-    if (!user)
-      throw new UnauthorizedException('Email ou mot de passe incorrect!');
+    const { accountFailures, challengedFailures } = resolveAntiAbuseConfig();
+    const subject = normalizeAccountEmail(email);
+    const attempt = await this.rateLimiter.consume(accountFailures, subject);
+    let challenged: Awaited<
+      ReturnType<PersistentRateLimiter['consume']>
+    > | null = null;
+    if (!attempt.allowed) {
+      if (!this.turnstile.isAvailable()) {
+        throw new RateLimitedException(
+          buildAuthRateLimitBody(),
+          attempt.retryAfterSeconds,
+        );
+      }
+      if (!access.challengeToken) {
+        throw new RateLimitedException(
+          buildAuthChallengeRequiredBody(),
+          attempt.retryAfterSeconds,
+        );
+      }
+      // Jeton refusé ou fournisseur indisponible : 400/503, rien consommé.
+      await this.turnstile.verify(
+        access.challengeToken,
+        TURNSTILE_LOGIN_ACTION,
+      );
+      challenged = await this.rateLimiter.consume(
+        challengedFailures,
+        `${subject}\u0000${access.clientKey ?? 'unknown'}`,
+      );
+      if (!challenged.allowed) {
+        throw new RateLimitedException(
+          buildAuthRateLimitBody(),
+          challenged.retryAfterSeconds,
+        );
+      }
+    }
 
-    const valid = await bcrypt.compare(password, user.password);
-    if (!valid)
+    const user = await this.usersService.findByEmail(email);
+    const valid = await bcrypt.compare(
+      password,
+      user ? user.password : await dummyPasswordHash(),
+    );
+    if (!user || !valid)
       throw new UnauthorizedException('Email ou mot de passe incorrect!');
+    if (challenged) {
+      // Défi réussi ET bon mot de passe : le titulaire a prouvé son accès,
+      // la fenêtre du compte est refermée (jamais sur un simple défi).
+      await challenged.release();
+      await this.rateLimiter.reset(accountFailures.scope, subject);
+    } else {
+      // Mot de passe correct : la tentative ne compte pas comme un échec.
+      await attempt.release();
+    }
 
     // 1-13A : identifiants corrects mais adresse non vérifiée → aucun JWT.
     // Vérifié APRÈS le mot de passe : ne révèle rien sans identifiants.
@@ -263,8 +340,14 @@ export class AuthService {
     return user;
   }
 
-  async login(dto: LoginDto): Promise<LoginResult> {
-    const user = await this.verifyCredentials(dto.email, dto.password);
+  async login(
+    dto: LoginDto,
+    access: { clientKey?: string } = {},
+  ): Promise<LoginResult> {
+    const user = await this.verifyCredentials(dto.email, dto.password, {
+      challengeToken: dto.challengeToken,
+      clientKey: access.clientKey,
+    });
 
     const userId = user._id.toString();
 

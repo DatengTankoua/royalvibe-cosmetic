@@ -8,6 +8,7 @@ import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
+import { resetAuthRateLimits } from './e2e/rate-limit-fixtures';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { UserDocument, UserRole } from './../src/users/schemas/user.schema';
 import { Organization } from './../src/organizations/schemas/organization.schema';
@@ -35,7 +36,6 @@ import {
   buildOriginAllowlist,
   parseCORSOrigin,
 } from './../src/events/origin.helpers';
-import { ThrottlerStorage } from '@nestjs/throttler';
 import { AUTH_RATE_LIMIT_CODE } from './../src/common/auth-rate-limiting';
 import { EMAIL_SENDER } from '../src/email-verification/email-sender';
 import {
@@ -668,12 +668,8 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
     // dépend de l'ordre d'exécution, et AUCUN test n'attend réellement 60 s
     // ou 15 min : le 429 est déclenché par dépassement de la limite (fenêtre
     // courte), pas par temporisation réelle.
-    const clearThrottle = (): void => {
-      // Méthode publique du stockage mémoire OFFICIEL de `@nestjs/throttler`
-      // (vide les compteurs et les timers) — isolation entre les tests.
-      const s = moduleFixture.get(ThrottlerStorage);
-      s.onApplicationShutdown();
-    };
+    const clearThrottle = (): Promise<void> =>
+      resetAuthRateLimits(moduleFixture);
 
     const wrongLogin = () =>
       request(app.getHttpServer())
@@ -787,10 +783,8 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
   describe('9. Multi-organisation (1-3B.1) : login + switch', () => {
     // Isolation du stockage mémoire (même motif que §8) : chaque test
     // part d'une fenêtre de login vide.
-    const clearThrottle = (): void => {
-      const s = moduleFixture.get(ThrottlerStorage);
-      s.onApplicationShutdown();
-    };
+    const clearThrottle = (): Promise<void> =>
+      resetAuthRateLimits(moduleFixture);
     beforeEach(clearThrottle);
 
     const decodePayload = (token: string): Record<string, unknown> =>
@@ -919,10 +913,8 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
   // précisément (pas de sleep, pas d'infra additionnelle). Les tests d'avant
   // (login + switch) restent verts grâce à cette restauration.
   describe('10. Contexte organisationnel HTTP (1-3B.2)', () => {
-    const clearThrottle = (): void => {
-      const s = moduleFixture.get(ThrottlerStorage);
-      s.onApplicationShutdown();
-    };
+    const clearThrottle = (): Promise<void> =>
+      resetAuthRateLimits(moduleFixture);
     beforeEach(clearThrottle);
 
     const membershipModel = (): Model<OrganizationMembershipDocument> =>
@@ -1164,9 +1156,8 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
     // persistante du switch). Chaque test crée ses sections puis les
     // supprime précisément (mêmes _id), sans sleep.
     describe('11. Isolation multi-tenant des Sections (1-4A)', () => {
-      const clearThrottle = (): void => {
-        moduleFixture.get(ThrottlerStorage).onApplicationShutdown();
-      };
+      const clearThrottle = (): Promise<void> =>
+        resetAuthRateLimits(moduleFixture);
       beforeEach(clearThrottle);
 
       const MISSING_SECTION_ID = 'ffffffffffffffffffffffff';
@@ -1536,9 +1527,8 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
     // le body reste E2E : le ValidationPipe (`forbidNonWhitelisted`) s'exécute
     // avant la vérification de l'image. Sans `sleep`.
     describe('13. Isolation multi-tenant du catalogue Produits (1-4B)', () => {
-      const clearThrottle = (): void => {
-        moduleFixture.get(ThrottlerStorage).onApplicationShutdown();
-      };
+      const clearThrottle = (): Promise<void> =>
+        resetAuthRateLimits(moduleFixture);
       beforeEach(clearThrottle);
 
       const MISSING_PRODUCT_ID = 'eeee11111111111111111111';
@@ -2054,9 +2044,8 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
   // Réutilise le replica set éphémère déjà démarré pour ce fichier (vraies
   // transactions, vrai rollback, vraie concurrence — aucun mock de driver).
   describe('14. Onboarding atomique propriétaire (1-6A)', () => {
-    const clearThrottle = (): void => {
-      moduleFixture.get(ThrottlerStorage).onApplicationShutdown();
-    };
+    const clearThrottle = (): Promise<void> =>
+      resetAuthRateLimits(moduleFixture);
     beforeEach(clearThrottle);
 
     const users = (): Model<UserDocument> =>

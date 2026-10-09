@@ -68,6 +68,7 @@ import {
   INVITATION_TERMS,
   OWNER_TERMS,
   legalAcceptanceFor,
+  simulatedTurnstileToken,
 } from './e2e/legal-acceptance-fixtures';
 import {
   acceptWithSession,
@@ -164,11 +165,14 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
   let seq = 0;
   const email = (label: string) =>
     `${label}-${++seq}-16c2@stockmaster.test`.toLowerCase();
+  // 1-18C : jeton anti-robot simulé toujours présent (les refus testés ici
+  // sont ceux des conditions, après la vérification anti-robot).
   const registerBody = (address: string, extra: object = OWNER_TERMS) => ({
     name: 'Owner Legal',
     email: address,
     password: PASSWORD,
     organizationName: 'Boutique Legal',
+    turnstileToken: simulatedTurnstileToken(),
     ...extra,
   });
 

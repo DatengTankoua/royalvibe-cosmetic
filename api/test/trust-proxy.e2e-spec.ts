@@ -1,11 +1,11 @@
 import 'reflect-metadata';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { ThrottlerStorage } from '@nestjs/throttler';
 import type { NextFunction, Request, Response } from 'express';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
+import { resetAuthRateLimits } from './e2e/rate-limit-fixtures';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { LOGIN_SHORT_LIMIT } from './../src/common/auth-rate-limiting';
 import {
@@ -47,21 +47,24 @@ describe('Confiance proxy et limitation de débit par IP (e2e 1-14D.2E)', () => 
     app.getHttpAdapter().getInstance() as ExpressSettings & {
       get(name: string): unknown;
     };
-  const clearThrottle = () =>
-    moduleFixture.get(ThrottlerStorage).onApplicationShutdown();
+  // 1-18C : compteurs IP en mémoire ET plafonds persistants par compte.
+  const clearThrottle = () => resetAuthRateLimits(moduleFixture);
 
   /** Réglage comme `main.ts` ; le défaut Express est restauré entre les cas. */
-  function configure(env: NodeJS.ProcessEnv) {
+  async function configure(env: NodeJS.ProcessEnv) {
     express().set('trust proxy', false);
     applyTrustProxy(express(), resolveTrustProxySetting(env));
-    clearThrottle();
+    await clearThrottle();
     observed.length = 0;
   }
 
-  const login = (headers: Record<string, string> = {}) => {
+  const login = (
+    headers: Record<string, string> = {},
+    body: typeof LOGIN_BODY = LOGIN_BODY,
+  ) => {
     const req = request(app.getHttpServer()).post('/auth/login');
     for (const [name, value] of Object.entries(headers)) req.set(name, value);
-    return req.send(LOGIN_BODY);
+    return req.send(body);
   };
 
   /** Statuts de N tentatives successives avec des en-têtes donnés. */
@@ -149,24 +152,31 @@ describe('Confiance proxy et limitation de débit par IP (e2e 1-14D.2E)', () => 
 
   describe('proxy approuvé par ADRESSE EXACTE', () => {
     it('connexion depuis le proxy approuvé : `req.ip` = adresse transmise par le proxy', async () => {
-      configure({ TRUST_PROXY_ADDRESSES: '127.0.0.1' });
+      await configure({ TRUST_PROXY_ADDRESSES: '127.0.0.1' });
       await login({ 'X-Forwarded-For': '203.0.113.10' });
       expect(observed).toEqual(['203.0.113.10']);
     });
 
     it('compteurs par adresse transmise : A limité (429), B toujours autorisé (401)', async () => {
-      configure({ TRUST_PROXY_ADDRESSES: '127.0.0.1' });
+      await configure({ TRUST_PROXY_ADDRESSES: '127.0.0.1' });
       const a = await attempts(LOGIN_SHORT_LIMIT + 1, () => ({
         'X-Forwarded-For': '203.0.113.10',
       }));
       expect(a[LOGIN_SHORT_LIMIT]).toBe(429);
-      expect((await login({ 'X-Forwarded-For': '203.0.113.20' })).status).toBe(
-        401,
-      );
+      // 1-18C : autre identifiant (le compte de A est désormais plafonné
+      // pour toutes les IP) ; seul le compteur PAR IP est observé ici.
+      expect(
+        (
+          await login(
+            { 'X-Forwarded-For': '203.0.113.20' },
+            { ...LOGIN_BODY, email: 'other-account-14d2e@royalvibe.test' },
+          )
+        ).status,
+      ).toBe(401);
     });
 
     it('source NON approuvée (adresse d’un autre proxy) : en-têtes ignorés, aucune usurpation', async () => {
-      configure({ TRUST_PROXY_ADDRESSES: '172.31.250.2' });
+      await configure({ TRUST_PROXY_ADDRESSES: '172.31.250.2' });
       const statuses = await attempts(LOGIN_SHORT_LIMIT + 1, (i) => ({
         'X-Forwarded-For': `203.0.113.${i + 1}`,
       }));

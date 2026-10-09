@@ -21,6 +21,7 @@ import { AllowInactiveSubscription } from '../subscriptions/subscription-access'
 import {
   AuthThrottlerGuard,
   LoginSharedThrottlerGuard,
+  clientKeyFor,
 } from '../common/auth-rate-limiting';
 import { SKIP_PAYMENT_THROTTLERS } from '../common/subscription-payment-rate-limiting';
 import { SKIP_SUPPORT_THROTTLER } from '../support/support-rate-limiting';
@@ -39,6 +40,8 @@ import {
   InvitationAcceptanceService,
 } from '../organizations/invitation-acceptance.service';
 import { localeFromRequest } from '../common/i18n/locale';
+import { TurnstileService } from '../anti-bot/turnstile.service';
+import { TURNSTILE_REGISTER_ACTION } from '../anti-bot/turnstile-config';
 import { UpdateLocaleDto } from './dto/update-locale.dto';
 import { UsersService } from '../users/users.service';
 import { Public } from './decorators/public.decorator';
@@ -100,6 +103,7 @@ export class AuthController {
     private passwordResetService: PasswordResetService,
     private usersService: UsersService,
     private invitationAcceptance: InvitationAcceptanceService,
+    private turnstile: TurnstileService,
   ) {}
 
   // Rate limiting (0B.6) : MÊME garde/fenêtres que /auth/login, sans
@@ -117,6 +121,16 @@ export class AuthController {
         message: "L'inscription est actuellement désactivée.",
       });
     }
+    return this.verifiedRegistration(dto);
+  }
+
+  /**
+   * 1-18C — Vérification anti-robot AVANT toute logique d'inscription
+   * (aucun hachage, compte, organisation, preuve ni e-mail sans réponse
+   * positive de Turnstile). Indisponible ou non configuré → 503 réessayable.
+   */
+  private async verifiedRegistration(dto: RegisterDto) {
+    await this.turnstile.verify(dto.turnstileToken, TURNSTILE_REGISTER_ACTION);
     return this.authService.register(dto);
   }
 
@@ -126,8 +140,8 @@ export class AuthController {
   @Header('Cache-Control', 'no-store')
   @Public()
   @Post('login')
-  login(@Body() dto: LoginDto) {
-    return this.authService.login(dto);
+  login(@Body() dto: LoginDto, @Req() request: Request) {
+    return this.authService.login(dto, { clientKey: clientKeyFor(request.ip) });
   }
   // 1-18B : le lien d'invitation est remis au créateur ; il ne prouve ni
   // l'identité de son détenteur ni le contrôle de l'adresse invitée.
@@ -177,10 +191,15 @@ export class AuthController {
   @Post('invitations/credentials/inspect')
   async inspectInvitationWithCredentials(
     @Body() dto: InvitationCredentialsDto,
+    @Req() request: Request,
   ) {
     const user = await this.authService.verifyCredentials(
       dto.email,
       dto.password,
+      {
+        challengeToken: dto.challengeToken,
+        clientKey: clientKeyFor(request.ip),
+      },
     );
     return this.invitationAcceptance.inspect(dto.token, user);
   }
@@ -192,10 +211,15 @@ export class AuthController {
   @Post('invitations/credentials/accept')
   async acceptInvitationWithCredentials(
     @Body() dto: AcceptInvitationWithCredentialsDto,
+    @Req() request: Request,
   ) {
     const user = await this.authService.verifyCredentials(
       dto.email,
       dto.password,
+      {
+        challengeToken: dto.challengeToken,
+        clientKey: clientKeyFor(request.ip),
+      },
     );
     return this.invitationAcceptance.acceptForAccount(
       { token: dto.token, consent: dto.consent },

@@ -24,6 +24,17 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const status = exception.getStatus();
     const body = exception.getResponse();
 
+    // 1-18C : plafond persistant (429 hors garde) → `Retry-After` entier.
+    const retryAfter = (exception as { retryAfterSeconds?: unknown })
+      .retryAfterSeconds;
+    if (
+      typeof retryAfter === 'number' &&
+      Number.isInteger(retryAfter) &&
+      retryAfter > 0
+    ) {
+      response.setHeader('Retry-After', String(retryAfter));
+    }
+
     const isObject = typeof body === 'object' && body !== null;
     const rawMessage = isObject
       ? ((body as { message?: string | string[] }).message ?? exception.message)

@@ -26,6 +26,8 @@ import { OrganizationsModule } from '../organizations/organizations.module';
 import { EmailVerificationModule } from '../email-verification/email-verification.module';
 import { PasswordResetModule } from '../password-reset/password-reset.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
+import { RateLimitModule } from '../common/rate-limit/rate-limit.module';
+import { AntiBotModule } from '../anti-bot/anti-bot.module';
 
 @Module({
   imports: [
@@ -39,6 +41,9 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
     SubscriptionsModule,
     // 1-16C.2 : preuve d'acceptation dans la transaction d'inscription.
     LegalModule,
+    // 1-18C : plafonds persistants par compte ; anti-robot de l'inscription.
+    RateLimitModule,
+    AntiBotModule,
     PassportModule,
     // Instance du JwtModule (secret `JWT_SECRET`, `signOptions.expiresIn: '7d'`)
     // — MÊME configuration que l'auth HTTP : le handshake Socket.IO (0B.3)

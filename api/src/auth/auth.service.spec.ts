@@ -17,6 +17,24 @@ import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { AccessScope } from '../subscriptions/subscription-access';
 import { EmailVerificationService } from '../email-verification/email-verification.service';
 import { LegalAcceptanceService } from '../legal/legal-acceptance.service';
+import { PersistentRateLimiter } from '../common/rate-limit/persistent-rate-limiter.service';
+import {
+  AUTH_RATE_LIMIT_CODE,
+  RateLimitedException,
+} from '../common/auth-rate-limiting';
+import { PASSWORD_HASH_ROUNDS } from './password-hashing';
+import { TurnstileService } from '../anti-bot/turnstile.service';
+
+// 1-18C : `compare` observable (délègue à la vraie implémentation).
+jest.mock('bcryptjs', () => {
+  const actual = jest.requireActual<typeof import('bcryptjs')>('bcryptjs');
+  return {
+    ...actual,
+    compare: jest.fn((plain: string, hash: string) =>
+      actual.compare(plain, hash),
+    ),
+  };
+});
 
 /** 1-16C.2 : acceptation des conditions (validée et enregistrée en e2e). */
 const legalAcceptanceStub = () => ({
@@ -95,7 +113,26 @@ describe('AuthService', () => {
   // 1-14C.1 : contrôle commercial (actif par défaut ; cas inactifs dédiés).
   let subscriptions: { getAccessDecision: jest.Mock };
 
+  // 1-18C : plafond persistant par compte (autorisé par défaut).
+  let rateLimiter: { consume: jest.Mock; reset: jest.Mock };
+  let release: jest.Mock;
+  // 1-18C : défi de récupération (disponible et réussi par défaut).
+  let turnstile: { isAvailable: jest.Mock; verify: jest.Mock };
+
   async function build() {
+    release = jest.fn().mockResolvedValue(undefined);
+    rateLimiter = {
+      consume: jest.fn().mockResolvedValue({
+        allowed: true,
+        retryAfterSeconds: 900,
+        release,
+      }),
+      reset: jest.fn().mockResolvedValue(undefined),
+    };
+    turnstile = {
+      isAvailable: jest.fn().mockReturnValue(true),
+      verify: jest.fn().mockResolvedValue(undefined),
+    };
     usersService = {
       findByEmail: jest.fn(),
       create: jest.fn(),
@@ -140,6 +177,8 @@ describe('AuthService', () => {
         { provide: EmailVerificationService, useValue: emailVerification },
         { provide: SubscriptionsService, useValue: subscriptions },
         { provide: LegalAcceptanceService, useValue: legalAcceptanceStub() },
+        { provide: PersistentRateLimiter, useValue: rateLimiter },
+        { provide: TurnstileService, useValue: turnstile },
       ],
     }).compile();
     return module.get(AuthService);
@@ -420,6 +459,227 @@ describe('AuthService', () => {
       expect(error).toBeInstanceOf(UnauthorizedException);
       expect(extractMessage(error)).toBe('Email ou mot de passe incorrect!');
       expect(organizations.listActiveOrganizations).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---- 1-18C : plafond par compte et vérification factice ----
+
+  describe('verifyCredentials — plafond par compte et compte inconnu (1-18C)', () => {
+    const compare = bcrypt.compare as unknown as jest.Mock;
+    beforeEach(() => compare.mockClear());
+
+    it('compte inconnu : comparaison bcrypt à une empreinte factice de même coût, 401 générique', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(null);
+      const error: unknown = await service
+        .verifyCredentials('Missing@Example.com ', 'secret1')
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(UnauthorizedException);
+      expect(extractMessage(error)).toBe('Email ou mot de passe incorrect!');
+      expect(compare).toHaveBeenCalledTimes(1);
+      const [plain, hash] = compare.mock.calls[0] as [string, string];
+      expect(plain).toBe('secret1');
+      expect(bcrypt.getRounds(hash)).toBe(PASSWORD_HASH_ROUNDS);
+      expect(bcrypt.getRounds(await hashRight())).toBe(PASSWORD_HASH_ROUNDS);
+      // Échec compté : la réservation n'est jamais rendue.
+      expect(release).not.toHaveBeenCalled();
+    });
+
+    it('identifiant normalisé comme le modèle User (trim + minuscules) ; même portée pour toutes les routes', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(null);
+      await service
+        .verifyCredentials('  Ada@Example.COM ', 'secret1')
+        .catch(() => undefined);
+      const [policy, subject] = rateLimiter.consume.mock.calls[0] as [
+        { scope: string; limit: number; windowMs: number },
+        string,
+      ];
+      expect(subject).toBe('ada@example.com');
+      expect(policy).toEqual({
+        scope: 'auth-account-failure',
+        limit: 10,
+        windowMs: 900_000,
+      });
+    });
+
+    it('mot de passe correct : la tentative est rendue (un succès ne compte pas comme échec)', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(
+        makeUserDoc({ password: await hashRight() }),
+      );
+      await service.verifyCredentials('ada@example.com', 'right-password-1');
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it('mot de passe incorrect : échec compté (aucune restitution)', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(
+        makeUserDoc({ password: await hashRight() }),
+      );
+      await expect(
+        service.verifyCredentials('ada@example.com', 'wrong-password-1'),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(release).not.toHaveBeenCalled();
+    });
+
+    it('plafond atteint sans Turnstile disponible : 429 identique à la limite IP, Retry-After, ni lecture du compte ni bcrypt', async () => {
+      service = await build();
+      turnstile.isAvailable.mockReturnValue(false);
+      rateLimiter.consume.mockResolvedValue({
+        allowed: false,
+        retryAfterSeconds: 321,
+        release,
+      });
+      const error: unknown = await service
+        .verifyCredentials('ada@example.com', 'right-password-1')
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(RateLimitedException);
+      expect((error as RateLimitedException).getStatus()).toBe(429);
+      expect((error as RateLimitedException).getResponse()).toEqual({
+        statusCode: 429,
+        code: AUTH_RATE_LIMIT_CODE,
+        message: 'Trop de tentatives de connexion. Réessayez plus tard.',
+      });
+      expect((error as RateLimitedException).retryAfterSeconds).toBe(321);
+      expect(usersService.findByEmail).not.toHaveBeenCalled();
+      expect(compare).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('verifyCredentials — récupération d’accès par défi (1-18C)', () => {
+    const compare = bcrypt.compare as unknown as jest.Mock;
+    const blocked = () => ({ allowed: false, retryAfterSeconds: 600, release });
+    let challengedRelease: jest.Mock;
+
+    async function blockedService(challengedAllowed = true) {
+      service = await build();
+      challengedRelease = jest.fn().mockResolvedValue(undefined);
+      rateLimiter.consume.mockImplementation((policy: { scope: string }) =>
+        Promise.resolve(
+          policy.scope === 'auth-account-failure'
+            ? blocked()
+            : {
+                allowed: challengedAllowed,
+                retryAfterSeconds: 300,
+                release: challengedRelease,
+              },
+        ),
+      );
+      compare.mockClear();
+    }
+
+    it('plafond atteint sans défi : 429 AUTH_CHALLENGE_REQUIRED, aucune lecture du compte', async () => {
+      await blockedService();
+      const error: unknown = await service
+        .verifyCredentials('ada@example.com', 'right-password-1')
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(RateLimitedException);
+      expect((error as RateLimitedException).getResponse()).toEqual({
+        statusCode: 429,
+        code: 'AUTH_CHALLENGE_REQUIRED',
+        message:
+          'Trop de tentatives pour ce compte. Validez la vérification anti-robot pour réessayer.',
+      });
+      expect((error as RateLimitedException).retryAfterSeconds).toBe(600);
+      expect(turnstile.verify).not.toHaveBeenCalled();
+      expect(usersService.findByEmail).not.toHaveBeenCalled();
+    });
+
+    it('défi refusé : erreur Turnstile, aucun essai de mot de passe ni consommation', async () => {
+      await blockedService();
+      turnstile.verify.mockRejectedValue(new BadRequestException());
+      await expect(
+        service.verifyCredentials('ada@example.com', 'right-password-1', {
+          challengeToken: 'tok',
+          clientKey: '203.0.113.7',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(turnstile.verify).toHaveBeenCalledWith('tok', 'login');
+      expect(rateLimiter.consume).toHaveBeenCalledTimes(1);
+      expect(compare).not.toHaveBeenCalled();
+    });
+
+    it('défi réussi + mauvais mot de passe : 401, essai compté par compte ET client, rien remis à zéro', async () => {
+      await blockedService();
+      usersService.findByEmail.mockResolvedValue(
+        makeUserDoc({ password: await hashRight() }),
+      );
+      await expect(
+        service.verifyCredentials('Ada@Example.com', 'wrong-password-1', {
+          challengeToken: 'tok',
+          clientKey: '203.0.113.7',
+        }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      const [policy, subject] = rateLimiter.consume.mock.calls[1] as [
+        { scope: string; limit: number },
+        string,
+      ];
+      expect(policy).toMatchObject({
+        scope: 'auth-challenged-failure',
+        limit: 5,
+      });
+      expect(subject).toBe('ada@example.com\u0000203.0.113.7');
+      expect(challengedRelease).not.toHaveBeenCalled();
+      expect(rateLimiter.reset).not.toHaveBeenCalled();
+    });
+
+    it('défi réussi + bon mot de passe : accès rendu, fenêtre du compte refermée', async () => {
+      await blockedService();
+      usersService.findByEmail.mockResolvedValue(
+        makeUserDoc({ password: await hashRight() }),
+      );
+      const user = await service.verifyCredentials(
+        'ada@example.com',
+        'right-password-1',
+        { challengeToken: 'tok', clientKey: '203.0.113.7' },
+      );
+      expect(user).toBeDefined();
+      expect(challengedRelease).toHaveBeenCalledTimes(1);
+      expect(rateLimiter.reset).toHaveBeenCalledWith(
+        'auth-account-failure',
+        'ada@example.com',
+      );
+    });
+
+    it('essais après défi plafonnés (compte + client) : 429 AUTH_RATE_LIMITED sans essai de mot de passe', async () => {
+      await blockedService(false);
+      const error: unknown = await service
+        .verifyCredentials('ada@example.com', 'right-password-1', {
+          challengeToken: 'tok',
+          clientKey: '203.0.113.7',
+        })
+        .catch((e: unknown) => e);
+      expect((error as RateLimitedException).getResponse()).toMatchObject({
+        code: AUTH_RATE_LIMIT_CODE,
+      });
+      expect(compare).not.toHaveBeenCalled();
+    });
+
+    it('compte inconnu : même parcours (défi, plafond par client), empreinte factice', async () => {
+      await blockedService();
+      usersService.findByEmail.mockResolvedValue(null);
+      await expect(
+        service.verifyCredentials('nobody@example.com', 'whatever-1', {
+          challengeToken: 'tok',
+          clientKey: '203.0.113.7',
+        }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(turnstile.verify).toHaveBeenCalledWith('tok', 'login');
+      expect(rateLimiter.consume).toHaveBeenCalledTimes(2);
+      expect(compare).toHaveBeenCalledTimes(1);
+    });
+
+    it('plafond NON atteint : un jeton fourni est ignoré (aucun appel Turnstile)', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(
+        makeUserDoc({ password: await hashRight() }),
+      );
+      await service.verifyCredentials('ada@example.com', 'right-password-1', {
+        challengeToken: 'tok',
+      });
+      expect(turnstile.verify).not.toHaveBeenCalled();
+      expect(rateLimiter.reset).not.toHaveBeenCalled();
     });
   });
 

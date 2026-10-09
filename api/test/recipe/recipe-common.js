@@ -137,13 +137,21 @@ function baseEnv(extra = {}) {
   };
 }
 
+/**
+ * 1-18C : anti-robot SIMULÉ sur demande explicite (`start --anti-bot=simulated`).
+ * La simulation est TOUJOURS refusée avec `NODE_ENV=production` : l'API de
+ * recette tourne alors en `development` (origines 127.0.0.1). Par défaut :
+ * production, aucun anti-robot (inscription HTTP refusée, 503).
+ */
+const simulatedAntiBot = () => process.env.RECIPE_ANTI_BOT === 'simulated';
+
 /** Environnement de l'API, des migrations, des fixtures et des CLI. */
 function apiEnv(uri, extra = {}) {
   return baseEnv({
     MONGODB_URI: assertRecipeUri(uri),
     JWT_SECRET: FAKE.jwtSecret,
     CORS_ORIGIN: WEB_ORIGIN,
-    NODE_ENV: 'production',
+    NODE_ENV: simulatedAntiBot() ? 'development' : 'production',
     PORT: String(PORTS.api),
     PUBLIC_REGISTRATION_ENABLED: 'true',
     PUBLIC_APP_URL: WEB_ORIGIN,
@@ -166,6 +174,8 @@ function apiEnv(uri, extra = {}) {
     STORAGE_QUOTA_BYTES: process.env.RECIPE_STORAGE_QUOTA_BYTES || '',
     RESEND_API_KEY: '',
     EMAIL_FROM: '',
+    // 1-18C : anti-robot SIMULÉ (aucun réseau), seulement sur demande.
+    ...(simulatedAntiBot() ? { TURNSTILE_SIMULATED: 'true' } : {}),
     ...extra,
   });
 }
@@ -180,6 +190,8 @@ function webEnv(extra = {}) {
     NODE_ENV: 'production',
     NEXT_PUBLIC_API_URL: API_URL,
     NEXT_PUBLIC_REGISTRATION_ENABLED: 'true',
+    // 1-18C : case anti-robot locale (même simulation que l'API).
+    ...(simulatedAntiBot() ? { NEXT_PUBLIC_TURNSTILE_SIMULATED: 'true' } : {}),
     NEXT_TELEMETRY_DISABLED: '1',
     __NEXT_PROCESSED_ENV: 'true',
     ...extra,
