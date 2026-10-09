@@ -16,6 +16,7 @@ import {
 } from "@/lib/api";
 import { ORGANIZATION_NAME_MAX_LENGTH } from "@/lib/name-limits";
 import { LOGO_ACCEPT, LOGO_MAX_BYTES } from "@/lib/logo-upload-policy";
+import { notifyStorageChanged } from "@/lib/storage-usage";
 
 // /app/organization/branding (1-9C) : lecture pour tout membre actif,
 // édition réservée à `branding.manage`. Champs interdits (slug/currency/
@@ -79,8 +80,11 @@ export default function OrganizationBrandingPage() {
           brandColor !== organization.brandColor ? brandColor : undefined,
         logo: logo ?? undefined,
       });
+      const sentLogo = logo !== null;
       setLogo(null);
       refreshOrganization();
+      // 1-17B : occupation du stockage relue (logo compté dans le quota).
+      if (sentLogo) notifyStorageChanged();
       toast.success(t("branding.updated"));
       if (updated.storageCleanup === "failed") {
         toast.warning(t("branding.oldLogoNotDeleted"));
@@ -99,6 +103,7 @@ export default function OrganizationBrandingPage() {
     try {
       const removed = await removeOrganizationLogo();
       refreshOrganization();
+      notifyStorageChanged();
       toast.success(t("branding.logoRemoved"));
       if (removed.storageCleanup === "failed") {
         toast.warning(t("branding.oldLogoNotDeleted"));

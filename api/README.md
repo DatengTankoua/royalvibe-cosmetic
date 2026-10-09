@@ -55,6 +55,11 @@ Toutes les valeurs par défaut du `.env.example` sont compatibles avec le `docke
 | `S3_SIGNING_ENDPOINT` | _(vide)_ | Origine http(s) jointe par le navigateur, utilisée **uniquement** pour signer les URL GET quand l'API joint le stockage par un nom interne (Docker Compose : `https://s3.<domaine>`). Vide pour R2 (endpoint unique). N'affecte pas l'identité du stockage |
 | `S3_SIGNED_URL_TTL_SECONDS` | `900` | Durée des URL GET signées (entier 60–3600). Bucket privé : aucune URL publique ; la clé est stockée, l'URL est signée à chaque lecture |
 | `S3_CHECKSUM_MODE` | `when_supported` | Sommes de contrôle du SDK (`when_supported` ou `when_required`) ; à changer seulement après l'essai R2 opérateur |
+| `STORAGE_QUOTA_BYTES` | `250000000` | Quota de stockage par organisation, en octets (photos, corbeille comprise, et logo). Serveur uniquement : aucune route ne le modifie |
+| `STORAGE_QUOTA_MODE` | `enforce` | `enforce` bloque un envoi qui dépasserait le quota (413 `STORAGE_QUOTA_EXCEEDED`) ; `track` comptabilise sans bloquer (initialisation des fichiers existants) |
+| `STORAGE_RESERVATION_TTL_SECONDS` | `900` | Durée d'une réservation (60–3600) ; l'envoi est annulé au tiers de cette durée, la reprise n'agit qu'après échéance |
+| `STORAGE_INVENTORY_INTERVAL_SECONDS` | `21600` | Période de l'inventaire du stockage (fichiers présents sans entrée au registre : envoi arrivé après la reprise, ancien code), **en mode `enforce` seulement** (300–604800, `0` = désactivé ; CLI `storage:quota inventory` sinon) |
+| `STORAGE_RECOVERY_INTERVAL_SECONDS` | `600` | Période de la reprise automatique dans le processus HTTP (60–86400, `0` = désactivée ; CLI `storage:quota recover --apply` sinon ; sans `--apply` : état des lieux sans écriture) |
 
 `S3_PUBLIC_URL` n'est plus lue (stockage R2 privé). L'identité du stockage
 (hôte de `S3_ENDPOINT` + `S3_BUCKET`) est enregistrée avec chaque clé : une

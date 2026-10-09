@@ -116,6 +116,25 @@ const catalogEn: Translation<typeof catalogFr> = {
     recentSales: "Recent sales",
     history: "Full history",
     noHistory: "No history",
+    // 1-17B — photo of an existing product.
+    photoCurrent: "Current photo",
+    photoNone: "No photo for this product.",
+    photoAdd: "Add a photo",
+    photoReplace: "Replace photo",
+    photoPreview: "New photo (preview)",
+    photoCancel: "Cancel photo change",
+    photoHelp:
+      "JPEG, PNG or WebP, 5 MB maximum. The previous photo stays in place until the save succeeds.",
+    photoOffline:
+      "An internet connection is required to upload a photo. Other changes remain possible once online.",
+    photoTooLarge: "The photo must not exceed 5 MB.",
+    photoInvalidType: "The photo must be a JPEG, PNG or WebP image.",
+    photoUploading: "Uploading photo…",
+    photoUpdated: "Photo saved",
+    oldPhotoNotDeleted:
+      "Photo saved, but the previous one could not yet be removed from storage: it is still counted and its deletion will be retried automatically.",
+    sell: "Sell",
+    sellLabel: "Sell {{name}}",
   },
   profit: {
     positive: "Profitable",

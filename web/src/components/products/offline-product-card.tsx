@@ -7,7 +7,9 @@ import {
   BadgeCheckIcon,
   AlertTriangleIcon,
   XCircleIcon,
+  ShoppingCartIcon,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Fragment } from "react";
@@ -32,11 +34,15 @@ export function OfflineProductCard({
   product,
   snapshotUpdatedAt,
   onSelect,
+  onSell,
 }: {
   product: OfflineCatalogProduct;
   // Écriture du snapshot (ms) : borne des ventes déjà reflétées (1-11C.3).
   snapshotUpdatedAt?: number;
   onSelect: () => void;
+  // 1-17B : « Vendre » (outbox locale), seulement si la capacité hors
+  // connexion de saisie des ventes est valide (décidé par l'appelant).
+  onSell?: () => void;
 }) {
   const { t } = useT("catalog");
   const { fcfa } = useFormat();
@@ -86,6 +92,18 @@ export function OfflineProductCard({
             </Fragment>
           ))}
         </div>
+        {onSell && (
+          <Button
+            size="sm"
+            className="w-full"
+            disabled={indicative.value === 0}
+            aria-label={t("product.sellLabel", { name: product.name })}
+            onClick={onSell}
+          >
+            <ShoppingCartIcon className="mr-1 h-3.5 w-3.5" aria-hidden />
+            {t("product.sell")}
+          </Button>
+        )}
       </CardContent>
     </Card>
   );

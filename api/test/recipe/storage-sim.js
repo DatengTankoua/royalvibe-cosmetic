@@ -26,9 +26,7 @@ const http = require('http');
 function parseAmzDate(value) {
   const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(value || '');
   if (!m) return null;
-  return new Date(
-    Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]),
-  );
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
 }
 
 /**
@@ -125,8 +123,51 @@ function startStorageSimulator({ host, port, bucket }) {
         'content-type': 'application/json',
         'cache-control': 'no-store',
       });
+      res.end(JSON.stringify({ ...stats, denials, keys: [...objects.keys()] }));
+      return;
+    }
+    // 1-17B — inventaire (`ListObjectsV2`, chemin du bucket) : requête
+    // SERVEUR signée par en-tête, traitée comme PUT/DELETE (non vérifiée).
+    if (
+      req.method === 'GET' &&
+      (url.pathname === `/${bucket}` || url.pathname === `/${bucket}/`) &&
+      url.searchParams.get('list-type') === '2' &&
+      req.headers.authorization
+    ) {
+      const listPrefix = url.searchParams.get('prefix') || '';
+      const max = Number(url.searchParams.get('max-keys') || 1000);
+      const start = Number(url.searchParams.get('continuation-token') || 0);
+      const keys = [...objects.keys()]
+        .filter((k) => k.startsWith(listPrefix))
+        .sort();
+      const page = keys.slice(start, start + max);
+      const truncated = start + max < keys.length;
+      const esc = (v) =>
+        String(v)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      stats.lists = (stats.lists || 0) + 1;
+      res.writeHead(200, { 'content-type': 'application/xml' });
       res.end(
-        JSON.stringify({ ...stats, denials, keys: [...objects.keys()] }),
+        `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>` +
+          `<Name>${esc(bucket)}</Name><Prefix>${esc(listPrefix)}</Prefix>` +
+          `<KeyCount>${page.length}</KeyCount><MaxKeys>${max}</MaxKeys>` +
+          `<IsTruncated>${truncated}</IsTruncated>` +
+          (truncated
+            ? `<NextContinuationToken>${start + max}</NextContinuationToken>`
+            : '') +
+          page
+            .map((k) => {
+              const o = objects.get(k);
+              return (
+                `<Contents><Key>${esc(k)}</Key>` +
+                `<LastModified>${o.lastModified.toISOString()}</LastModified>` +
+                `<Size>${o.body.length}</Size></Contents>`
+              );
+            })
+            .join('') +
+          `</ListBucketResult>`,
       );
       return;
     }
@@ -150,6 +191,7 @@ function startStorageSimulator({ host, port, bucket }) {
           body,
           contentType:
             req.headers['content-type'] || 'application/octet-stream',
+          lastModified: new Date(),
         });
         stats.puts += 1;
         res.writeHead(200, { etag: `"${stats.puts}"` }).end();
@@ -159,6 +201,27 @@ function startStorageSimulator({ host, port, bucket }) {
         objects.delete(key);
         stats.deletes += 1;
         res.writeHead(204).end();
+        return;
+      }
+      // 1-17B — `HeadObject` du SERVEUR (signé par en-tête, comme PUT et
+      // DELETE) : taille seule. Les lectures du navigateur (URL pré-signées)
+      // restent vérifiées ci-dessous.
+      if (
+        req.method === 'HEAD' &&
+        req.headers.authorization &&
+        !url.searchParams.has('X-Amz-Signature')
+      ) {
+        const object = objects.get(key);
+        stats.heads = (stats.heads || 0) + 1;
+        if (!object) {
+          res.writeHead(404).end();
+          return;
+        }
+        res.writeHead(200, {
+          'content-type': object.contentType,
+          'content-length': object.body.length,
+        });
+        res.end();
         return;
       }
       if (req.method === 'GET' || req.method === 'HEAD') {

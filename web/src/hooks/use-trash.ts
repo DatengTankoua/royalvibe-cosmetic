@@ -11,6 +11,7 @@ import {
   type ApiTrashedSection,
   type ApiTrashedProduct,
 } from "@/lib/api";
+import { notifyStorageChanged } from "@/lib/storage-usage";
 import { useLiveRefresh } from "@/hooks/use-live-refresh";
 import { useImageRenewal } from "@/hooks/use-image-renewal";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
@@ -125,6 +126,8 @@ export function useTrash(enabled = true) {
   const doPermanentDeleteProduct = useCallback(async (id: string) => {
     const cleanup = await permanentDeleteProduct(id);
     setProducts((prev) => prev.filter((p) => p._id !== id));
+    // 1-17B : occupation du stockage relue par les affichages montés.
+    notifyStorageChanged();
     return cleanup;
   }, []);
 
@@ -147,6 +150,7 @@ export function useTrash(enabled = true) {
   const doBulkDeleteProducts = useCallback(async (ids: string[]) => {
     const cleanups = await Promise.all(ids.map(permanentDeleteProduct));
     setProducts((prev) => prev.filter((p) => !ids.includes(p._id)));
+    notifyStorageChanged();
     return cleanups.filter((c) => c === "failed").length;
   }, []);
 

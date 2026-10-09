@@ -3,7 +3,9 @@
 /**
  * Essai OPÉRATEUR du stockage privé R2 — à lancer à la main, jamais en CI.
  * Utilise le code LIVRÉ (`api/dist`) : validation des photos, envoi, URL
- * signée, suppression. Aucun `.env` n'est lu : les variables S3_* sont
+ * signée, suppression. 1-17B : taille par `HeadObject`, inventaire
+ * `ListObjectsV2` sous le préfixe d'essai, envoi annulé (`abortSignal`),
+ * suppression d'un objet déjà absent (doit confirmer l'absence). Aucun `.env` n'est lu : les variables S3_* sont
  * fournies par le shell de l'opérateur. Aucun secret n'est affiché.
  *
  * Objets écrits UNIQUEMENT sous un préfixe d'organisation fictive
@@ -76,6 +78,24 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   try {
     ref = await s3.uploadValidatedImage(jpeg, TRIAL_PREFIX, validated);
     check(true, 'envoi (PutObject) accepté par le stockage', ref.key);
+    // 1-17B — opérations de comptabilisation (aucun téléchargement).
+    const head = await s3.headStoredObject(ref, TRIAL_PREFIX);
+    check(head.state === 'present' && head.bytes === jpeg.length, '1-17B taille par HeadObject', JSON.stringify(head));
+    const listed = await s3.listStoredObjects(`${TRIAL_PREFIX}/`);
+    const item = listed.objects.find((o) => o.key === ref.key);
+    check(Boolean(item) && item.bytes === jpeg.length && item.lastModified instanceof Date, '1-17B inventaire ListObjectsV2 (clé, taille, date)', item ? `${item.bytes} octets` : 'absent');
+    const aborted = new AbortController();
+    aborted.abort();
+    const abortedKey = s3.newObjectKey(TRIAL_PREFIX, 'jpg');
+    let abortRejected = false;
+    try {
+      await s3.uploadValidatedImage(jpeg, TRIAL_PREFIX, validated, { key: abortedKey, abortSignal: aborted.signal });
+    } catch {
+      abortRejected = true;
+    }
+    const abortedHead = await s3.headStoredObject({ key: abortedKey, storage: s3.storage }, TRIAL_PREFIX);
+    check(abortRejected && abortedHead.state === 'absent', '1-17B envoi annulé avant émission : refusé, objet absent', abortedHead.state);
+    await s3.deleteStoredObject({ key: abortedKey, storage: s3.storage }, TRIAL_PREFIX);
   } catch (err) {
     check(false, 'envoi (PutObject)', `${err.name}: ${String(err.message).slice(0, 160)}`);
     console.log('Si l’erreur concerne une somme de contrôle, relancer avec S3_CHECKSUM_MODE=when_required.');
@@ -115,6 +135,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const after = await s3.signedReadUrl(ref, TRIAL_PREFIX);
     const gone = await fetch(after);
     check(gone.status === 404, 'objet absent après suppression', `HTTP ${gone.status}`);
+    const headAfter = await s3.headStoredObject(ref, TRIAL_PREFIX);
+    check(headAfter.state === 'absent', '1-17B HeadObject après suppression : absence (404)', headAfter.state);
+    const again = await s3.deleteStoredObject(ref, TRIAL_PREFIX);
+    check(again === 'deleted', '1-17B suppression d’un objet déjà absent : confirmée (idempotente)', again);
+    const listedAfter = await s3.listStoredObjects(`${TRIAL_PREFIX}/`);
+    check(!listedAfter.objects.some((o) => o.key === ref.key), '1-17B inventaire après suppression : objet absent');
   }
   finish();
 })().catch((err) => {

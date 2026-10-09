@@ -181,6 +181,21 @@ export const ERROR_MESSAGE_TRANSLATIONS: Readonly<
   'Photo vide, corrompue, animée ou illisible.': {
     en: 'Empty, corrupted, animated or unreadable photo.',
   },
+  'La photo de ce produit vient d’être modifiée. Rechargez puis réessayez.': {
+    en: "This product's photo has just been changed. Reload and try again.",
+  },
+
+  // ─── Stockage (1-17B) ─────────────────────────────────────────────────
+  "Espace de stockage insuffisant : cet envoi dépasserait le quota de l'organisation.":
+    {
+      en: "Not enough storage space: this upload would exceed the organisation's quota.",
+    },
+  "L'envoi du fichier a été interrompu. Réessayez.": {
+    en: 'The file upload was interrupted. Try again.',
+  },
+  'Le logo vient d’être modifié. Rechargez la page puis réessayez.': {
+    en: 'The logo has just been changed. Reload the page and try again.',
+  },
   'Cette fonctionnalité a été retirée.': {
     en: 'This feature has been removed.',
   },

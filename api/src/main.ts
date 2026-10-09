@@ -16,6 +16,7 @@ import { API_APPLICATION_OPTIONS } from './common/application-options';
 import { resolveWebPushConfig } from './push/push-config';
 import { startNotifications } from './push/push-bootstrap';
 import { configureProcessTimeZone } from './analytics/month-range';
+import { startStorageRecovery } from './storage-quota/storage-recovery';
 
 async function bootstrap() {
   // 1-16D : fuseau des mois (Analyse, historique exportable, bilan
@@ -72,6 +73,9 @@ async function bootstrap() {
   // configuré : démarrage HTTP UNIQUEMENT (les CLI chargent `AppModule` sans
   // jamais passer par ici).
   await startNotifications(app, webPush);
+  // 1-17B : reprise des envois et suppressions de fichiers interrompus
+  // (processus HTTP uniquement).
+  startStorageRecovery(app);
 
   await app.listen(process.env.PORT ?? 4000);
 }

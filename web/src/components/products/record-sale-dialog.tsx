@@ -53,6 +53,13 @@ interface SaleFormDialogProps {
   // Correction d'un conflit : NOUVELLE opération remplaçant celle-ci.
   replaces?: string;
   onSaleRecorded?: () => void;
+  // 1-17B — élément qui reprend le focus à la fermeture (bouton « Vendre »
+  // d'une carte) ; défaut : comportement du dialogue.
+  finalFocus?: React.RefObject<HTMLElement | null>;
+  // 1-17B — vente ACCEPTÉE (confirmée, en attente ou en conflit), appelé
+  // juste avant la fermeture : distingue une fermeture après vente d'une
+  // annulation (retour au détail du produit).
+  onFinished?: () => void;
 }
 
 // 1-11C.3 — Formulaire UNIQUE (en ligne / hors ligne / correction) : toute
@@ -70,6 +77,8 @@ export function SaleFormDialog({
   initial,
   replaces,
   onSaleRecorded,
+  finalFocus,
+  onFinished,
 }: SaleFormDialogProps) {
   const { t } = useT("sales");
   const format = useFormat();
@@ -163,6 +172,7 @@ export function SaleFormDialog({
         setFormError((tr) => tr(`form.refusal.${reason}`));
         return;
       }
+      onFinished?.();
       onOpenChange(false);
       reset();
       if (result.kind === "synced") {
@@ -186,7 +196,7 @@ export function SaleFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !submitting && onOpenChange(v)}>
-      <DialogContent>
+      <DialogContent finalFocus={finalFocus}>
         <DialogHeader>
           <DialogTitle>
             {replaces ? t("form.titleFix") : t("form.title")} — {productName}
