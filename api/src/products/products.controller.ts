@@ -4,7 +4,6 @@ import {
   Delete,
   ForbiddenException,
   Get,
-  Logger,
   Param,
   Patch,
   Post,
@@ -13,11 +12,14 @@ import {
   UseInterceptors,
   BadRequestException,
 } from '@nestjs/common';
-import { ProductsService, productImagePrefix } from './products.service';
+import { ProductsService } from './products.service';
 import type { SalesHistoryScope } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
-import { S3Service, type StoredObjectRef } from '../s3/s3.service';
+import {
+  StorageQuotaService,
+  type StagedObject,
+} from '../storage-quota/storage-quota.service';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
@@ -60,65 +62,32 @@ function requiredPermissionsForUpdate(
  */
 @Controller('products')
 export class ProductsController {
-  private readonly logger = new Logger(ProductsController.name);
-
   constructor(
     private readonly productsService: ProductsService,
-    private readonly s3Service: S3Service,
+    private readonly storageQuota: StorageQuotaService,
   ) {}
 
   /**
    * Photo contrôlée (format, décodage, dimensions) PUIS envoyée au stockage
    * sous le préfixe de l'organisation (clé serveur, jamais dérivée du DTO
-   * ni du nom de fichier client). Contenu reçu libéré ensuite.
+   * ni du nom de fichier client). 1-17B : capacité RÉSERVÉE avant l'envoi
+   * (quota de l'organisation, octets réellement envoyés) ; refus
+   * `STORAGE_QUOTA_EXCEEDED` sans aucun envoi. Contenu reçu libéré ensuite.
    */
   private async storeProductImage(
     file: Express.Multer.File,
     organizationId: string,
-  ): Promise<StoredObjectRef> {
+  ): Promise<StagedObject> {
     const validated = await validateProductImage(file);
     try {
-      return await this.s3Service.uploadValidatedImage(
-        file.buffer,
-        productImagePrefix(organizationId),
-        validated,
-      );
+      return await this.storageQuota.store({
+        organizationId,
+        kind: 'product_image',
+        body: file.buffer,
+        image: validated,
+      });
     } finally {
       file.buffer = Buffer.alloc(0);
-    }
-  }
-
-  /**
-   * Écriture MongoDB échouée après l'upload : le nouvel objet est supprimé
-   * SEULEMENT si aucun produit de l'organisation ne le référence (une
-   * erreur survenue après l'écriture ne supprime jamais une photo en
-   * usage). Lecture impossible → objet conservé (orphelin journalisé).
-   */
-  private async discardUnreferencedImage(
-    organizationId: string,
-    image: StoredObjectRef,
-  ): Promise<void> {
-    let referenced: boolean;
-    try {
-      referenced = await this.productsService.isImageReferenced(
-        organizationId,
-        image.key,
-      );
-    } catch {
-      this.logger.warn(
-        `Photo conservée (vérification impossible) : ${image.key}`,
-      );
-      return;
-    }
-    if (referenced) return;
-    const cleanup = await this.s3Service.deleteStoredObject(
-      image,
-      productImagePrefix(organizationId),
-    );
-    if (cleanup !== 'deleted') {
-      this.logger.warn(
-        `Photo non référencée conservée (${cleanup}) : ${image.key}`,
-      );
     }
   }
 
@@ -144,7 +113,9 @@ export class ProductsController {
         productVisibility(organizationContext),
       );
     } catch (err) {
-      await this.discardUnreferencedImage(organizationId, image);
+      // Écriture échouée : le fichier est supprimé et libéré SEULEMENT s'il
+      // n'est référencé par aucun document (sinon conservé, reprise).
+      await this.storageQuota.discard(image);
       throw err;
     }
   }
@@ -218,8 +189,8 @@ export class ProductsController {
         productVisibility(organizationContext),
       );
     } catch (err) {
-      if (newImage)
-        await this.discardUnreferencedImage(organizationId, newImage);
+      // L'ancienne photo reste en place : seule la nouvelle est abandonnée.
+      if (newImage) await this.storageQuota.discard(newImage);
       throw err;
     }
   }

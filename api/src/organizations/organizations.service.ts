@@ -42,6 +42,11 @@ import { UpdateBrandingDto } from './dto/update-branding.dto';
 import { AcceptInvitationDto } from '../auth/dto/accept-invitation.dto';
 import { SocketRegistryService } from './socket-registry.service';
 import { S3Service, type StoredObjectRef } from '../s3/s3.service';
+import { logoKeyPrefix } from '../storage-quota/storage-prefixes';
+import {
+  StorageQuotaService,
+  type StagedObject,
+} from '../storage-quota/storage-quota.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { buildInvitationUrl, parsePublicAppOrigin } from './invitation-link';
 import {
@@ -160,9 +165,7 @@ export interface TransferOwnershipResult {
 }
 
 /** Préfixe du logo d'une organisation (clé serveur, jamais cliente). */
-export function logoKeyPrefix(organizationId: string): string {
-  return `organizations/${organizationId}/branding`;
-}
+export { logoKeyPrefix };
 
 /**
  * Vue `GET /organizations/current` (1-8A) : jamais `logoKey` (donnée de
@@ -203,7 +206,53 @@ export class OrganizationsService {
     private configService: ConfigService,
     private subscriptionsService: SubscriptionsService,
     private legalAcceptance: LegalAcceptanceService,
+    private storageQuota: StorageQuotaService,
   ) {}
+
+  /**
+   * 1-17B — Écriture du logo ET de sa comptabilisation dans UNE transaction
+   * courte : `$set` explicite conditionné au logo LU (un remplacement
+   * concurrent est refusé, jamais un fichier orphelin non suivi). Jamais
+   * `document.save()` ici : un rejeu de transaction après une sauvegarde
+   * réussie perdrait les champs modifiés.
+   */
+  private async writeLogoChange(
+    organizationId: string,
+    previousLogo: StoredObjectRef | null,
+    changes: Record<string, unknown>,
+    newLogo: StagedObject | null,
+  ): Promise<void> {
+    const session = await this.connection.startSession();
+    let written = false;
+    try {
+      await session.withTransaction(async () => {
+        written = false;
+        const result = await this.organizationModel
+          .updateOne(
+            {
+              _id: new Types.ObjectId(organizationId),
+              logoKey: previousLogo?.key ?? null,
+            },
+            { $set: changes },
+            { session, runValidators: true },
+          )
+          .exec();
+        if (result.matchedCount === 0) return;
+        if (newLogo) await this.storageQuota.attach(newLogo, session);
+        await this.storageQuota.detach(organizationId, previousLogo, session);
+        written = true;
+      });
+    } finally {
+      await session.endSession();
+    }
+    if (!written) {
+      throw new ConflictException({
+        code: 'LOGO_CONFLICT',
+        message:
+          'Le logo vient d’être modifié. Rechargez la page puis réessayez.',
+      });
+    }
+  }
 
   /**
    * Vérifie que l'utilisateur possède une membership active dans une
@@ -975,7 +1024,7 @@ export class OrganizationsService {
   async updateBranding(
     organizationId: string,
     dto: UpdateBrandingDto,
-    newLogo?: StoredObjectRef,
+    newLogo?: StagedObject,
   ): Promise<BrandingMutationResult> {
     if (
       dto.name === undefined &&
@@ -1016,8 +1065,26 @@ export class OrganizationsService {
     // 1-12C : seuls les chemins modifiés sont revalidés — une organisation
     // historique au nom > 20 caractères peut changer sa couleur ou son logo
     // sans être forcée à renommer (le nouveau nom, lui, est toujours
-    // validé par le DTO puis par le schéma).
-    await organization.save({ validateModifiedOnly: true });
+    // validé par le DTO puis par le schéma ; `runValidators` d'une mise à
+    // jour ne valide que les chemins écrits).
+    if (newLogo === undefined) {
+      await organization.save({ validateModifiedOnly: true });
+    } else {
+      const changes: Record<string, unknown> = {
+        logoKey: newLogo.key,
+        logoStorage: newLogo.storage,
+      };
+      if (dto.name !== undefined) changes.name = organization.name;
+      if (dto.brandColor !== undefined) {
+        changes.brandColor = organization.brandColor;
+      }
+      await this.writeLogoChange(
+        organizationId,
+        previousLogo,
+        changes,
+        newLogo,
+      );
+    }
     // 1-15C : nom, couleur ou logo relus par les collègues via
     // `GET /organizations/current` (aucune donnée dans le signal).
     this.socketRegistry.signalOrganization(
@@ -1049,7 +1116,13 @@ export class OrganizationsService {
     if (previousLogo !== null) {
       organization.logoKey = null;
       organization.logoStorage = null;
-      await organization.save({ validateModifiedOnly: true });
+      // 1-17B : fichier détaché (toujours compté) dans la même transaction.
+      await this.writeLogoChange(
+        organizationId,
+        previousLogo,
+        { logoKey: null, logoStorage: null },
+        null,
+      );
       this.socketRegistry.signalOrganization(
         organizationId,
         'organization:updated',

@@ -23,6 +23,7 @@
     "migrate:support-request-indexes": "node dist/migrations/create-support-request-indexes.js",
     "migrate:legal-acceptance-indexes": "node dist/migrations/create-legal-acceptance-indexes.js",
     "migrate:predeploy": "node dist/migrations/predeploy-migrations.js",
+    "storage:quota": "node dist/migrations/storage-quota.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",

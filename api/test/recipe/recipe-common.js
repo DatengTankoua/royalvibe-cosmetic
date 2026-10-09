@@ -161,6 +161,9 @@ function apiEnv(uri, extra = {}) {
     // 1-17A (Compose/MinIO) : origine de signature distincte, jointe par le
     // navigateur via un relais (`RECIPE_S3_SIGNING_ENDPOINT`) ; vide = unique.
     S3_SIGNING_ENDPOINT: process.env.RECIPE_S3_SIGNING_ENDPOINT || '',
+    // 1-17B : quota de stockage réduit pour éprouver le dépassement
+    // (`RECIPE_STORAGE_QUOTA_BYTES`) ; vide = défaut serveur (250 Mo).
+    STORAGE_QUOTA_BYTES: process.env.RECIPE_STORAGE_QUOTA_BYTES || '',
     RESEND_API_KEY: '',
     EMAIL_FROM: '',
     ...extra,

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useMemo, useRef, useState } from "react";
 import { useT } from "next-i18next/client";
 import { useFormat } from "@/i18n/use-format";
 import {
@@ -55,6 +55,37 @@ export function OfflineCatalogBrowser({
   const [productId, setProductId] = useState<string | null>(null);
   const [saleProductId, setSaleProductId] = useState<string | null>(null);
   const { canRecordSales } = useOfflineSales();
+  // 1-17B — transitions entre le détail et la vente : ouverte depuis le
+  // détail, une vente ANNULÉE ramène au détail du même produit ; sinon le
+  // focus revient à l'élément qui a ouvert la vente (ou le détail).
+  const saleFromDetail = useRef(false);
+  const saleFinished = useRef(false);
+  const returnFocus = useRef<HTMLElement | null>(null);
+  const rememberFocus = () => {
+    returnFocus.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+  };
+  const openSale = (id: string, fromDetail: boolean) => {
+    saleFromDetail.current = fromDetail;
+    saleFinished.current = false;
+    if (!fromDetail) rememberFocus();
+    setProductId(null);
+    setSaleProductId(id);
+  };
+  const closeSale = () => {
+    const id = saleProductId;
+    setSaleProductId(null);
+    if (saleFromDetail.current && !saleFinished.current && id) {
+      setProductId(id);
+      return;
+    }
+    const target = returnFocus.current;
+    requestAnimationFrame(() => {
+      if (target?.isConnected) target.focus();
+    });
+  };
   const parsedUpdatedAt = Date.parse(snapshot.updatedAt);
   const snapshotUpdatedAt = Number.isNaN(parsedUpdatedAt)
     ? undefined
@@ -147,7 +178,11 @@ export function OfflineCatalogBrowser({
               key={p._id}
               product={p}
               snapshotUpdatedAt={snapshotUpdatedAt}
-              onSelect={() => setProductId(p._id)}
+              onSelect={() => {
+                rememberFocus();
+                setProductId(p._id);
+              }}
+              onSell={canRecordSales ? () => openSale(p._id, false) : undefined}
             />
           ))}
         </div>
@@ -186,10 +221,7 @@ export function OfflineCatalogBrowser({
                   productId={openProduct._id}
                   remaining={openProduct.remainingQuantity}
                   loadedAt={snapshotUpdatedAt}
-                  onClick={() => {
-                    setSaleProductId(openProduct._id);
-                    setProductId(null);
-                  }}
+                  onClick={() => openSale(openProduct._id, true)}
                 />
               )}
               <p className="text-xs text-muted-foreground">
@@ -204,7 +236,10 @@ export function OfflineCatalogBrowser({
         <SaleFormDialog
           key={saleProduct._id}
           open
-          onOpenChange={(v) => !v && setSaleProductId(null)}
+          onOpenChange={(v) => !v && closeSale()}
+          onFinished={() => {
+            saleFinished.current = true;
+          }}
           productId={saleProduct._id}
           productName={saleProduct.name}
           targetPrice={saleProduct.salePrice}
@@ -255,12 +290,12 @@ function OfflineSaleButton({
   loadedAt?: number;
   onClick: () => void;
 }) {
-  const { t } = useT("sales");
+  const { t } = useT("catalog");
   const indicative = useIndicativeStock(productId, remaining, loadedAt);
   return (
     <Button size="sm" onClick={onClick} disabled={indicative.value === 0}>
-      <ShoppingCartIcon className="mr-1 h-4 w-4" />
-      {t("form.record")}
+      <ShoppingCartIcon className="mr-1 h-4 w-4" aria-hidden />
+      {t("product.sell")}
     </Button>
   );
 }

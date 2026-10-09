@@ -20,6 +20,10 @@ import {
   type StoredObjectRef,
 } from '../s3/s3.service';
 import { EventsGateway } from '../events/events.gateway';
+import {
+  StorageQuotaService,
+  type StagedObject,
+} from '../storage-quota/storage-quota.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/schemas/audit-log.schema';
 import { Section, SectionDocument } from '../sections/schemas/section.schema';
@@ -37,12 +41,12 @@ import {
   toProductView,
 } from './product-projection';
 
+import { productImagePrefix } from '../storage-quota/storage-prefixes';
+
 export type { ProductStatus } from './product-projection';
 
 /** Préfixe des photos d'une organisation (clé serveur, jamais cliente). */
-export function productImagePrefix(organizationId: string): string {
-  return `organizations/${organizationId}/products`;
-}
+export { productImagePrefix };
 
 /** Ancienne URL (avant R2) : renvoyée telle quelle si http(s), jamais convertie. */
 function legacyImageUrl(value: string | null | undefined): string | null {
@@ -114,6 +118,7 @@ export class ProductsService {
     @InjectConnection() private connection: Connection,
     @InjectModel(PurgedStockAdjustment.name)
     private stockAdjustmentModel: Model<PurgedStockAdjustmentDocument>,
+    private storageQuota: StorageQuotaService,
   ) {}
 
   /**
@@ -257,8 +262,31 @@ export class ProductsService {
   }
 
   /**
+   * 1-17B — Remplacement refusé par l'écriture conditionnelle : produit
+   * absent → 404 (inchangé) ; photo modifiée entre-temps par une autre
+   * requête → 409 stable, rien n'est écrit (la nouvelle photo est
+   * abandonnée par le contrôleur).
+   */
+  private async assertImageUnchanged(filter: {
+    _id: Types.ObjectId;
+    organizationId: Types.ObjectId | null;
+  }): Promise<never> {
+    const exists = await this.productModel.exists(filter).exec();
+    if (!exists) {
+      throw new NotFoundException(`Product ${String(filter._id)} not found`);
+    }
+    throw new ConflictException({
+      code: 'PRODUCT_IMAGE_CONFLICT',
+      message:
+        'La photo de ce produit vient d’être modifiée. Rechargez puis réessayez.',
+    });
+  }
+
+  /**
    * Suppression APRÈS l'écriture MongoDB. Une ancienne URL (avant R2) n'est
    * jamais supprimée : son stockage n'est pas celui de la configuration.
+   * 1-17B : l'espace n'est libéré qu'après suppression confirmée ; un échec
+   * laisse le fichier compté et sa suppression reprise plus tard.
    */
   private async cleanupPreviousImage(
     organizationId: string,
@@ -266,16 +294,33 @@ export class ProductsService {
   ): Promise<StorageCleanup> {
     const ref = storedImageRef(previous);
     if (!ref) return previous.imageUrl ? 'retained' : 'not_needed';
-    return this.s3Service.deleteStoredObject(
+    return this.storageQuota.deleteDetached(
+      organizationId,
       ref,
       productImagePrefix(organizationId),
     );
   }
 
+  /** Transaction courte (aucun appel au stockage à l'intérieur). */
+  private async inTransaction<T>(
+    work: (session: MongooseSession) => Promise<T>,
+  ): Promise<T> {
+    const session = await this.connection.startSession();
+    try {
+      let result: T | undefined;
+      await session.withTransaction(async () => {
+        result = await work(session);
+      });
+      return result as T;
+    } finally {
+      await session.endSession();
+    }
+  }
+
   async create(
     organizationId: string,
     dto: CreateProductDto,
-    image: StoredObjectRef,
+    image: StagedObject,
     actorId: string,
     visibility: ProductVisibility = COMMON_VISIBILITY,
   ): Promise<ProductView> {
@@ -310,16 +355,27 @@ export class ProductsService {
 
     // §5 — liste de champs EXPLICITE : jamais un spread du DTO, qui pourrait
     // porter un `organizationId` falsifié. L'org est imposée par le SERVEUR.
-    const product = await this.productModel.create({
-      organizationId: new Types.ObjectId(organizationId),
-      sectionId: new Types.ObjectId(dto.sectionId),
-      name: dto.name,
-      imageKey: image.key,
-      imageStorage: image.storage,
-      purchasePrice: dto.purchasePrice,
-      salePrice: dto.salePrice,
-      initialQuantity: dto.initialQuantity,
-      remainingQuantity: dto.initialQuantity,
+    // 1-17B : création et rattachement de la photo comptabilisée dans la
+    // MÊME transaction (jamais une référence sans fichier compté).
+    const product = await this.inTransaction(async (session) => {
+      const [created] = await this.productModel.create(
+        [
+          {
+            organizationId: new Types.ObjectId(organizationId),
+            sectionId: new Types.ObjectId(dto.sectionId),
+            name: dto.name,
+            imageKey: image.key,
+            imageStorage: image.storage,
+            purchasePrice: dto.purchasePrice,
+            salePrice: dto.salePrice,
+            initialQuantity: dto.initialQuantity,
+            remainingQuantity: dto.initialQuantity,
+          },
+        ],
+        { session },
+      );
+      await this.storageQuota.attach(image, session);
+      return created;
     });
     await this.auditService.log(
       organizationId,
@@ -427,7 +483,7 @@ export class ProductsService {
     id: string,
     dto: UpdateProductDto,
     actorId: string,
-    newImage?: StoredObjectRef,
+    newImage?: StagedObject,
     visibility: ProductVisibility = COMMON_VISIBILITY,
   ): Promise<ProductMetricsView & Partial<StorageCleanupResult>> {
     // §4 — relecture composite tenant : produit étranger = 404, pas de fuite.
@@ -542,7 +598,7 @@ export class ProductsService {
     // être appliqué deux fois). Produit supprimé entre-temps → 404, rien
     // n'est recréé.
     const update: UpdateQuery<ProductDocument> = {
-      ...product.getChanges(),
+      ...product.$getChanges(),
       ...(addedStock > 0
         ? {
             $inc: {
@@ -552,16 +608,42 @@ export class ProductsService {
           }
         : {}),
     };
-    const saved =
-      Object.keys(update).length === 0
-        ? product
-        : await this.productModel
-            .findOneAndUpdate(
-              { _id: product._id, organizationId: product.organizationId },
-              update,
-              { returnDocument: 'after', runValidators: true },
-            )
-            .exec();
+    const filter = { _id: product._id, organizationId: product.organizationId };
+    let saved: ProductDocument | null;
+    if (newImage) {
+      // 1-17B — remplacement de photo : écriture conditionnée à la photo LUE
+      // (deux remplacements concurrents ne laissent jamais un fichier
+      // orphelin non suivi), rattachement de la nouvelle et détachement de
+      // l'ancienne dans la MÊME transaction. Aucun appel au stockage ici.
+      saved = await this.inTransaction(async (session) => {
+        const written = await this.productModel
+          .findOneAndUpdate(
+            { ...filter, imageKey: previousImage.imageKey ?? null },
+            update,
+            { returnDocument: 'after', runValidators: true, session },
+          )
+          .exec();
+        if (!written) return null;
+        await this.storageQuota.attach(newImage, session);
+        await this.storageQuota.detach(
+          organizationId,
+          storedImageRef(previousImage),
+          session,
+        );
+        return written;
+      });
+      if (!saved) await this.assertImageUnchanged(filter);
+    } else {
+      saved =
+        Object.keys(update).length === 0
+          ? product
+          : await this.productModel
+              .findOneAndUpdate(filter, update, {
+                returnDocument: 'after',
+                runValidators: true,
+              })
+              .exec();
+    }
     if (!saved) throw new NotFoundException(`Product ${id} not found`);
     // Ancienne photo supprimée SEULEMENT après succès de la mutation ; son
     // sort est renvoyé tel quel (un échec n'est jamais présenté comme une
@@ -693,6 +775,13 @@ export class ProductsService {
         if (!target) return;
         await this.preserveSaleHistory(orgOid, target, session);
         await this.preserveStockContribution(orgOid, target, session);
+        // 1-17B : fichier détaché (toujours compté) dans la transaction ;
+        // libéré seulement après sa suppression confirmée, hors transaction.
+        await this.storageQuota.detach(
+          organizationId,
+          storedImageRef(target),
+          session,
+        );
         removed = target;
       });
     } finally {

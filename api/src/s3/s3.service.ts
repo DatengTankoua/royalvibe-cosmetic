@@ -5,6 +5,8 @@ import {
   PutObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
+  ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'crypto';
@@ -33,6 +35,31 @@ export interface StoredObjectRef {
  *   l'échec est journalisé (jamais présenté comme supprimé).
  */
 export type StorageCleanup = 'deleted' | 'not_needed' | 'retained' | 'failed';
+
+/**
+ * 1-17B — Taille d'un objet lue par `HeadObject` (métadonnées seules, aucun
+ * téléchargement) :
+ * - `present` : objet présent, `bytes` = `Content-Length` du stockage ;
+ * - `absent` : absence CONFIRMÉE par le stockage (404) ;
+ * - `unknown` : réponse impossible (réseau, droits, taille absente) —
+ *   jamais interprétée comme une absence ni comme une taille nulle ;
+ * - `retained` : autre stockage ou hors du préfixe exact : non consulté.
+ */
+export type StoredObjectHead =
+  | { state: 'present'; bytes: number }
+  | { state: 'absent' }
+  | { state: 'unknown' }
+  | { state: 'retained' };
+
+/** 1-17B — objet listé (inventaire) : clé, taille et date du stockage. */
+export interface ListedObject {
+  key: string;
+  bytes: number;
+  lastModified: Date | null;
+}
+
+/** Préfixe racine des fichiers d'organisation (seul préfixe inventorié). */
+export const ORGANIZATIONS_PREFIX = 'organizations/';
 
 /** Durée de validité par défaut d'une URL de lecture signée (15 min). */
 export const DEFAULT_SIGNED_URL_TTL_SECONDS = 900;
@@ -193,9 +220,15 @@ export class S3Service {
     body: Buffer,
     keyPrefix: string,
     image: { extension: string; contentType: string },
+    options: { key?: string; abortSignal?: AbortSignal } = {},
   ): Promise<StoredObjectRef> {
     if (!this.storage) throw new Error('Stockage non configuré');
-    const key = `${keyPrefix}/${randomUUID()}.${image.extension}`;
+    // 1-17B : clé réservée AVANT l'envoi (comptabilisation), toujours
+    // générée côté serveur (`newObjectKey`) et sous le préfixe exact.
+    const key = options.key ?? this.newObjectKey(keyPrefix, image.extension);
+    if (!isWithinPrefix(key, keyPrefix)) {
+      throw new Error('Clé hors du préfixe attendu');
+    }
 
     await this.s3Client.send(
       new PutObjectCommand({
@@ -204,9 +237,87 @@ export class S3Service {
         Body: body,
         ContentType: image.contentType,
       }),
+      options.abortSignal ? { abortSignal: options.abortSignal } : undefined,
     );
 
     return { key, storage: this.storage };
+  }
+
+  /** Clé serveur `${keyPrefix}/${uuid}.${extension}` (aucun nom client). */
+  newObjectKey(keyPrefix: string, extension: string): string {
+    return `${keyPrefix}/${randomUUID()}.${extension}`;
+  }
+
+  /**
+   * 1-17B — Inventaire d'une page d'objets du stockage COURANT sous un
+   * préfixe d'organisations (`organizations/…` uniquement, jamais la racine
+   * du bucket). Métadonnées seules (aucun téléchargement). Lève en cas
+   * d'échec : un inventaire incomplet n'est jamais pris pour un état exact.
+   */
+  async listStoredObjects(
+    prefix: string,
+    continuationToken?: string,
+  ): Promise<{ objects: ListedObject[]; next?: string }> {
+    if (!this.storage) throw new Error('Stockage non configuré');
+    if (!prefix.startsWith(ORGANIZATIONS_PREFIX)) {
+      throw new Error('Préfixe d’inventaire non autorisé');
+    }
+    const page = await this.s3Client.send(
+      new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+        MaxKeys: 1000,
+      }),
+    );
+    const objects: ListedObject[] = [];
+    for (const item of page.Contents ?? []) {
+      if (typeof item.Key !== 'string') continue;
+      if (typeof item.Size !== 'number' || !Number.isInteger(item.Size)) {
+        throw new Error('Taille absente dans l’inventaire');
+      }
+      objects.push({
+        key: item.Key,
+        bytes: item.Size,
+        lastModified: item.LastModified ?? null,
+      });
+    }
+    return {
+      objects,
+      next: page.IsTruncated ? page.NextContinuationToken : undefined,
+    };
+  }
+
+  /**
+   * 1-17B — Taille réelle d'un objet (`HeadObject`, métadonnées seules),
+   * dans le stockage courant et sous le préfixe EXACT attendu uniquement.
+   */
+  async headStoredObject(
+    ref: StoredObjectRef,
+    allowedPrefix: string,
+  ): Promise<StoredObjectHead> {
+    if (!this.storage || ref.storage !== this.storage) {
+      return { state: 'retained' };
+    }
+    if (!isWithinPrefix(ref.key, allowedPrefix)) return { state: 'retained' };
+    try {
+      const head = await this.s3Client.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: ref.key }),
+      );
+      const bytes = head.ContentLength;
+      return typeof bytes === 'number' && Number.isInteger(bytes) && bytes >= 0
+        ? { state: 'present', bytes }
+        : { state: 'unknown' };
+    } catch (err) {
+      const status = (err as { $metadata?: { httpStatusCode?: number } })
+        ?.$metadata?.httpStatusCode;
+      const name = (err as { name?: string })?.name;
+      if (status === 404 || name === 'NotFound' || name === 'NoSuchKey') {
+        return { state: 'absent' };
+      }
+      this.logger.warn('Lecture de taille impossible');
+      return { state: 'unknown' };
+    }
   }
 
   /**

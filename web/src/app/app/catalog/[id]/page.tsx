@@ -447,9 +447,7 @@ export default function CatalogSectionPage() {
         onOpenChange={setEditOpen}
         canManageDescription={canManageProducts}
         canAdjustStock={canAdjustStock}
-        onUpdated={async (id, payload) => {
-          await editProduct(id, payload);
-        }}
+        onUpdated={(id, payload) => editProduct(id, payload)}
       />
     </div>
   );

@@ -53,6 +53,13 @@ services:
       # durable du stockage reste celle de S3_ENDPOINT.
       S3_SIGNING_ENDPOINT: https://${S3_HOSTNAME:?S3_HOSTNAME requis (hote public des images)}
       S3_SIGNED_URL_TTL_SECONDS: ${S3_SIGNED_URL_TTL_SECONDS:-}
+      # Quotas de stockage (1-17B) : vides = défauts serveur (250 Mo,
+      # enforce, réservation 900 s, reprise 600 s).
+      STORAGE_QUOTA_BYTES: ${STORAGE_QUOTA_BYTES:-}
+      STORAGE_QUOTA_MODE: ${STORAGE_QUOTA_MODE:-}
+      STORAGE_RESERVATION_TTL_SECONDS: ${STORAGE_RESERVATION_TTL_SECONDS:-}
+      STORAGE_RECOVERY_INTERVAL_SECONDS: ${STORAGE_RECOVERY_INTERVAL_SECONDS:-}
+      STORAGE_INVENTORY_INTERVAL_SECONDS: ${STORAGE_INVENTORY_INTERVAL_SECONDS:-}
       # Origine des liens d'invitation (1-12G, aucun email envoyé) : par
       # défaut l'URL publique du frontend, jamais l'en-tête Host.
       PUBLIC_APP_URL: ${PUBLIC_APP_URL:-${WEB_URL}}

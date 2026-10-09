@@ -20,6 +20,7 @@ const organizationEn: Translation<typeof organizationFr> = {
     offline: "Offline",
     notifications: "Notifications",
     support: "Support",
+    storage: "Storage",
   },
   roles: {
     owner: "Owner",
@@ -130,6 +131,27 @@ const organizationEn: Translation<typeof organizationFr> = {
     email: "Email",
     role: "Role",
     submit: "Create the invitation",
+  },
+  // 1-17B — organisation storage space (photos and logo).
+  storage: {
+    title: "Storage space",
+    text: "Product photos (including the trash) and the organisation logo. The limit is set by Stock Master.",
+    used: "{{used}} used of {{limit}}",
+    available: "Available: {{available}}",
+    files_one: "{{count}} stored file",
+    files_other: "{{count}} stored files",
+    pending_one:
+      "{{count}} upload in progress or interrupted ({{size}} reserved). Reserved space is released automatically if unused.",
+    pending_other:
+      "{{count}} uploads in progress or interrupted ({{size}} reserved). Reserved space is released automatically if unused.",
+    full: "Storage full: new photo and logo uploads are blocked. Sales and other features remain available. Empty the trash or replace photos to free up space.",
+    nearlyFull: "Storage almost full.",
+    trashNote:
+      "Moving a product to the trash does not free up space; permanent deletion does.",
+    notEnforced: "Limit not enforced for now (counting only).",
+    refresh: "Refresh",
+    unavailable: "Usage unavailable at the moment.",
+    offline: "An internet connection is required to show usage.",
   },
   offlineData: {
     cleared: "Offline data deleted.",

@@ -4,7 +4,7 @@ import { Types } from 'mongoose';
 import sharp from 'sharp';
 import { ProductsController } from './products.controller';
 import { ProductsService } from './products.service';
-import { S3Service } from '../s3/s3.service';
+import { StorageQuotaService } from '../storage-quota/storage-quota.service';
 import { ResolvedOrganizationContext } from '../organizations/organizations.service';
 import { OrganizationRole } from '../organizations/permissions';
 import type { User } from '../users/schemas/user.schema';
@@ -82,6 +82,25 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     deleteStoredObject: jest.fn().mockResolvedValue('deleted'),
   };
 
+  // 1-17B : la réservation et la comptabilisation sont couvertes par
+  // `storage-quota.service.spec` ; ici, `store` envoie via le stockage
+  // simulé (même préfixe) et `discard` est observé.
+  const quotaStub = {
+    store: jest.fn(
+      (input: {
+        organizationId: string;
+        body: Buffer;
+        image: Record<string, string>;
+      }) =>
+        s3Stub.uploadValidatedImage(
+          input.body,
+          `organizations/${input.organizationId}/products`,
+          input.image,
+        ) as Promise<unknown>,
+    ),
+    discard: jest.fn().mockResolvedValue(undefined),
+  };
+
   beforeEach(async () => {
     for (const key of Object.keys(serviceStub)) {
       serviceStub[key].mockReset();
@@ -96,11 +115,13 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     serviceStub.isImageReferenced.mockResolvedValue(false);
     s3Stub.uploadValidatedImage.mockReset().mockResolvedValue(STORED);
     s3Stub.deleteStoredObject.mockReset().mockResolvedValue('deleted');
+    quotaStub.store.mockClear();
+    quotaStub.discard.mockClear();
     const module: TestingModule = await Test.createTestingModule({
       controllers: [ProductsController],
       providers: [
         { provide: ProductsService, useValue: serviceStub },
-        { provide: S3Service, useValue: s3Stub },
+        { provide: StorageQuotaService, useValue: quotaStub },
       ],
     }).compile();
     controller = module.get(ProductsController);
@@ -159,7 +180,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     expect(serviceStub.create).not.toHaveBeenCalled();
   });
 
-  it('create : écriture MongoDB échouée après upload → nouvelle photo non référencée supprimée sous le préfixe tenant, erreur repropagée', async () => {
+  it('create : écriture MongoDB échouée après upload → nouvelle photo abandonnée (supprimée si non référencée), erreur repropagée', async () => {
     const dto = {
       sectionId: SECTION_QUERY,
       name: 'N',
@@ -172,15 +193,12 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     await expect(controller.create(dto, imageFile(), user, ctxA)).rejects.toBe(
       error,
     );
-    expect(serviceStub.isImageReferenced).toHaveBeenCalledWith(
-      ORG_A,
-      STORED.key,
-    );
-    expect(s3Stub.deleteStoredObject).toHaveBeenCalledTimes(1);
-    expect(s3Stub.deleteStoredObject).toHaveBeenCalledWith(STORED, PREFIX_A);
+    // Vérification de référence, suppression et libération : `discard`.
+    expect(quotaStub.discard).toHaveBeenCalledTimes(1);
+    expect(quotaStub.discard).toHaveBeenCalledWith(STORED);
   });
 
-  it('create : erreur APRÈS l’écriture (photo référencée) → photo conservée ; vérification impossible → conservée', async () => {
+  it('1-17B create : réservation refusée (quota) → aucune écriture, erreur repropagée', async () => {
     const dto = {
       sectionId: SECTION_QUERY,
       name: 'N',
@@ -188,17 +206,13 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       salePrice: 10,
       initialQuantity: 7,
     };
-    serviceStub.create.mockRejectedValueOnce(new Error('audit failed'));
-    serviceStub.isImageReferenced.mockResolvedValueOnce(true);
-    await expect(
-      controller.create(dto, imageFile(), user, ctxA),
-    ).rejects.toThrow('audit failed');
-    serviceStub.create.mockRejectedValueOnce(new Error('db down'));
-    serviceStub.isImageReferenced.mockRejectedValueOnce(new Error('db down'));
-    await expect(
-      controller.create(dto, imageFile(), user, ctxA),
-    ).rejects.toThrow('db down');
-    expect(s3Stub.deleteStoredObject).not.toHaveBeenCalled();
+    const quota = Object.assign(new Error('quota'), { status: 413 });
+    quotaStub.store.mockRejectedValueOnce(quota);
+    await expect(controller.create(dto, imageFile(), user, ctxA)).rejects.toBe(
+      quota,
+    );
+    expect(serviceStub.create).not.toHaveBeenCalled();
+    expect(quotaStub.discard).not.toHaveBeenCalled();
   });
 
   it('create : envoi échoué → aucune écriture ni suppression, erreur repropagée', async () => {
@@ -404,7 +418,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     await expect(
       controller.update(PRODUCT_ID, dto, imageFile(), user, ctxA),
     ).rejects.toBe(error);
-    expect(s3Stub.deleteStoredObject).toHaveBeenCalledWith(STORED, PREFIX_A);
+    expect(quotaStub.discard).toHaveBeenCalledWith(STORED);
   });
 
   it('update sans image : mutation échouée ne déclenche aucun appel S3', async () => {
@@ -415,6 +429,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       controller.update(PRODUCT_ID, dto, undefined, user, ctxA),
     ).rejects.toBe(error);
     expect(s3Stub.deleteStoredObject).not.toHaveBeenCalled();
+    expect(quotaStub.discard).not.toHaveBeenCalled();
   });
 
   describe('update — permissions dynamiques (correctif 1-7B : stock+prix ⇒ stock.adjust, catalogue/images ⇒ products.manage)', () => {

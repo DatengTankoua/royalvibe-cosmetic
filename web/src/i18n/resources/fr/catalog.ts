@@ -117,6 +117,25 @@ const catalogFr = {
     recentSales: "Ventes récentes",
     history: "Historique complet",
     noHistory: "Aucun historique",
+    // 1-17B — photo d'un produit existant.
+    photoCurrent: "Photo actuelle",
+    photoNone: "Aucune photo pour ce produit.",
+    photoAdd: "Ajouter une photo",
+    photoReplace: "Remplacer la photo",
+    photoPreview: "Nouvelle photo (aperçu)",
+    photoCancel: "Annuler le changement de photo",
+    photoHelp:
+      "JPEG, PNG ou WebP, 5 Mo maximum. L'ancienne photo reste en place tant que l'enregistrement n'a pas réussi.",
+    photoOffline:
+      "Connexion nécessaire pour envoyer une photo. Les autres modifications restent possibles une fois en ligne.",
+    photoTooLarge: "La photo ne doit pas dépasser 5 Mo.",
+    photoInvalidType: "La photo doit être une image JPEG, PNG ou WebP.",
+    photoUploading: "Envoi de la photo…",
+    photoUpdated: "Photo enregistrée",
+    oldPhotoNotDeleted:
+      "Photo enregistrée, mais l'ancienne n'a pas encore pu être effacée du stockage : elle reste comptée et sa suppression sera reprise automatiquement.",
+    sell: "Vendre",
+    sellLabel: "Vendre {{name}}",
   },
   profit: {
     positive: "Rentable",

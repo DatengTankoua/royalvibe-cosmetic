@@ -390,14 +390,26 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
     expect(after!.logoKey).toBe(before!.logoKey);
   });
 
+  /**
+   * 1-17B : la clé est réservée (quota) AVANT l'envoi ; l'utilitaire fixe
+   * donc aussi la clé générée côté serveur, puis simule l'envoi.
+   */
+  const keySpies: jest.SpyInstance[] = [];
+  afterEach(() => {
+    for (const spy of keySpies.splice(0)) spy.mockRestore();
+  });
+  const fakeUpload = (key: string) => {
+    keySpies.push(jest.spyOn(s3Service, 'newObjectKey').mockReturnValue(key));
+    return jest
+      .spyOn(s3Service, 'uploadValidatedImage')
+      .mockResolvedValue({ key, storage: s3Service.storage });
+  };
+
   describe('cycle logo (S3Service espionné, aucun réseau réel)', () => {
     it('upload réussi : clé + stockage sous le préfixe tenant EXACT, logoUrl signée', async () => {
-      const uploadSpy = jest
-        .spyOn(s3Service, 'uploadValidatedImage')
-        .mockResolvedValue({
-          key: `organizations/${orgAId}/branding/first.png`,
-          storage: s3Service.storage,
-        });
+      const uploadSpy = fakeUpload(
+        `organizations/${orgAId}/branding/first.png`,
+      );
       const deleteSpy = jest
         .spyOn(s3Service, 'deleteStoredObject')
         .mockImplementation((ref) =>
@@ -410,6 +422,9 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
         expect.any(Buffer),
         `organizations/${orgAId}/branding`,
         { format: 'png', extension: 'png', contentType: 'image/png' },
+        expect.objectContaining({
+          key: `organizations/${orgAId}/branding/first.png`,
+        }),
       );
       // `logoUrl` : URL GET SIGNÉE (vraie signature, aucun réseau) calculée
       // à partir de `logoKey` et du stockage, durée explicite.
@@ -441,12 +456,9 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
     });
 
     it('nouveau logo : l’ANCIEN est supprimé APRÈS la sauvegarde, sous le préfixe tenant', async () => {
-      const uploadSpy = jest
-        .spyOn(s3Service, 'uploadValidatedImage')
-        .mockResolvedValue({
-          key: `organizations/${orgAId}/branding/second.png`,
-          storage: s3Service.storage,
-        });
+      const uploadSpy = fakeUpload(
+        `organizations/${orgAId}/branding/second.png`,
+      );
       const deleteSpy = jest
         .spyOn(s3Service, 'deleteStoredObject')
         .mockResolvedValue('deleted');
@@ -712,12 +724,9 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
     });
 
     it('modification INDÉPENDANTE : logo seul puis suppression du logo → 200, nom intact', async () => {
-      const uploadSpy = jest
-        .spyOn(s3Service, 'uploadValidatedImage')
-        .mockResolvedValue({
-          key: `organizations/${orgAId}/branding/legacy.png`,
-          storage: s3Service.storage,
-        });
+      const uploadSpy = fakeUpload(
+        `organizations/${orgAId}/branding/legacy.png`,
+      );
       const deleteSpy = jest
         .spyOn(s3Service, 'deleteStoredObject')
         .mockResolvedValue('deleted');

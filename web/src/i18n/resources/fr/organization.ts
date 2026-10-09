@@ -20,6 +20,7 @@ const organizationFr = {
     offline: "Hors connexion",
     notifications: "Notifications",
     support: "Assistance",
+    storage: "Stockage",
   },
   roles: {
     owner: "Propriétaire",
@@ -134,6 +135,30 @@ const organizationFr = {
     email: "Email",
     role: "Rôle",
     submit: "Créer l'invitation",
+  },
+  // 1-17B — espace de stockage de l'organisation (photos et logo).
+  storage: {
+    title: "Espace de stockage",
+    text: "Photos des produits (corbeille comprise) et logo de l'organisation. La limite est fixée par Stock Master.",
+    used: "{{used}} utilisés sur {{limit}}",
+    available: "Disponible : {{available}}",
+    files_one: "{{count}} fichier enregistré",
+    files_many: "{{count}} fichiers enregistrés",
+    files_other: "{{count}} fichiers enregistrés",
+    pending_one:
+      "{{count}} envoi en cours ou interrompu ({{size}} réservés). L'espace réservé est libéré automatiquement s'il n'est pas utilisé.",
+    pending_many:
+      "{{count}} envois en cours ou interrompus ({{size}} réservés). L'espace réservé est libéré automatiquement s'il n'est pas utilisé.",
+    pending_other:
+      "{{count}} envois en cours ou interrompus ({{size}} réservés). L'espace réservé est libéré automatiquement s'il n'est pas utilisé.",
+    full: "Espace plein : les nouveaux envois de photos et de logo sont bloqués. Les ventes et les autres fonctions restent disponibles. Videz la corbeille ou remplacez des photos pour libérer de l'espace.",
+    nearlyFull: "Espace presque plein.",
+    trashNote:
+      "Placer un produit dans la corbeille ne libère pas d'espace ; la suppression définitive, oui.",
+    notEnforced: "Limite non appliquée pour le moment (comptage seulement).",
+    refresh: "Actualiser",
+    unavailable: "Occupation indisponible pour le moment.",
+    offline: "Connexion nécessaire pour afficher l'occupation.",
   },
   offlineData: {
     cleared: "Données hors connexion supprimées.",

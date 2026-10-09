@@ -853,21 +853,59 @@ export async function createProduct(payload: {
   return { ...data, status: "in_stock" };
 }
 
+export interface UpdateProductPayload {
+  name?: string;
+  purchasePrice?: number;
+  salePrice?: number;
+  additionalStock?: number;
+  sectionId?: string;
+  // 1-17B : ajout ou remplacement de la photo (`products.manage`, contrôlé
+  // côté API) ; envoi multipart, jamais hors connexion.
+  image?: File;
+}
+
 export async function updateProduct(
   id: string,
-  payload: {
-    name?: string;
-    purchasePrice?: number;
-    salePrice?: number;
-    additionalStock?: number;
-    sectionId?: string;
-  },
-): Promise<ApiProduct> {
-  const { data } = await apiClient.patch<ApiProductEnvelope>(
-    `/products/${id}`,
-    payload,
+  payload: UpdateProductPayload,
+): Promise<ApiProduct & { storageCleanup?: StorageCleanup }> {
+  const { image, ...fields } = payload;
+  let body: UpdateProductPayload | FormData = fields;
+  if (image) {
+    const form = new FormData();
+    for (const [key, value] of Object.entries(fields)) {
+      if (value !== undefined) form.append(key, String(value));
+    }
+    form.append("image", image);
+    body = form;
+  }
+  const { data } = await apiClient.patch<
+    ApiProductEnvelope & { storageCleanup?: StorageCleanup }
+  >(`/products/${id}`, body);
+  const { storageCleanup, ...envelope } = data;
+  const product = flattenProduct(envelope);
+  return storageCleanup ? { ...product, storageCleanup } : product;
+}
+
+// ─── Stockage (1-17B) ────────────────────────────────────────────────────────
+
+/** Occupation de l'organisation courante (jamais de clé ni d'URL). */
+export interface ApiStorageUsage {
+  limitBytes: number;
+  usedBytes: number;
+  storedObjects: number;
+  reservedBytes: number;
+  pendingUploads: number;
+  availableBytes: number;
+  enforced: boolean;
+}
+
+// GET /organizations/current/storage — `products.manage`, `branding.manage`
+// ou `trash.manage` (contrôlé côté API).
+export async function fetchStorageUsage(): Promise<ApiStorageUsage> {
+  const { data } = await apiClient.get<ApiStorageUsage>(
+    "/organizations/current/storage",
   );
-  return flattenProduct(data);
+  return data;
 }
 
 export async function deleteProduct(id: string): Promise<void> {
@@ -1100,6 +1138,9 @@ export function getApiErrorMessage(error: unknown): string {
     if (code === SUBSCRIPTION_INACTIVE) return t("errors.subscriptionInactive");
     if (code === SUBSCRIPTION_STATUS_UNAVAILABLE)
       return t("errors.statusUnavailable");
+    // 1-17B : envoi de fichier interrompu (503 stable), réessayable.
+    if (code === "STORAGE_UPLOAD_INTERRUPTED")
+      return t("errors.uploadInterrupted");
     if (status === 403) return t("errors.forbidden");
     if (status === 404) return t("errors.notFound");
     if (status >= 500) return t("errors.server");

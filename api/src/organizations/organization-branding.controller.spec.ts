@@ -5,7 +5,7 @@ import sharp from 'sharp';
 import { OrganizationBrandingController } from './organization-branding.controller';
 import { OrganizationsService } from './organizations.service';
 import type { ResolvedOrganizationContext } from './organizations.service';
-import { S3Service } from '../s3/s3.service';
+import { StorageQuotaService } from '../storage-quota/storage-quota.service';
 import { OrganizationRole, OrganizationStatus } from './permissions';
 import { PERMISSIONS_KEY } from '../auth/decorators/permissions.decorator';
 
@@ -72,6 +72,29 @@ describe('OrganizationBrandingController (1-8A)', () => {
     deleteStoredObject: jest.fn(),
   };
 
+  // 1-17B : réservation et comptabilisation couvertes par
+  // `storage-quota.service.spec` ; `store` envoie via le stockage simulé,
+  // `deleteDetached` supprime via ce même stockage, `discard` est observé.
+  const quotaStub = {
+    store: jest.fn(
+      (input: {
+        organizationId: string;
+        body: Buffer;
+        image: Record<string, string>;
+      }) =>
+        s3Stub.uploadValidatedImage(
+          input.body,
+          `organizations/${input.organizationId}/branding`,
+          input.image,
+        ) as Promise<unknown>,
+    ),
+    deleteDetached: jest.fn(
+      (_org: string, ref: unknown, prefix: string) =>
+        s3Stub.deleteStoredObject(ref, prefix) as Promise<unknown>,
+    ),
+    discard: jest.fn().mockResolvedValue(undefined),
+  };
+
   const currentView = {
     _id: ORG_A,
     name: 'Org A',
@@ -93,6 +116,9 @@ describe('OrganizationBrandingController (1-8A)', () => {
       previousLogo: null,
     });
     serviceStub.isLogoReferenced.mockReset().mockResolvedValue(false);
+    quotaStub.store.mockClear();
+    quotaStub.deleteDetached.mockClear();
+    quotaStub.discard.mockClear();
     s3Stub.uploadValidatedImage.mockReset().mockResolvedValue(NEW);
     // Comportement réel : aucune référence → `not_needed` sans appel réseau.
     s3Stub.deleteStoredObject
@@ -105,7 +131,7 @@ describe('OrganizationBrandingController (1-8A)', () => {
       controllers: [OrganizationBrandingController],
       providers: [
         { provide: OrganizationsService, useValue: serviceStub },
-        { provide: S3Service, useValue: s3Stub },
+        { provide: StorageQuotaService, useValue: quotaStub },
       ],
     }).compile();
     controller = module.get(OrganizationBrandingController);
@@ -193,22 +219,24 @@ describe('OrganizationBrandingController (1-8A)', () => {
     expect(res).toMatchObject({ storageCleanup: 'failed' });
   });
 
-  it('updateBranding : DB échoue → le NOUVEAU logo non référencé est supprimé, erreur repropagée', async () => {
+  it('updateBranding : DB échoue → le NOUVEAU logo est abandonné (supprimé si non référencé), ancien intact, erreur repropagée', async () => {
     const dbError = new Error('db down');
     serviceStub.updateBranding.mockRejectedValueOnce(dbError);
     await expect(controller.updateBranding({}, multerFile(), ctx)).rejects.toBe(
       dbError,
     );
-    expect(serviceStub.isLogoReferenced).toHaveBeenCalledWith(ORG_A, NEW.key);
-    expect(s3Stub.deleteStoredObject).toHaveBeenCalledWith(NEW, PREFIX_A);
+    expect(quotaStub.discard).toHaveBeenCalledWith(NEW);
+    expect(quotaStub.deleteDetached).not.toHaveBeenCalled();
   });
 
-  it('updateBranding : erreur alors que le nouveau logo est référencé → conservé', async () => {
-    serviceStub.updateBranding.mockRejectedValueOnce(new Error('after save'));
-    serviceStub.isLogoReferenced.mockResolvedValueOnce(true);
-    await expect(
-      controller.updateBranding({}, multerFile(), ctx),
-    ).rejects.toThrow('after save');
+  it('1-17B updateBranding : quota dépassé → ni mutation ni suppression, erreur repropagée', async () => {
+    const quota = Object.assign(new Error('quota'), { status: 413 });
+    quotaStub.store.mockRejectedValueOnce(quota);
+    await expect(controller.updateBranding({}, multerFile(), ctx)).rejects.toBe(
+      quota,
+    );
+    expect(serviceStub.updateBranding).not.toHaveBeenCalled();
+    expect(quotaStub.discard).not.toHaveBeenCalled();
     expect(s3Stub.deleteStoredObject).not.toHaveBeenCalled();
   });
 
