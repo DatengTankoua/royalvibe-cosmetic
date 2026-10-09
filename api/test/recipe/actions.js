@@ -6,6 +6,7 @@
 'use strict';
 
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const { spawn } = require('child_process');
 const C = require('./recipe-common');
@@ -73,10 +74,13 @@ async function registerOwner(label) {
       password: C.PASSWORD,
       organizationName: `Shop ${label}`.slice(0, 20),
       legalAcceptance: legalAcceptance('owner_registration'),
+      // 1-18C : jeton anti-robot simulé, usage unique.
+      turnstileToken: `simulated-pass:register:${crypto.randomUUID()}`,
     },
   });
   if (registered.status !== 201)
     throw new Error(
+      // 1-18C : l'inscription exige l'anti-robot (`start --anti-bot=simulated`).
       `inscription : HTTP ${registered.status} ${registered.text}`,
     );
   const confirmed = await C.api('POST', '/auth/email-verification/confirm', {

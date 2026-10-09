@@ -388,6 +388,8 @@ export async function authLogin(payload: {
   email: string;
   password: string;
   organizationId?: string;
+  /** 1-18C : défi de récupération (plafond par compte atteint). */
+  challengeToken?: string;
 }): Promise<LoginResponse> {
   const { data } = await apiClient.post("/auth/login", payload);
   return data;
@@ -413,6 +415,8 @@ export async function authRegister(payload: {
   organizationName: string;
   /** 1-16C.2 : documents affichés et acceptés (le serveur fait foi). */
   legalAcceptance: LegalAcceptancePayload;
+  /** 1-18C : jeton Turnstile (usage unique, vérifié par l'API). */
+  turnstileToken: string;
 }): Promise<OwnerRegistrationResult> {
   const { data } = await apiClient.post("/auth/register", payload);
   return data;
@@ -477,10 +481,11 @@ export async function inspectInvitationWithCredentials(
   token: string,
   email: string,
   password: string,
+  challengeToken?: string,
 ): Promise<InvitationPreview> {
   const { data } = await apiClient.post(
     "/auth/invitations/credentials/inspect",
-    { token, email, password },
+    { token, email, password, ...(challengeToken ? { challengeToken } : {}) },
   );
   return data;
 }
@@ -489,10 +494,17 @@ export async function acceptInvitationWithCredentials(
   token: string,
   email: string,
   password: string,
+  challengeToken?: string,
 ): Promise<InvitationAcceptance> {
   const { data } = await apiClient.post(
     "/auth/invitations/credentials/accept",
-    { token, email, password, consent: true },
+    {
+      token,
+      email,
+      password,
+      consent: true,
+      ...(challengeToken ? { challengeToken } : {}),
+    },
   );
   return data;
 }

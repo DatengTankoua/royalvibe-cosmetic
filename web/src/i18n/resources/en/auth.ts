@@ -35,6 +35,12 @@ const authEn: Translation<typeof authFr> = {
     errors: {
       generic: "Login error",
     },
+    // 1-18C: access recovery after too many attempts on this account.
+    challenge: {
+      required:
+        "Too many attempts for this account. Complete the anti-bot check below, then log in again.",
+      missing: "Complete the anti-bot check first.",
+    },
   },
   register: {
     closedTitle: "Sign-up disabled",
@@ -49,6 +55,21 @@ const authEn: Translation<typeof authFr> = {
     subtitle: "This creates your business and your owner account.",
     submit: "Create my business",
     submitting: "Creating…",
+    // 1-18C: anti-bot check (Cloudflare Turnstile).
+    antiBot: {
+      loading: "Loading the anti-bot check…",
+      notConfigured:
+        "The anti-bot check is not available: sign-up is temporarily impossible.",
+      loadError:
+        "The anti-bot check could not load. Check your connection, then try again.",
+      failed:
+        "The anti-bot check failed or expired. Complete it again, then try again.",
+      required: "Complete the anti-bot check before creating your business.",
+      unavailable:
+        "The anti-bot check is temporarily unavailable. Try again in a moment.",
+      retry: "Restart the check",
+      simulated: "I am not a robot (local simulation)",
+    },
     haveAccount: "Already have an account?",
   },
   verify: {

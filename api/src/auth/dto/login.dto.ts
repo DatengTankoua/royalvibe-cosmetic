@@ -1,4 +1,5 @@
 import {
+  MaxLength,
   IsEmail,
   IsMongoId,
   IsOptional,
@@ -17,4 +18,11 @@ export class LoginDto {
   @IsOptional()
   @IsMongoId()
   organizationId?: string;
+
+  // 1-18C : défi Turnstile de récupération d'accès (plafond par compte
+  // atteint). Ignoré tant que le plafond n'est pas atteint.
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  challengeToken?: string;
 }

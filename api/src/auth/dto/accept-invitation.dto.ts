@@ -53,6 +53,12 @@ export class InvitationCredentialsDto extends InvitationTokenDto {
   @MinLength(6)
   @MaxLength(100)
   password: string;
+
+  // 1-18C : défi de récupération d'accès (même règle que le login).
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  challengeToken?: string;
 }
 
 /** `POST /auth/invitations/credentials/accept` : identifiants + accord explicite. */

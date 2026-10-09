@@ -17,6 +17,8 @@ import { resolveWebPushConfig } from './push/push-config';
 import { startNotifications } from './push/push-bootstrap';
 import { configureProcessTimeZone } from './analytics/month-range';
 import { startStorageRecovery } from './storage-quota/storage-recovery';
+import { resolveTurnstileConfig } from './anti-bot/turnstile-config';
+import { resolveAntiAbuseConfig } from './common/rate-limit/anti-abuse-config';
 
 async function bootstrap() {
   // 1-16D : fuseau des mois (Analyse, historique exportable, bilan
@@ -41,6 +43,23 @@ async function bootstrap() {
   // proxys identifiés) ou `TRUST_PROXY_HOPS` (N sauts), jamais les deux ;
   // toute valeur invalide → erreur fatale au démarrage.
   const trustProxy = resolveTrustProxySetting(process.env);
+
+  // 1-18C : anti-robot de l'inscription et plafonds persistants, validés
+  // STRICTEMENT (valeur invalide, clé de test ou simulation en production →
+  // erreur fatale). Seul le mode est journalisé, jamais le secret.
+  const turnstile = resolveTurnstileConfig(process.env);
+  resolveAntiAbuseConfig(process.env);
+  new Logger('Bootstrap').log(
+    `Anti-robot de l'inscription : ${turnstile.mode}`,
+  );
+  if (
+    turnstile.mode === 'unconfigured' &&
+    process.env.PUBLIC_REGISTRATION_ENABLED === 'true'
+  ) {
+    new Logger('Bootstrap').warn(
+      'Inscription publique ouverte sans Turnstile : chaque inscription sera refusée (503).',
+    );
+  }
 
   // Web Push (1-16A) : désactivé par défaut ; `WEB_PUSH_ENABLED=true` avec
   // une configuration VAPID invalide → erreur fatale au démarrage.

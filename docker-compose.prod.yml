@@ -69,6 +69,18 @@ services:
       EMAIL_FROM: ${EMAIL_FROM:-}
       # Inscription publique fermée par défaut (seule la valeur exacte `true` l'ouvre).
       PUBLIC_REGISTRATION_ENABLED: ${PUBLIC_REGISTRATION_ENABLED:-false}
+      # 1-18C — Turnstile (inscription) : clé secrète et hôtes autorisés ;
+      # vides → inscription refusée (503). Plafonds persistants : vides =
+      # défauts serveur (10 échecs / 900 s par compte, 5 e-mails / 24 h par
+      # destinataire d'invitation).
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      TURNSTILE_ALLOWED_HOSTNAMES: ${TURNSTILE_ALLOWED_HOSTNAMES:-}
+      TURNSTILE_TIMEOUT_MS: ${TURNSTILE_TIMEOUT_MS:-}
+      AUTH_ACCOUNT_FAILURE_LIMIT: ${AUTH_ACCOUNT_FAILURE_LIMIT:-}
+      AUTH_ACCOUNT_FAILURE_WINDOW_SECONDS: ${AUTH_ACCOUNT_FAILURE_WINDOW_SECONDS:-}
+      AUTH_CHALLENGED_FAILURE_LIMIT: ${AUTH_CHALLENGED_FAILURE_LIMIT:-}
+      INVITATION_EMAIL_RECIPIENT_LIMIT: ${INVITATION_EMAIL_RECIPIENT_LIMIT:-}
+      INVITATION_EMAIL_RECIPIENT_WINDOW_SECONDS: ${INVITATION_EMAIL_RECIPIENT_WINDOW_SECONDS:-}
       # 1-16D — fuseau des mois (Analyse, historique exportable, bilan
       # mensuel) : calendrier du Cameroun. Nom IANA validé au démarrage.
       TZ: ${TZ:-Africa/Douala}
@@ -96,6 +108,8 @@ services:
         # Variables publiques uniquement (inlinées au build).
         NEXT_PUBLIC_API_URL: ${API_URL}
         NEXT_PUBLIC_REGISTRATION_ENABLED: ${NEXT_PUBLIC_REGISTRATION_ENABLED:-false}
+        # 1-18C : clé de site Turnstile PUBLIQUE (jamais la clé secrète).
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
         S3_HOSTNAME: ${S3_HOSTNAME:-}
     container_name: stockmaster-web
     restart: always

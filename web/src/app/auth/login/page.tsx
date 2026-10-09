@@ -6,6 +6,7 @@ import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { useT } from "next-i18next/client";
 import { useMessage } from "@/i18n/use-message";
 import { Button } from "@/components/ui/button";
+import { TurnstileWidget } from "@/components/auth/turnstile-widget";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LoginError, useAuth } from "@/contexts/auth-context";
@@ -75,16 +76,56 @@ export default function LoginPage() {
     useState<InvitationPreview | null>(null);
   const [invitationNotice, setInvitationNotice] = useMessage("auth");
 
+  // 1-18C : récupération d'accès quand le plafond d'échecs du compte est
+  // atteint (éventuellement par un tiers) : vérification anti-robot NEUVE
+  // pour chaque essai, puis mot de passe et contrôles habituels côté API.
+  const [challengeRequired, setChallengeRequired] = useState(false);
+  const [challengeToken, setChallengeToken] = useState<string | null>(null);
+  const [challengeReset, setChallengeReset] = useState(0);
+
+  /** Jeton à usage unique : remis à zéro dès qu'il part à l'API. */
+  const takeChallenge = (): string | undefined => {
+    if (!challengeToken) return undefined;
+    setChallengeToken(null);
+    setChallengeReset((n) => n + 1);
+    return challengeToken;
+  };
+
+  /** Erreurs propres au défi ; `true` si l'erreur a été traitée. */
+  const handleChallengeError = (code: string | undefined): boolean => {
+    if (code === "AUTH_CHALLENGE_REQUIRED") {
+      setChallengeRequired(true);
+      setError((tr) => tr("login.challenge.required"));
+      return true;
+    }
+    if (code === "TURNSTILE_FAILED" || code === "TURNSTILE_REQUIRED") {
+      setError((tr) => tr("register.antiBot.failed"));
+      return true;
+    }
+    if (code === "TURNSTILE_UNAVAILABLE") {
+      setError((tr) => tr("register.antiBot.unavailable"));
+      return true;
+    }
+    return false;
+  };
+
   const inspectWithCredentials = async (): Promise<boolean> => {
     const token = readPendingInvitation();
     if (!token) return false;
     try {
       setInvitationPreview(
-        await inspectInvitationWithCredentials(token, email, password),
+        await inspectInvitationWithCredentials(
+          token,
+          email,
+          password,
+          takeChallenge(),
+        ),
       );
     } catch (err: unknown) {
       const code = getApiErrorCode(err);
-      if (code === "INVITATION_ACCOUNT_MISMATCH") {
+      if (handleChallengeError(code)) {
+        return true;
+      } else if (code === "INVITATION_ACCOUNT_MISMATCH") {
         setError((tr) => tr("invitation.mismatchText"));
       } else if (code === "MEMBERSHIP_ALREADY_EXISTS") {
         clearPendingInvitation();
@@ -103,13 +144,20 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
     try {
-      await acceptInvitationWithCredentials(token, email, password);
+      await acceptInvitationWithCredentials(
+        token,
+        email,
+        password,
+        takeChallenge(),
+      );
       clearPendingInvitation();
       setForInvitation(false);
       setInvitationPreview(null);
     } catch (err: unknown) {
       setInvitationPreview(null);
-      setError(getApiErrorMessage(err));
+      if (!handleChallengeError(getApiErrorCode(err))) {
+        setError(getApiErrorMessage(err));
+      }
       setLoading(false);
       return;
     }
@@ -127,11 +175,21 @@ export default function LoginPage() {
   };
 
   const submit = async (organizationId?: string) => {
+    if (challengeRequired && !challengeToken) {
+      setError((tr) => tr("login.challenge.missing"));
+      return;
+    }
     setLoading(true);
     setError(null);
     setUnverifiedEmail(null);
     try {
-      const outcome = await login(email, password, organizationId);
+      const outcome = await login(
+        email,
+        password,
+        organizationId,
+        takeChallenge(),
+      );
+      setChallengeRequired(false);
       if (outcome.status === "organizationSelectionRequired") {
         setOrganizations(outcome.organizations);
         return;
@@ -148,9 +206,21 @@ export default function LoginPage() {
         outcome.status === "subscriptionInactive" ? "/access" : "/app",
       );
     } catch (err: unknown) {
+      // Mot de passe vérifié par l'API (refus ultérieur : adresse ou
+      // organisation) : la fenêtre du compte est refermée, plus de défi.
+      if (
+        err instanceof LoginError &&
+        (err.code === "EMAIL_NOT_VERIFIED" ||
+          err.code === "ORGANIZATION_ACCESS_DENIED")
+      ) {
+        setChallengeRequired(false);
+      }
       if (err instanceof LoginError && err.code === "EMAIL_NOT_VERIFIED") {
         setOrganizations(null);
         setUnverifiedEmail(email.trim());
+        return;
+      }
+      if (err instanceof LoginError && handleChallengeError(err.code)) {
         return;
       }
       if (
@@ -350,6 +420,15 @@ export default function LoginPage() {
               </button>
             </div>
           </div>
+
+          {challengeRequired && (
+            <TurnstileWidget
+              action="login"
+              onToken={setChallengeToken}
+              resetSignal={challengeReset}
+              disabled={loading}
+            />
+          )}
 
           <div className="text-right">
             <Link

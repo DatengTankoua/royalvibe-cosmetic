@@ -42,6 +42,8 @@ export const PREDEPLOY_MIGRATIONS: readonly string[] = Object.freeze([
   'create-legal-acceptance-indexes.js',
   // 1-18B : index partiel du lien de création de compte d'un invité.
   'create-invitation-account-token-index.js',
+  // 1-18C : TTL des plafonds persistants (comptes, destinataires).
+  'create-rate-limit-indexes.js',
 ]);
 
 function main(): number {
