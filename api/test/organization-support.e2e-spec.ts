@@ -47,6 +47,7 @@ import {
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 /**
  * E2E 1-16C.1 — Assistance depuis l'organisation (`/support/*`).
@@ -220,18 +221,16 @@ describe('Assistance depuis l’organisation (e2e 1-16C.1)', () => {
       supportModel = moduleFixture.get(getModelToken(SupportRequest.name));
       organizationModel = moduleFixture.get(getModelToken(Organization.name));
 
-      const reg = await http()
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Awa Support',
-          email: OWNER_EMAIL,
-          password: PASSWORD,
-          organizationName: 'Boutique Support',
-        });
-      expect(reg.status).toBe(201);
-      orgId = reg.body.organization._id as string;
-      ownerId = reg.body.user._id as string;
+      const reg = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Awa Support',
+        email: OWNER_EMAIL,
+        password: PASSWORD,
+        organizationName: 'Boutique Support',
+      });
+      expect(reg.status).toBe(202);
+      orgId = reg.owner!.organization._id;
+      ownerId = reg.owner!.user._id;
       const ownerLogin = await login(OWNER_EMAIL);
       expect(ownerLogin.status).toBe(201);
       ownerToken = ownerLogin.body.access_token as string;
@@ -331,21 +330,19 @@ describe('Assistance depuis l’organisation (e2e 1-16C.1)', () => {
   /** Nouveau commerce isolé (propriétaire inscrit par la route publique). */
   async function registerIsolatedOwner(label: string) {
     const email = `${label}-owner-16c1@stockmaster.test`;
-    const reg = await http()
-      .post('/auth/register')
-      .send({
-        ...OWNER_TERMS,
-        name: `${label} Owner`,
-        email,
-        password: PASSWORD,
-        organizationName: `Boutique ${label}`.slice(0, 20),
-      });
-    expect(reg.status).toBe(201);
+    const reg = await postRegister(app, {
+      ...OWNER_TERMS,
+      name: `${label} Owner`,
+      email,
+      password: PASSWORD,
+      organizationName: `Boutique ${label}`.slice(0, 20),
+    });
+    expect(reg.status).toBe(202);
     const res = await login(email);
     expect(res.status).toBe(201);
     return {
       email,
-      orgId: reg.body.organization._id as string,
+      orgId: reg.owner!.organization._id,
       token: res.body.access_token as string,
     };
   }

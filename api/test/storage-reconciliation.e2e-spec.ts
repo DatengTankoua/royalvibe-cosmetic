@@ -30,6 +30,7 @@ import {
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 const emailSender = createE2eEmailSender();
 
@@ -209,17 +210,15 @@ describe('E2E 1-17B — réconciliation du stockage', () => {
     process.env.STORAGE_QUOTA_MODE = 'enforce';
     process.env.STORAGE_RESERVATION_TTL_SECONDS = String(TTL_SECONDS);
     current = await boot();
-    const reg = await http()
-      .post('/auth/register')
-      .send({
-        ...OWNER_TERMS,
-        name: 'Owner Reco',
-        email: 'owner-reco-17b@stockmaster.test',
-        password: PASSWORD,
-        organizationName: 'Reco A',
-      });
-    expect(reg.status).toBe(201);
-    orgA = reg.body.organization._id as string;
+    const reg = await postRegister(current.app, {
+      ...OWNER_TERMS,
+      name: 'Owner Reco',
+      email: 'owner-reco-17b@stockmaster.test',
+      password: PASSWORD,
+      organizationName: 'Reco A',
+    });
+    expect(reg.status).toBe(202);
+    orgA = reg.owner!.organization._id;
     const login = await http()
       .post('/auth/login')
       .send({ email: 'owner-reco-17b@stockmaster.test', password: PASSWORD });

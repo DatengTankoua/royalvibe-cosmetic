@@ -19,12 +19,7 @@ import {
 } from "@/lib/password-policy";
 
 const PASSWORD_LIMITS = { min: PASSWORD_MIN_LENGTH, max: PASSWORD_MAX_LENGTH };
-import {
-  authRegister,
-  getApiErrorCode,
-  getApiErrorMessage,
-  type EmailVerificationDelivery,
-} from "@/lib/api";
+import { authRegister, getApiErrorCode, getApiErrorMessage } from "@/lib/api";
 import { EmailVerificationResend } from "@/components/auth/email-verification-resend";
 import { Wordmark } from "@/components/brand/wordmark";
 import { BackToHome } from "@/components/landing/back-to-home";
@@ -55,11 +50,10 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useMessage("auth");
   const { t: tl } = useT("legal");
-  // 1-13A : compte créé (adresse enregistrée + résultat de l'envoi du lien).
-  const [done, setDone] = useState<{
-    email: string;
-    delivery: EmailVerificationDelivery;
-  } | null>(null);
+  // 1-18E : demande acceptée — même écran que l'adresse ait déjà un compte
+  // ou non (jamais « compte créé »). Seule l'adresse saisie est conservée,
+  // pour le renvoi du lien.
+  const [done, setDone] = useState<{ email: string } | null>(null);
   const submitting = useRef(false);
   // 1-18C : jeton anti-robot courant (usage unique) ; `resetSignal` exige une
   // nouvelle vérification après chaque échec d'envoi.
@@ -100,29 +94,28 @@ export default function RegisterPage() {
           <BackToHome />
           <Wordmark className="mx-auto" size="large" />
           <h1 className="text-xl font-bold">{t("register.doneTitle")}</h1>
-          <p className="text-sm text-muted-foreground">
-            {t("register.doneText")}
+          <p role="status" className="text-sm text-muted-foreground">
+            {t("register.doneText", { email: done.email })}
           </p>
-          <p className="text-sm font-medium">{t("verify.confirmToAccess")}</p>
-          {done.delivery === "failed" ? (
-            <p role="alert" className="text-sm text-destructive">
-              {t("register.deliveryFailed")}
-            </p>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              {t("verify.linkSent", { email: done.email })}
-            </p>
-          )}
-          <EmailVerificationResend
-            email={done.email}
-            initialCooldown={done.delivery !== "failed"}
-          />
+          <p className="text-sm text-muted-foreground">
+            {t("register.doneExisting")}
+          </p>
           <Link
             href="/auth/login"
-            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+            className="inline-flex w-full items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
           >
             {t("login.submit")}
           </Link>
+          <Link
+            href="/auth/forgot-password"
+            className="inline-flex w-full items-center justify-center rounded-md border px-4 py-2 text-sm font-medium"
+          >
+            {t("register.doneForgot")}
+          </Link>
+          <p className="text-sm text-muted-foreground">
+            {t("register.doneResend")}
+          </p>
+          <EmailVerificationResend email={done.email} initialCooldown />
         </div>
       </div>
     );
@@ -154,7 +147,7 @@ export default function RegisterPage() {
     setLoading(true);
     setError(null);
     try {
-      const result = await authRegister({
+      await authRegister({
         name,
         email,
         password,
@@ -165,10 +158,7 @@ export default function RegisterPage() {
       });
       setPassword("");
       setConfirmation("");
-      setDone({
-        email: result.user.email,
-        delivery: result.emailVerification?.status ?? "failed",
-      });
+      setDone({ email: email.trim() });
     } catch (err: unknown) {
       const code = getApiErrorCode(err);
       const legalKey = legalAcceptanceErrorKey(code);

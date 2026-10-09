@@ -25,6 +25,7 @@ import { PasswordResetService } from '../password-reset/password-reset.service';
 import { UsersService } from '../users/users.service';
 import { PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE } from './auth.controller';
 import { TurnstileService } from '../anti-bot/turnstile.service';
+import { REGISTRATION_ACCEPTED_MESSAGE } from './auth.service';
 import type { Request } from 'express';
 import type { AuthenticatedPrincipal } from './strategies/jwt.strategy';
 import {
@@ -204,15 +205,20 @@ describe('AuthController', () => {
     },
   );
 
-  it('inscription activée → AuthService.register appelé avec le DTO', async () => {
-    process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
-    const result = { user: { email: 'a@b.c' } };
-    registerMock.mockResolvedValue(result);
-    const out = await controller.register(VALID_REG);
-    expect(registerMock).toHaveBeenCalledTimes(1);
-    expect(registerMock).toHaveBeenCalledWith(VALID_REG);
-    expect(out).toEqual(result);
-  });
+  it.each([
+    ['adresse nouvelle', { created: true, userId: 'u', organizationId: 'o' }],
+    ['adresse existante', { created: false }],
+  ])(
+    'inscription activée (%s) → même réponse neutre, sans identifiant (1-18E)',
+    async (_label, outcome) => {
+      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+      registerMock.mockResolvedValue(outcome);
+      const out = await controller.register(VALID_REG);
+      expect(registerMock).toHaveBeenCalledTimes(1);
+      expect(registerMock).toHaveBeenCalledWith(VALID_REG);
+      expect(out).toEqual({ message: REGISTRATION_ACCEPTED_MESSAGE });
+    },
+  );
 
   // ---- 1-18C : anti-robot AVANT toute logique d'inscription ----
 

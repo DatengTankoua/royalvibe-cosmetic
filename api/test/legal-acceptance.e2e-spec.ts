@@ -74,6 +74,8 @@ import {
   acceptWithSession,
   requestAccountToken,
 } from './e2e/invitation-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
+import { REGISTRATION_ACCEPTED_MESSAGE } from '../src/auth/auth.service';
 
 /**
  * E2E 1-16C.2 — Acceptation versionnée des conditions.
@@ -302,9 +304,7 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
 
   it('inscription sans acceptation : 400 LEGAL_ACCEPTANCE_REQUIRED, ni compte ni commerce', async () => {
     const before = await counts();
-    const res = await http()
-      .post('/auth/register')
-      .send(registerBody(email('none'), {}));
+    const res = await postRegister(app, registerBody(email('none'), {}));
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('LEGAL_ACCEPTANCE_REQUIRED');
     expect(await counts()).toEqual(before);
@@ -344,9 +344,10 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
     ];
     for (const [legalAcceptance, code, errorCode] of cases) {
       await resetQuota();
-      const res = await http()
-        .post('/auth/register')
-        .send(registerBody(email('refused'), { legalAcceptance }));
+      const res = await postRegister(
+        app,
+        registerBody(email('refused'), { legalAcceptance }),
+      );
       expect([res.status, res.body.code]).toEqual([code, errorCode]);
     }
     expect(await counts()).toEqual(before);
@@ -368,9 +369,7 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
     ];
     for (const extra of forged) {
       await resetQuota();
-      const res = await http()
-        .post('/auth/register')
-        .send(registerBody(email('forged'), extra));
+      const res = await postRegister(app, registerBody(email('forged'), extra));
       expect(res.status).toBe(400);
     }
     expect(await counts()).toEqual(before);
@@ -380,12 +379,10 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
 
   it('succès : preuve enregistrée par le serveur (date serveur, versions et empreintes du manifeste, commerce créé)', async () => {
     ownerEmail = email('owner');
-    const res = await http()
-      .post('/auth/register')
-      .send(registerBody(ownerEmail));
-    expect(res.status).toBe(201);
-    ownerId = res.body.user._id as string;
-    orgId = res.body.organization._id as string;
+    const res = await postRegister(app, registerBody(ownerEmail));
+    expect(res.status).toBe(202);
+    ownerId = res.owner!.user._id;
+    orgId = res.owner!.organization._id;
     ownerToken = await tokenFor(ownerEmail, orgId);
 
     const proofs = await acceptanceModel.find({ userId: ownerId }).lean();
@@ -432,12 +429,11 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
     }
   });
 
-  it('rejeu de l’inscription : refus (adresse déjà utilisée), aucune seconde preuve', async () => {
+  it('rejeu de l’inscription (1-18E) : même 202 neutre, aucune seconde preuve', async () => {
     const before = await counts();
-    const res = await http()
-      .post('/auth/register')
-      .send(registerBody(ownerEmail));
-    expect(res.status).toBe(400);
+    const res = await postRegister(app, registerBody(ownerEmail));
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ message: REGISTRATION_ACCEPTED_MESSAGE });
     expect(await counts()).toEqual(before);
   });
 
@@ -451,17 +447,16 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
     expect(frVersionsBefore.length).toBeGreaterThanOrEqual(3);
     const address = email('owner-en');
     const valid = legalAcceptanceFor(LegalAcceptanceContext.OWNER_REGISTRATION);
-    const res = await http()
-      .post('/auth/register')
-      .set('Accept-Language', 'en')
-      .send(
-        registerBody(address, {
-          legalAcceptance: { ...valid, locale: 'en' },
-        }),
-      );
-    expect(res.status).toBe(201);
-    const userId = res.body.user._id as string;
-    const organizationId = res.body.organization._id as string;
+    const res = await postRegister(
+      app,
+      registerBody(address, {
+        legalAcceptance: { ...valid, locale: 'en' },
+      }),
+      { 'Accept-Language': 'en' },
+    );
+    expect(res.status).toBe(202);
+    const userId = res.owner!.user._id;
+    const organizationId = res.owner!.organization._id;
 
     const [proof] = await acceptanceModel.find({ userId }).lean();
     expect(proof.locale).toBe('en');
@@ -638,15 +633,13 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
   });
 
   it('invitation, compte existant : rattaché par sa session sans preuve ; une acceptation jointe est refusée (le lien ne prouve pas l’identité)', async () => {
-    const other = await http()
-      .post('/auth/register')
-      .send({
-        ...registerBody(email('existing')),
-        organizationName: 'Autre commerce',
-      });
-    expect(other.status).toBe(201);
-    const existingId = other.body.user._id as string;
-    const existingEmail = other.body.user.email as string;
+    const other = await postRegister(app, {
+      ...registerBody(email('existing')),
+      organizationName: 'Autre commerce',
+    });
+    expect(other.status).toBe(202);
+    const existingId = other.owner!.user._id;
+    const existingEmail = other.owner!.user.email;
     const before = await acceptanceModel.countDocuments({
       userId: existingId,
     });
@@ -654,7 +647,7 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
     await resetQuota();
     const session = await tokenFor(
       existingEmail,
-      other.body.organization._id as string,
+      other.owner!.organization._id,
     );
     const withTerms = await http()
       .post('/auth/invitations/accept')
@@ -828,9 +821,10 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
     };
     // Soumission portant l'ancienne version : refusée, rien n'est écrit.
     const before = await counts();
-    const stale = await http()
-      .post('/auth/register')
-      .send(registerBody(email('cga03'), { legalAcceptance: withOld }));
+    const stale = await postRegister(
+      app,
+      registerBody(email('cga03'), { legalAcceptance: withOld }),
+    );
     expect(stale.status).toBe(409);
     expect(stale.body.code).toBe('LEGAL_VERSION_OUTDATED');
     expect(stale.body.current).toContainEqual({
@@ -847,12 +841,13 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
     archive.target = was03.archive;
     const address = email('owner03');
     legalNow = new Date('2031-04-01T09:00:00.000Z');
-    const reg = await http()
-      .post('/auth/register')
-      .send(registerBody(address, { legalAcceptance: withOld }));
-    expect(reg.status).toBe(201);
-    const userId = reg.body.user._id as string;
-    const organizationId = reg.body.organization._id as string;
+    const reg = await postRegister(
+      app,
+      registerBody(address, { legalAcceptance: withOld }),
+    );
+    expect(reg.status).toBe(202);
+    const userId = reg.owner!.user._id;
+    const organizationId = reg.owner!.organization._id;
     const proof03 = await acceptanceModel.findOne({ userId }).lean();
     expect(
       proof03!.acceptedDocuments.find(
@@ -975,9 +970,7 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
     archive.target = altered.archive;
 
     const before = await counts();
-    const res = await http()
-      .post('/auth/register')
-      .send(registerBody(email('conflict')));
+    const res = await postRegister(app, registerBody(email('conflict')));
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('LEGAL_ARCHIVE_UNAVAILABLE');
     expect(await counts()).toEqual(before);
@@ -1020,12 +1013,10 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
   // ─── Restrictions commerciales ───────────────────────────────────────────
 
   it('session limitée (abonnement expiré) : statut inaccessible, aucune acceptation ne lève la restriction', async () => {
-    const fresh = await http()
-      .post('/auth/register')
-      .send(registerBody(email('expired')));
-    expect(fresh.status).toBe(201);
+    const fresh = await postRegister(app, registerBody(email('expired')));
+    expect(fresh.status).toBe(202);
     subscriptionOffsetMs = 8 * 24 * 60 * 60 * 1000;
-    const res = await login(fresh.body.user.email as string);
+    const res = await login(fresh.owner!.user.email);
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('SUBSCRIPTION_INACTIVE');
     const restricted = res.body.restrictedToken as string;
@@ -1036,7 +1027,7 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
     });
     expect(attempt.status).toBe(403);
     // Toujours limitée après la tentative.
-    expect((await login(fresh.body.user.email as string)).status).toBe(403);
+    expect((await login(fresh.owner!.user.email)).status).toBe(403);
   });
 });
 

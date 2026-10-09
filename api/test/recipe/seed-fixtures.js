@@ -82,10 +82,14 @@ async function main() {
         // 1-16C.2 : case cochée, comme le formulaire web.
         legalAcceptance: legalAcceptance('owner_registration'),
       });
+      // 1-18E : résultat interne (identifiants) ; lien envoyé après la réponse.
+      if (!result.created)
+        throw new Error(`Adresse déjà utilisée : ${account.email}`);
+      await auth.settleVerificationDispatches();
       await confirm(account.email);
       created[account.key] = {
-        userId: result.user._id,
-        organizationId: result.organization._id,
+        userId: result.userId,
+        organizationId: result.organizationId,
       };
     }
     for (const account of ACCOUNTS.filter((a) => a.invitedBy)) {

@@ -42,6 +42,7 @@ import {
   requestAccountToken,
   waitFor,
 } from './e2e/invitation-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -160,29 +161,25 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       jwtService = moduleFixture.get(JwtService);
 
       // ---- Owner A + Owner B : onboarding atomique réel (1-6A) ----
-      const regA = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Owner A',
-          email: OWNER_A_EMAIL,
-          password: PASSWORD,
-          organizationName: 'Org A 16B1',
-        });
-      expect(regA.status).toBe(201);
-      orgAId = regA.body.organization._id as string;
+      const regA = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Owner A',
+        email: OWNER_A_EMAIL,
+        password: PASSWORD,
+        organizationName: 'Org A 16B1',
+      });
+      expect(regA.status).toBe(202);
+      orgAId = regA.owner!.organization._id;
 
-      const regB = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Owner B',
-          email: OWNER_B_EMAIL,
-          password: PASSWORD,
-          organizationName: 'Org B 16B1',
-        });
-      expect(regB.status).toBe(201);
-      orgBId = regB.body.organization._id as string;
+      const regB = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Owner B',
+        email: OWNER_B_EMAIL,
+        password: PASSWORD,
+        organizationName: 'Org B 16B1',
+      });
+      expect(regB.status).toBe(202);
+      orgBId = regB.owner!.organization._id;
 
       const loginOwnerA = await request(app.getHttpServer())
         .post('/auth/login')

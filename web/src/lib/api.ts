@@ -395,18 +395,8 @@ export async function authLogin(payload: {
   return data;
 }
 
-// 1-13A : résultat de l'envoi du lien de vérification après création du
-// compte (`sent` ≠ adresse vérifiée ; `failed` : compte créé, renvoi possible).
-export type EmailVerificationDelivery =
-  "sent" | "failed" | "recently_sent" | "not_required";
-
 // 1-6A : inscription propriétaire — aucun token renvoyé (le compte doit
 // ensuite confirmer son adresse, 1-13A, puis se connecter via /auth/login).
-export interface OwnerRegistrationResult {
-  user: { _id: string; name: string; email: string };
-  organization: { _id: string; name: string; slug: string };
-  emailVerification: { status: EmailVerificationDelivery };
-}
 
 export async function authRegister(payload: {
   name: string;
@@ -417,9 +407,10 @@ export async function authRegister(payload: {
   legalAcceptance: LegalAcceptancePayload;
   /** 1-18C : jeton Turnstile (usage unique, vérifié par l'API). */
   turnstileToken: string;
-}): Promise<OwnerRegistrationResult> {
-  const { data } = await apiClient.post("/auth/register", payload);
-  return data;
+}): Promise<void> {
+  // 1-18E : réponse neutre (202) identique, que l'adresse ait déjà un compte
+  // ou non ; son contenu n'est pas lu (aucun identifiant n'est renvoyé).
+  await apiClient.post("/auth/register", payload);
 }
 
 // 1-18B — Invitations. Le lien remis au créateur ne prouve ni l'identité

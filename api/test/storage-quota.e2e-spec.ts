@@ -39,6 +39,8 @@ import {
 } from './e2e/email-verification-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
+import { postRegister } from './e2e/registration-fixtures';
+
 const emailSender = createE2eEmailSender();
 
 /**
@@ -128,17 +130,15 @@ describe('E2E 1-17B — quotas de stockage', () => {
   }
 
   async function register(email: string, organizationName: string) {
-    const res = await http()
-      .post('/auth/register')
-      .send({
-        ...OWNER_TERMS,
-        name: organizationName,
-        email,
-        password: PASSWORD,
-        organizationName,
-      });
-    expect(res.status).toBe(201);
-    return res.body.organization._id as string;
+    const res = await postRegister(app, {
+      ...OWNER_TERMS,
+      name: organizationName,
+      email,
+      password: PASSWORD,
+      organizationName,
+    });
+    expect(res.status).toBe(202);
+    return res.owner!.organization._id;
   }
 
   beforeAll(async () => {

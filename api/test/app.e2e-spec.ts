@@ -45,6 +45,9 @@ import {
 } from './e2e/email-verification-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
+import { postRegister } from './e2e/registration-fixtures';
+import { REGISTRATION_ACCEPTED_MESSAGE } from '../src/auth/auth.service';
+
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
 
@@ -323,19 +326,19 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       request(app.getHttpServer()).get('/analytics/overview').expect(401));
 
     it("une inscription de test écrit dans la base éphémère et n'expose pas le hash du mot de passe", async () => {
-      const res = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Isolation E2E',
-          email: ISO_EMAIL,
-          password: 'iso-e2e-pw-!1x',
-          organizationName: 'Isolation E2E Org',
-        });
-      expect(res.status).toBe(201);
-      expect(res.body.user.email).toBe(ISO_EMAIL);
-      expect(res.body.user.password).toBeUndefined();
-      expect(res.body.organization.name).toBe('Isolation E2E Org');
+      const res = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Isolation E2E',
+        email: ISO_EMAIL,
+        password: 'iso-e2e-pw-!1x',
+        organizationName: 'Isolation E2E Org',
+      });
+      // 1-18E : 202 neutre ; le compte est lu EN BASE, jamais dans la réponse.
+      expect(res.status).toBe(202);
+      expect(res.body).toEqual({ message: REGISTRATION_ACCEPTED_MESSAGE });
+      expect(JSON.stringify(res.body)).not.toContain('password');
+      expect(res.owner!.user.email).toBe(ISO_EMAIL);
+      expect(res.owner!.organization.name).toBe('Isolation E2E Org');
     });
 
     it('la connexion avec les identifiants de test fonctionne et renvoie un token', async () => {
@@ -625,15 +628,13 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
 
       delete process.env.PUBLIC_REGISTRATION_ENABLED; // désactivée
 
-      const res = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Refusé',
-          email: 'refuse-0b5@royalvibe.test',
-          password: 'secret-123',
-          organizationName: 'Refusé Org',
-        });
+      const res = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Refusé',
+        email: 'refuse-0b5@royalvibe.test',
+        password: 'secret-123',
+        organizationName: 'Refusé Org',
+      });
       expect(res.status).toBe(403);
       expect(res.body.code).toBe('REGISTRATION_DISABLED');
 
@@ -765,15 +766,13 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
     it('l’inscription désactivée reste 403 / REGISTRATION_DISABLED (même après plusieurs appels)', async () => {
       delete process.env.PUBLIC_REGISTRATION_ENABLED;
       for (let i = 0; i < 3; i++) {
-        const res = await request(app.getHttpServer())
-          .post('/auth/register')
-          .send({
-            ...OWNER_TERMS,
-            name: 'RL',
-            email: `rl-${i}-${Date.now()}@royalvibe.test`,
-            password: 'secret-123',
-            organizationName: 'RL Org',
-          });
+        const res = await postRegister(app, {
+          ...OWNER_TERMS,
+          name: 'RL',
+          email: `rl-${i}-${Date.now()}@royalvibe.test`,
+          password: 'secret-123',
+          organizationName: 'RL Org',
+        });
         expect(res.status).toBe(403);
         expect(res.body.code).toBe('REGISTRATION_DISABLED');
       }
@@ -2056,7 +2055,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       moduleFixture.get(getModelToken(OrganizationMembership.name));
 
     const registerOwner = (body: Record<string, unknown>) =>
-      request(app.getHttpServer()).post('/auth/register').send(body);
+      postRegister(app, body);
 
     const validBody = (email: string) => ({
       ...OWNER_TERMS,
@@ -2090,30 +2089,12 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
       const email = `onboard-ok-${Date.now()}@royalvibe.test`;
       const res = await registerOwner(validBody(email));
-      expect(res.status).toBe(201);
-
-      // Réponse exacte, sans donnée sensible ni token :
-      const body = res.body as Record<string, unknown>;
-      expect(Object.keys(body).sort()).toEqual([
-        'emailVerification',
-        'organization',
-        'user',
-      ]);
-      // 1-13A : lien de vérification envoyé après le commit.
-      expect(body.emailVerification).toEqual({ status: 'sent' });
-      expect(Object.keys(body.user as object).sort()).toEqual([
-        '_id',
-        'email',
-        'name',
-      ]);
-      expect(Object.keys(body.organization as object).sort()).toEqual([
-        '_id',
-        'currency',
-        'name',
-        'slug',
-        'status',
-      ]);
+      // 1-18E : 202 et corps neutre exact, sans identifiant ni jeton.
+      expect(res.status).toBe(202);
+      expect(res.body).toEqual({ message: REGISTRATION_ACCEPTED_MESSAGE });
+      expect(res.headers['cache-control']).toBe('no-store');
       const flat = JSON.stringify(res.body);
+      expect(flat).not.toContain('_id');
       expect(flat).not.toContain('access_token');
       expect(flat).not.toContain('password');
       expect(flat).not.toContain('admin');
@@ -2126,7 +2107,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       expect(userDoc!.role).toBe(UserRole.ADMIN);
       expect(await users().countDocuments({ email })).toBe(1);
 
-      const orgId = res.body.organization._id as string;
+      const orgId = res.owner!.organization._id;
       expect(
         await orgs().countDocuments({ _id: new Types.ObjectId(orgId) }),
       ).toBe(1);
@@ -2137,9 +2118,9 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
           status: 'active',
         }),
       ).toBe(1);
-      expect(res.body.organization.currency).toBe('XAF');
-      expect(res.body.organization.status).toBe('active');
-      expect(res.body.organization.slug).toMatch(/^[0-9a-z-]{1,80}$/);
+      expect(res.owner!.organization.currency).toBe('XAF');
+      expect(res.owner!.organization.status).toBe('active');
+      expect(res.owner!.organization.slug).toMatch(/^[0-9a-z-]{1,80}$/);
     });
 
     it('login suivant : org unique → sélection automatique + JWT { sub, orgId } correct', async () => {
@@ -2147,7 +2128,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       const email = `onboard-login-${Date.now()}@royalvibe.test`;
       const password = 'owner-e2e-pw-!1x';
       const reg = await registerOwner({ ...validBody(email), password });
-      expect(reg.status).toBe(201);
+      expect(reg.status).toBe(202);
 
       const loginRes = await request(app.getHttpServer())
         .post('/auth/login')
@@ -2155,7 +2136,7 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       expect(loginRes.status).toBe(201);
       expect(typeof loginRes.body.access_token).toBe('string');
       const payload = jwtService.decode(loginRes.body.access_token as string);
-      expect(String(payload.orgId)).toBe(reg.body.organization._id);
+      expect(String(payload.orgId)).toBe(reg.owner!.organization._id);
     });
 
     it("erreur de création d'Organization → rollback complet (User jamais persisté)", async () => {
@@ -2221,22 +2202,21 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       expect(await orgs().countDocuments()).toBe(orgsBefore);
     });
 
-    it('email concurrent identique : exactement une réussite, aucun doublon ni écriture partielle', async () => {
+    it('email concurrent identique (1-18E) : une seule création, réponses neutres identiques, aucun orphelin', async () => {
       process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
       const email = `onboard-race-${Date.now()}@royalvibe.test`;
+      const organizationName = `Race ${Date.now() % 1_000_000}`;
       const [a, b] = await Promise.all([
-        registerOwner(validBody(email)),
-        registerOwner(validBody(email)),
+        registerOwner({ ...validBody(email), organizationName }),
+        registerOwner({ ...validBody(email), organizationName }),
       ]);
-      const statuses = [a.status, b.status].sort();
-      expect(statuses).toEqual([201, 400]);
+      expect([a.status, b.status]).toEqual([202, 202]);
+      expect(a.body).toEqual(b.body);
+      expect(a.body).toEqual({ message: REGISTRATION_ACCEPTED_MESSAGE });
       expect(await users().countDocuments({ email })).toBe(1);
-
-      const winner = a.status === 201 ? a : b;
-      const orgId = winner.body.organization._id as string;
-      expect(
-        await orgs().countDocuments({ _id: new Types.ObjectId(orgId) }),
-      ).toBe(1);
+      // Transaction perdante annulée : une seule organisation, une membership.
+      expect(await orgs().countDocuments({ name: organizationName })).toBe(1);
+      const orgId = a.owner!.organization._id;
       expect(
         await memberships().countDocuments({
           organizationId: new Types.ObjectId(orgId),
@@ -2256,20 +2236,21 @@ describe('App (e2e — MongoDB éphémère totalement isolée)', () => {
       expect(await users().countDocuments()).toBe(before);
     });
 
-    it('seconde exécution avec le même email après succès → conflit stable, premier triplet intact', async () => {
+    it('seconde exécution avec le même email (1-18E) → même 202 neutre, premier triplet intact', async () => {
       process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
       const email = `onboard-dup-${Date.now()}@royalvibe.test`;
       const first = await registerOwner(validBody(email));
-      expect(first.status).toBe(201);
+      expect(first.status).toBe(202);
 
       const second = await registerOwner({
         ...validBody(email),
         organizationName: 'Second Attempt Org',
       });
-      expect(second.status).toBe(400);
+      expect(second.status).toBe(202);
+      expect(second.body).toEqual(first.body);
 
       expect(await users().countDocuments({ email })).toBe(1);
-      const orgId = first.body.organization._id as string;
+      const orgId = first.owner!.organization._id;
       expect(
         await orgs().countDocuments({ _id: new Types.ObjectId(orgId) }),
       ).toBe(1);

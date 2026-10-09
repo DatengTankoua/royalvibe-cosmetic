@@ -53,6 +53,8 @@ import {
 import { createInvitedAccount } from './e2e/invitation-acceptance-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
+import { postRegister } from './e2e/registration-fixtures';
+
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
 
@@ -106,17 +108,15 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
     clearThrottle();
     sequenceId += 1;
     const email = `${label}-${sequenceId}-14b@subs.test`;
-    const reg = await request(app.getHttpServer())
-      .post('/auth/register')
-      .send({
-        ...OWNER_TERMS,
-        name: 'Owner',
-        email,
-        password: PASSWORD,
-        organizationName: `Org ${sequenceId}`,
-      });
-    expect(reg.status).toBe(201);
-    const orgId = reg.body.organization._id as string;
+    const reg = await postRegister(app, {
+      ...OWNER_TERMS,
+      name: 'Owner',
+      email,
+      password: PASSWORD,
+      organizationName: `Org ${sequenceId}`,
+    });
+    expect(reg.status).toBe(202);
+    const orgId = reg.owner!.organization._id;
     const token = await login(email);
     return { email, orgId, token };
   }
@@ -380,15 +380,13 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
           : originalCreate(docs, opts)) as unknown as typeof periodModel.create;
       let res: request.Response;
       try {
-        res = await request(app.getHttpServer())
-          .post('/auth/register')
-          .send({
-            ...OWNER_TERMS,
-            name: 'Rollback',
-            email,
-            password: PASSWORD,
-            organizationName: 'Rollback Org',
-          });
+        res = await postRegister(app, {
+          ...OWNER_TERMS,
+          name: 'Rollback',
+          email,
+          password: PASSWORD,
+          organizationName: 'Rollback Org',
+        });
       } finally {
         periodModel.create =
           originalCreate as unknown as typeof periodModel.create;
@@ -465,17 +463,15 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
         clockNow = T0;
         clearThrottle();
         const email = `late-verify-${Date.now()}@subs.test`;
-        const reg = await request(app.getHttpServer())
-          .post('/auth/register')
-          .send({
-            ...OWNER_TERMS,
-            name: 'Late',
-            email,
-            password: PASSWORD,
-            organizationName: 'Late Verify',
-          });
-        expect(reg.status).toBe(201);
-        const orgId = reg.body.organization._id as string;
+        const reg = await postRegister(app, {
+          ...OWNER_TERMS,
+          name: 'Late',
+          email,
+          password: PASSWORD,
+          organizationName: 'Late Verify',
+        });
+        expect(reg.status).toBe(202);
+        const orgId = reg.owner!.organization._id;
 
         clockNow = new Date(T0.getTime() + 2 * DAY_MS);
         const [sent] = emailSender.sentTo(email).slice(-1);
