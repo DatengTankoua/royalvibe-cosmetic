@@ -22,6 +22,7 @@ import { UserRole } from '../users/schemas/user.schema';
 import { SocketRegistryService } from './socket-registry.service';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { S3Service } from '../s3/s3.service';
+import { StorageQuotaService } from '../storage-quota/storage-quota.service';
 import { ConfigService } from '@nestjs/config';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
@@ -72,6 +73,15 @@ type RegistryMock = {
 };
 let lastRegistry: RegistryMock;
 
+/**
+ * 1-17B — comptabilisation simulée (le vrai service est couvert par
+ * `storage-quota.service.spec` et l'e2e `storage-quota`).
+ */
+let storageQuota = {
+  attach: jest.fn().mockResolvedValue(undefined),
+  detach: jest.fn().mockResolvedValue(undefined),
+};
+
 describe('OrganizationsService.resolveActiveContext', () => {
   let service: OrganizationsService;
   let membershipModel: { findOne: jest.Mock };
@@ -109,6 +119,7 @@ describe('OrganizationsService.resolveActiveContext', () => {
           },
         },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: StorageQuotaService, useValue: storageQuota },
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
@@ -451,6 +462,7 @@ describe('OrganizationsService.listActiveOrganizations', () => {
           },
         },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: StorageQuotaService, useValue: storageQuota },
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
@@ -789,6 +801,7 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
           },
         },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: StorageQuotaService, useValue: storageQuota },
         { provide: ConfigService, useValue: invitationConfig },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
@@ -1448,6 +1461,7 @@ describe('OrganizationsService.acceptInvitation (1-6B.2)', () => {
           },
         },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: StorageQuotaService, useValue: storageQuota },
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
@@ -1784,6 +1798,7 @@ describe('OrganizationsService.listMembers (1-7C)', () => {
           },
         },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: StorageQuotaService, useValue: storageQuota },
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
@@ -1852,6 +1867,7 @@ describe('OrganizationsService.updateMembership (1-7C)', () => {
         { provide: getConnectionToken(), useValue: fixture.connection },
         { provide: SocketRegistryService, useValue: socketRegistry },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: StorageQuotaService, useValue: storageQuota },
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
@@ -2106,6 +2122,7 @@ describe('OrganizationsService.transferOwnership (1-7C)', () => {
         { provide: getConnectionToken(), useValue: fixture.connection },
         { provide: SocketRegistryService, useValue: socketRegistry },
         { provide: S3Service, useValue: s3ServiceStub },
+        { provide: StorageQuotaService, useValue: storageQuota },
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
@@ -2252,8 +2269,10 @@ describe('OrganizationsService — branding (1-8A)', () => {
   const ORG_ID_18A = '778899001122334455667788';
 
   let service: OrganizationsService;
-  let organizationModel: { findOne: jest.Mock };
+  let organizationModel: { findOne: jest.Mock; updateOne: jest.Mock };
   let s3Service: { signedReadUrl: jest.Mock };
+  let brandingSession: { withTransaction: jest.Mock; endSession: jest.Mock };
+  let updateResult: { matchedCount: number };
   const STORAGE = 'r2/stockmaster-prod';
   const PREFIX = `organizations/${ORG_ID_18A}/branding`;
   const OLD = { key: `${PREFIX}/old.png`, storage: STORAGE };
@@ -2276,8 +2295,18 @@ describe('OrganizationsService — branding (1-8A)', () => {
   }
 
   async function build(organization: unknown) {
+    updateResult = { matchedCount: 1 };
     organizationModel = {
       findOne: jest.fn(() => ({ exec: () => Promise.resolve(organization) })),
+      updateOne: jest.fn(() => ({ exec: () => Promise.resolve(updateResult) })),
+    };
+    brandingSession = {
+      withTransaction: jest.fn((fn: () => Promise<void>) => fn()),
+      endSession: jest.fn().mockResolvedValue(undefined),
+    };
+    storageQuota = {
+      attach: jest.fn().mockResolvedValue(undefined),
+      detach: jest.fn().mockResolvedValue(undefined),
     };
     s3Service = {
       // Signature simulée : seule une référence du stockage courant reçoit
@@ -2299,7 +2328,10 @@ describe('OrganizationsService — branding (1-8A)', () => {
         { provide: getModelToken(OrganizationMembership.name), useValue: {} },
         { provide: getModelToken(OrganizationInvitation.name), useValue: {} },
         { provide: UsersService, useValue: {} },
-        { provide: getConnectionToken(), useValue: {} },
+        {
+          provide: getConnectionToken(),
+          useValue: { startSession: jest.fn(() => brandingSession) },
+        },
         {
           provide: SocketRegistryService,
           useValue: {
@@ -2308,6 +2340,7 @@ describe('OrganizationsService — branding (1-8A)', () => {
           },
         },
         { provide: S3Service, useValue: s3Service },
+        { provide: StorageQuotaService, useValue: storageQuota },
         { provide: ConfigService, useValue: configServiceStub },
         // 1-14B : l'essai n'est exercé qu'en e2e (vraie transaction).
         { provide: SubscriptionsService, useValue: {} },
@@ -2415,23 +2448,52 @@ describe('OrganizationsService — branding (1-8A)', () => {
     it('nouveau logo : clé ET stockage appliqués, ancien logo retourné pour nettoyage APRÈS ce commit', async () => {
       const doc = orgDoc({ logoKey: OLD.key, logoStorage: STORAGE });
       await build(doc);
-      const result = await service.updateBranding(ORG_ID_18A, {}, NEW);
+      const result = await service.updateBranding(ORG_ID_18A, {}, NEW as never);
       expect(doc.logoKey).toBe(NEW.key);
       expect(doc.logoStorage).toBe(STORAGE);
       expect(result.previousLogo).toEqual(OLD);
       expect(result.organization.logoUrl).toBe(`https://signed/${NEW.key}`);
+      // 1-17B : `$set` explicite conditionné au logo LU, rattachement du
+      // nouveau et détachement de l'ancien dans la MÊME transaction.
+      expect(doc.save).not.toHaveBeenCalled();
+      expect(organizationModel.updateOne).toHaveBeenCalledWith(
+        { _id: new Types.ObjectId(ORG_ID_18A), logoKey: OLD.key },
+        { $set: { logoKey: NEW.key, logoStorage: STORAGE } },
+        { session: brandingSession, runValidators: true },
+      );
+      expect(storageQuota.attach).toHaveBeenCalledWith(NEW, brandingSession);
+      expect(storageQuota.detach).toHaveBeenCalledWith(
+        ORG_ID_18A,
+        OLD,
+        brandingSession,
+      );
+    });
+
+    it('1-17B nouveau logo : logo modifié entre-temps → 409 LOGO_CONFLICT, rien rattaché ni signalé', async () => {
+      const doc = orgDoc({ logoKey: OLD.key, logoStorage: STORAGE });
+      await build(doc);
+      updateResult.matchedCount = 0;
+      const error = await service
+        .updateBranding(ORG_ID_18A, {}, NEW as never)
+        .catch((e: unknown) => e);
+      expect((error as { getResponse(): unknown }).getResponse()).toMatchObject(
+        { code: 'LOGO_CONFLICT' },
+      );
+      expect(storageQuota.attach).not.toHaveBeenCalled();
+      expect(storageQuota.detach).not.toHaveBeenCalled();
+      expect(lastRegistry.signalOrganization).not.toHaveBeenCalled();
     });
 
     it('ancien logo sans stockage connu : retourné avec storage null (jamais supprimé à l’aveugle)', async () => {
       const doc = orgDoc({ logoKey: OLD.key });
       await build(doc);
-      const result = await service.updateBranding(ORG_ID_18A, {}, NEW);
+      const result = await service.updateBranding(ORG_ID_18A, {}, NEW as never);
       expect(result.previousLogo).toEqual({ key: OLD.key, storage: null });
     });
 
     it('nouveau logo fourni sans logo préexistant : previousLogo null (rien à nettoyer)', async () => {
       await build(orgDoc());
-      const result = await service.updateBranding(ORG_ID_18A, {}, NEW);
+      const result = await service.updateBranding(ORG_ID_18A, {}, NEW as never);
       expect(result.previousLogo).toBeNull();
     });
 
@@ -2476,7 +2538,13 @@ describe('OrganizationsService — branding (1-8A)', () => {
       const result = await service.removeLogo(ORG_ID_18A);
       expect(doc.logoKey).toBeNull();
       expect(doc.logoStorage).toBeNull();
-      expect(doc.save).toHaveBeenCalledTimes(1);
+      // 1-17B : écriture conditionnée + détachement dans la transaction.
+      expect(organizationModel.updateOne).toHaveBeenCalledTimes(1);
+      expect(storageQuota.detach).toHaveBeenCalledWith(
+        ORG_ID_18A,
+        OLD,
+        brandingSession,
+      );
       expect(result.previousLogo).toEqual(OLD);
       expect(result.organization.logoUrl).toBeNull();
     });
@@ -2486,6 +2554,7 @@ describe('OrganizationsService — branding (1-8A)', () => {
       await build(doc);
       const result = await service.removeLogo(ORG_ID_18A);
       expect(doc.save).not.toHaveBeenCalled();
+      expect(organizationModel.updateOne).not.toHaveBeenCalled();
       expect(result.previousLogo).toBeNull();
       // 1-15C : rien n'a changé → aucun signal.
       expect(lastRegistry.signalOrganization).not.toHaveBeenCalled();
@@ -2504,7 +2573,9 @@ describe('OrganizationsService — branding (1-8A)', () => {
       );
       expect(
         lastRegistry.signalOrganization.mock.invocationCallOrder[0],
-      ).toBeGreaterThan(doc.save.mock.invocationCallOrder[0]);
+      ).toBeGreaterThan(
+        organizationModel.updateOne.mock.invocationCallOrder[0],
+      );
     });
 
     it('organisation absente → refus uniforme', async () => {

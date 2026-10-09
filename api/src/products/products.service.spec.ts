@@ -10,6 +10,44 @@ import { S3Service } from '../s3/s3.service';
 import { EventsGateway } from '../events/events.gateway';
 import { AuditService } from '../audit/audit.service';
 import { PurgedStockAdjustment } from './schemas/purged-stock-adjustment.schema';
+import { StorageQuotaService } from '../storage-quota/storage-quota.service';
+
+/**
+ * 1-17B — comptabilisation simulée : rattachement/détachement sans effet,
+ * suppression APRÈS l'écriture déléguée au stockage simulé (mêmes
+ * assertions qu'avant sur `deleteStoredObject`). Le vrai service est couvert
+ * par `storage-quota.service.spec` et l'e2e `storage-quota`.
+ */
+function storageQuotaStub(s3: { deleteStoredObject?: jest.Mock }) {
+  return {
+    attach: jest.fn().mockResolvedValue(undefined),
+    detach: jest.fn().mockResolvedValue(undefined),
+    deleteDetached: jest.fn(
+      (_org: string, ref: unknown, prefix: string): Promise<unknown> =>
+        s3.deleteStoredObject!(ref, prefix) as Promise<unknown>,
+    ),
+    discard: jest.fn().mockResolvedValue(undefined),
+  };
+}
+
+/**
+ * 1-17B — le service crée le produit DANS une transaction
+ * (`create([doc], { session })`) ; les tests continuent de piloter et
+ * d'inspecter `productModel.create(doc)`.
+ */
+function withArrayCreate<T extends object>(model: T): T {
+  return new Proxy(model, {
+    get(target, prop, receiver) {
+      if (prop !== 'create' || !('create' in target)) {
+        return Reflect.get(target, prop, receiver) as unknown;
+      }
+      const create = (target as { create: jest.Mock }).create;
+      return async (docs: unknown[], options: unknown) => [
+        await (create(docs[0], options) as Promise<unknown>),
+      ];
+    },
+  });
+}
 
 const PRODUCT_OBJECT_ID = '112233445566778899001122';
 const UNKNOWN_PRODUCT_ID = '6300000000000000000000f1';
@@ -42,7 +80,7 @@ function makeConnection() {
 }
 
 /**
- * 1-15E — équivalent de `Document.getChanges()` pour les documents simulés :
+ * 1-15E — équivalent de `Document.$getChanges()` pour les documents simulés :
  * `$set` des champs modifiés depuis la création du mock (stock compris, pour
  * qu'une écriture absolue du stock soit visible).
  */
@@ -60,7 +98,7 @@ const TRACKED_PRODUCT_FIELDS = [
 ];
 function trackChanges(doc: Record<string, unknown>) {
   const initial = { ...doc };
-  doc.getChanges = jest.fn(() => {
+  doc.$getChanges = jest.fn(() => {
     const $set: Record<string, unknown> = {};
     for (const key of TRACKED_PRODUCT_FIELDS) {
       if (doc[key] !== initial[key]) $set[key] = doc[key];
@@ -106,7 +144,10 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ProductsService,
-        { provide: getModelToken(Product.name), useValue: productModel },
+        {
+          provide: getModelToken(Product.name),
+          useValue: withArrayCreate(productModel),
+        },
         {
           provide: getModelToken(PurgedStockAdjustment.name),
           useValue: {},
@@ -117,6 +158,10 @@ describe('ProductsService.decrementStock — décrémentation atomique (0B.7B)',
           useValue: baseOpts.sectionModel,
         },
         { provide: S3Service, useValue: baseOpts.s3Service },
+        {
+          provide: StorageQuotaService,
+          useValue: storageQuotaStub(baseOpts.s3Service),
+        },
         { provide: EventsGateway, useValue: baseOpts.eventsGateway },
         { provide: AuditService, useValue: baseOpts.auditService },
         {
@@ -273,7 +318,10 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     findOne: jest.Mock;
     findOneAndUpdate: jest.Mock;
     findOneAndDelete: jest.Mock;
+    exists: jest.Mock;
   };
+  let existsChain: { exec: jest.Mock };
+  let storageQuota: ReturnType<typeof storageQuotaStub>;
   let sectionModel: { findOne: jest.Mock; countDocuments: jest.Mock };
   let saleModel: {
     find: jest.Mock;
@@ -364,7 +412,9 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       findOne: jest.fn(() => productOneChain),
       findOneAndUpdate: jest.fn(() => updateChain),
       findOneAndDelete: jest.fn(() => deleteChain),
+      exists: jest.fn(() => existsChain),
     };
+    existsChain = { exec: jest.fn().mockResolvedValue(null) };
     sectionModel = {
       findOne: jest.fn(() => sectionOneChain),
       countDocuments: jest.fn(() => countChain),
@@ -401,7 +451,10 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ProductsService,
-        { provide: getModelToken(Product.name), useValue: productModel },
+        {
+          provide: getModelToken(Product.name),
+          useValue: withArrayCreate(productModel),
+        },
         {
           provide: getModelToken(PurgedStockAdjustment.name),
           useValue: stockAdjustmentModel,
@@ -409,6 +462,10 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
         { provide: getModelToken(Sale.name), useValue: saleModel },
         { provide: getModelToken(Section.name), useValue: sectionModel },
         { provide: S3Service, useValue: s3Service },
+        {
+          provide: StorageQuotaService,
+          useValue: (storageQuota = storageQuotaStub(s3Service)),
+        },
         { provide: EventsGateway, useValue: eventsGateway },
         { provide: AuditService, useValue: auditService },
         { provide: getConnectionToken(), useValue: tx.connection },
@@ -1046,6 +1103,83 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     expect(s3Service.deleteStoredObject).not.toHaveBeenCalled();
   });
 
+  it('1-17B update avec photo : écriture conditionnée à la photo lue, rattachement et détachement dans la MÊME transaction, suppression après', async () => {
+    await build();
+    const doc = productDoc();
+    productOneChain.exec.mockResolvedValue(doc);
+    updateChain.exec.mockResolvedValue(
+      productDoc({ imageKey: IMAGE.key, imageStorage: STORAGE }),
+    );
+    const staged = { ...IMAGE, id: 'x', organizationId: ORG_A };
+    await service.update(
+      ORG_A,
+      PRODUCT_ID,
+      {},
+      'actor',
+      staged as unknown as Parameters<ProductsService['update']>[4],
+    );
+    const [filter, , options] = productModel.findOneAndUpdate.mock.calls[0] as [
+      Record<string, unknown>,
+      unknown,
+      Record<string, unknown>,
+    ];
+    expect(filter.imageKey).toBe(`${PREFIX_A}/p.jpg`);
+    expect(options.session).toBe(tx.session);
+    expect(storageQuota.attach).toHaveBeenCalledWith(staged, tx.session);
+    expect(storageQuota.detach).toHaveBeenCalledWith(
+      ORG_A,
+      { key: `${PREFIX_A}/p.jpg`, storage: STORAGE },
+      tx.session,
+    );
+    expect(
+      storageQuota.deleteDetached.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(tx.session.withTransaction.mock.invocationCallOrder[0]);
+  });
+
+  it('1-17B update avec photo : photo remplacée entre-temps → 409 PRODUCT_IMAGE_CONFLICT, rien rattaché ni supprimé', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(productDoc());
+    updateChain.exec.mockResolvedValue(null);
+    existsChain.exec.mockResolvedValue({ _id: PRODUCT_ID });
+    const err = await service
+      .update(ORG_A, PRODUCT_ID, {}, 'actor', IMAGE as never)
+      .catch((e: unknown) => e);
+    expect((err as { getStatus(): number }).getStatus()).toBe(409);
+    expect((err as { getResponse(): unknown }).getResponse()).toMatchObject({
+      code: 'PRODUCT_IMAGE_CONFLICT',
+    });
+    expect(storageQuota.attach).not.toHaveBeenCalled();
+    expect(storageQuota.detach).not.toHaveBeenCalled();
+    expect(s3Service.deleteStoredObject).not.toHaveBeenCalled();
+  });
+
+  it('1-17B create : produit créé et photo rattachée dans la MÊME transaction', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+    sectionOneChain.exec.mockResolvedValue(sectionDoc());
+    countChain.exec.mockResolvedValue(0);
+    productModel.create.mockResolvedValue(productDoc());
+    await service.create(ORG_A, DTO, IMAGE as never, 'actor');
+    expect(productModel.create.mock.calls[0][1]).toEqual({
+      session: tx.session,
+    });
+    expect(storageQuota.attach).toHaveBeenCalledWith(IMAGE, tx.session);
+  });
+
+  it('1-17B create : rattachement refusé → erreur propagée, aucune émission', async () => {
+    await build();
+    productOneChain.exec.mockResolvedValue(null);
+    sectionOneChain.exec.mockResolvedValue(sectionDoc());
+    countChain.exec.mockResolvedValue(0);
+    productModel.create.mockResolvedValue(productDoc());
+    storageQuota.attach.mockRejectedValueOnce(new Error('interrompu'));
+    await expect(
+      service.create(ORG_A, DTO, IMAGE as never, 'actor'),
+    ).rejects.toThrow('interrompu');
+    expect(eventsGateway.emitToOrganization).not.toHaveBeenCalled();
+    expect(auditService.log).not.toHaveBeenCalled();
+  });
+
   it('1-15E update : aucune modification → aucune écriture', async () => {
     await build();
     const doc = productDoc();
@@ -1220,6 +1354,18 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
     expect(
       s3Service.deleteStoredObject.mock.invocationCallOrder[0],
     ).toBeGreaterThan(tx.session.endSession.mock.invocationCallOrder[0]);
+    // 1-17B : fichier détaché DANS la transaction de purge (toujours
+    // compté), libéré par `deleteDetached` après la suppression.
+    expect(storageQuota.detach).toHaveBeenCalledWith(
+      ORG_A,
+      { key: `${PREFIX_A}/p.jpg`, storage: STORAGE },
+      tx.session,
+    );
+    expect(storageQuota.deleteDetached).toHaveBeenCalledWith(
+      ORG_A,
+      { key: `${PREFIX_A}/p.jpg`, storage: STORAGE },
+      PREFIX_A,
+    );
   });
 
   it('permanentDelete : échec de suppression du fichier → produit purgé, `failed` renvoyé', async () => {
@@ -1462,7 +1608,10 @@ describe('ProductsService — appelants AuditService.log portent la tenant (1-4C
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ProductsService,
-        { provide: getModelToken(Product.name), useValue: productModel },
+        {
+          provide: getModelToken(Product.name),
+          useValue: withArrayCreate(productModel),
+        },
         {
           provide: getModelToken(PurgedStockAdjustment.name),
           useValue: {},
@@ -1482,6 +1631,7 @@ describe('ProductsService — appelants AuditService.log portent la tenant (1-4C
             deleteStoredObject: jest.fn(),
           },
         },
+        { provide: StorageQuotaService, useValue: storageQuotaStub({}) },
         {
           provide: EventsGateway,
           useValue: { emitToOrganization: jest.fn() },
@@ -1562,7 +1712,10 @@ describe('ProductsService.adjustStock — tenant et session (1-4C.2)', () => {
     const module = await Test.createTestingModule({
       providers: [
         ProductsService,
-        { provide: getModelToken(Product.name), useValue: productModel },
+        {
+          provide: getModelToken(Product.name),
+          useValue: withArrayCreate(productModel),
+        },
         {
           provide: getModelToken(PurgedStockAdjustment.name),
           useValue: {},
@@ -1570,6 +1723,10 @@ describe('ProductsService.adjustStock — tenant et session (1-4C.2)', () => {
         { provide: getModelToken(Sale.name), useValue: {} },
         { provide: getModelToken(Section.name), useValue: {} },
         { provide: S3Service, useValue: {} },
+        {
+          provide: StorageQuotaService,
+          useValue: storageQuotaStub({}),
+        },
         { provide: EventsGateway, useValue: {} },
         { provide: AuditService, useValue: {} },
         {

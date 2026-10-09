@@ -19,6 +19,7 @@ import { PushModule } from './push/push.module';
 import { SupportModule } from './support/support.module';
 import { ReportsModule } from './reports/reports.module';
 import { LegalModule } from './legal/legal.module';
+import { StorageQuotaModule } from './storage-quota/storage-quota.module';
 
 @Module({
   imports: [
@@ -51,6 +52,8 @@ import { LegalModule } from './legal/legal.module';
     // 1-16D : historique mensuel exportable (Excel, PDF), lecture seule.
     ReportsModule,
     LegalModule,
+    // 1-17B : quotas de stockage par organisation.
+    StorageQuotaModule,
   ],
   controllers: [AppController],
   providers: [AppService],

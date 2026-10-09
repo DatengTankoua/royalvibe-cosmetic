@@ -157,6 +157,153 @@ describe('S3Service (R2 privé)', () => {
       ).rejects.toThrow();
       expect(mockSend).not.toHaveBeenCalled();
     });
+
+    it('1-17B : clé réservée imposée (sous le préfixe) et annulation transmise au client', async () => {
+      const service = createService();
+      const key = service.newObjectKey(PRODUCTS_A, 'jpg');
+      expect(key).toMatch(new RegExp(`^${PRODUCTS_A}/[0-9a-f-]{36}\\.jpg$`));
+      const controller = new AbortController();
+      const ref = await service.uploadValidatedImage(
+        Buffer.from('x'),
+        PRODUCTS_A,
+        IMAGE,
+        { key, abortSignal: controller.signal },
+      );
+      expect(ref).toEqual({ key, storage: STORAGE });
+      expect((mockSend.mock.calls[0][0] as PutObjectCommand).input.Key).toBe(
+        key,
+      );
+      expect(mockSend.mock.calls[0][1]).toEqual({
+        abortSignal: controller.signal,
+      });
+    });
+
+    it('1-17B : clé imposée hors du préfixe exact → refus, aucun envoi', async () => {
+      await expect(
+        createService().uploadValidatedImage(
+          Buffer.from('x'),
+          PRODUCTS_A,
+          IMAGE,
+          {
+            key: `${PRODUCTS_B}/x.jpg`,
+          },
+        ),
+      ).rejects.toThrow();
+      await expect(
+        createService().uploadValidatedImage(
+          Buffer.from('x'),
+          PRODUCTS_A,
+          IMAGE,
+          {
+            key: `${PRODUCTS_A}extra/x.jpg`,
+          },
+        ),
+      ).rejects.toThrow();
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('1-17B listStoredObjects — inventaire sous organizations/', () => {
+    it('page du stockage courant : clé, taille, date ; continuation transmise', async () => {
+      const date = new Date('2026-10-01T00:00:00Z');
+      mockSend.mockResolvedValueOnce({
+        Contents: [
+          { Key: `${PRODUCTS_A}/a.jpg`, Size: 12, LastModified: date },
+        ],
+        IsTruncated: true,
+        NextContinuationToken: 'tok',
+      });
+      const page = await createService().listStoredObjects(
+        'organizations/',
+        'prev',
+      );
+      expect(page).toEqual({
+        objects: [
+          { key: `${PRODUCTS_A}/a.jpg`, bytes: 12, lastModified: date },
+        ],
+        next: 'tok',
+      });
+      const command = mockSend.mock.calls[0][0] as {
+        constructor: { name: string };
+        input: Record<string, unknown>;
+      };
+      expect(command.constructor.name).toBe('ListObjectsV2Command');
+      expect(command.input).toMatchObject({
+        Bucket: 'stockmaster-prod',
+        Prefix: 'organizations/',
+        ContinuationToken: 'prev',
+      });
+    });
+
+    it('préfixe hors organizations/ (racine du bucket) → refus, aucun appel', async () => {
+      await expect(createService().listStoredObjects('')).rejects.toThrow();
+      await expect(
+        createService().listStoredObjects('autre/'),
+      ).rejects.toThrow();
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('taille absente → échec (jamais une taille supposée)', async () => {
+      mockSend.mockResolvedValueOnce({
+        Contents: [{ Key: `${PRODUCTS_A}/a` }],
+      });
+      await expect(
+        createService().listStoredObjects('organizations/'),
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('1-17B headStoredObject — taille vérifiée sans téléchargement', () => {
+    const REF = { key: `${PRODUCTS_A}/a.jpg`, storage: STORAGE };
+
+    it('présent : Content-Length du stockage (HeadObject, jamais GetObject)', async () => {
+      mockSend.mockResolvedValueOnce({ ContentLength: 1234 });
+      await expect(
+        createService().headStoredObject(REF, PRODUCTS_A),
+      ).resolves.toEqual({ state: 'present', bytes: 1234 });
+      expect(mockSend.mock.calls[0][0].constructor.name).toBe(
+        'HeadObjectCommand',
+      );
+    });
+
+    it('404 : absence confirmée', async () => {
+      mockSend.mockRejectedValueOnce(
+        Object.assign(new Error('NotFound'), {
+          name: 'NotFound',
+          $metadata: { httpStatusCode: 404 },
+        }),
+      );
+      await expect(
+        createService().headStoredObject(REF, PRODUCTS_A),
+      ).resolves.toEqual({ state: 'absent' });
+    });
+
+    it('erreur réseau/droits ou taille absente : inconnue (jamais 0 ni absent)', async () => {
+      mockSend.mockRejectedValueOnce(
+        Object.assign(new Error('denied'), {
+          $metadata: { httpStatusCode: 403 },
+        }),
+      );
+      mockSend.mockResolvedValueOnce({});
+      const service = createService();
+      await expect(service.headStoredObject(REF, PRODUCTS_A)).resolves.toEqual({
+        state: 'unknown',
+      });
+      await expect(service.headStoredObject(REF, PRODUCTS_A)).resolves.toEqual({
+        state: 'unknown',
+      });
+    });
+
+    it('autre stockage ou autre préfixe : non consulté', async () => {
+      const service = createService();
+      await expect(
+        service.headStoredObject({ ...REF, storage: 'autre/b' }, PRODUCTS_A),
+      ).resolves.toEqual({ state: 'retained' });
+      await expect(service.headStoredObject(REF, PRODUCTS_B)).resolves.toEqual({
+        state: 'retained',
+      });
+      expect(mockSend).not.toHaveBeenCalled();
+    });
   });
 
   describe('signedReadUrl — lecture privée', () => {

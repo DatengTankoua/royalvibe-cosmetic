@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useT } from "next-i18next/client";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
+import { STORAGE_USAGE_PERMISSIONS } from "@/lib/organization-permissions";
 
 // 1-16G : libellés dans `organization` (`tabs.*`).
 const TABS = [
@@ -24,6 +25,13 @@ const TABS = [
     href: "/app/organization/subscription",
     key: "subscription" as const,
     ownerOnly: true,
+  },
+  // 1-17B : occupation du stockage — l'un des droits qui créent ou
+  // libèrent des fichiers suffit (l'API revérifie).
+  {
+    href: "/app/organization/storage",
+    key: "storage" as const,
+    anyPermission: STORAGE_USAGE_PERMISSIONS,
   },
   { href: "/app/organization/offline-data", key: "offline" as const },
   // 1-16A : réglages de CET appareil, tout membre actif (les catégories
@@ -55,7 +63,11 @@ export default function OrganizationLayout({
   const isOwner = authContext?.role === "owner";
   const tabs = TABS.filter(
     (tab) =>
-      (!tab.permission || effective.includes(tab.permission)) &&
+      (!("permission" in tab) ||
+        !tab.permission ||
+        effective.includes(tab.permission)) &&
+      (!("anyPermission" in tab) ||
+        (tab.anyPermission?.some((p) => effective.includes(p)) ?? false)) &&
       (!("ownerOnly" in tab) || isOwner),
   );
 

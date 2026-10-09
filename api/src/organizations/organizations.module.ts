@@ -20,6 +20,7 @@ import { OrganizationBrandingController } from './organization-branding.controll
 import { SocketRegistryService } from './socket-registry.service';
 import { UsersModule } from '../users/users.module';
 import { S3Module } from '../s3/s3.module';
+import { StorageQuotaModule } from '../storage-quota/storage-quota.module';
 import { InvitationCreateThrottlerGuard } from '../common/invitation-rate-limiting';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 
@@ -27,6 +28,7 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
   imports: [
     UsersModule,
     S3Module,
+    StorageQuotaModule,
     // 1-14B : essai attribué dans la transaction de création.
     SubscriptionsModule,
     // 1-16C.2 : preuve d'acceptation dans la transaction d'invitation.

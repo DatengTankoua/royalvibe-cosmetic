@@ -47,6 +47,7 @@ const commonEn: Translation<typeof commonFr> = {
     server: "Server error. Try again in a few moments.",
     status: "Error {{status}}.",
     unexpected: "An unexpected error occurred.",
+    uploadInterrupted: "The file upload was interrupted. Try again.",
   },
   converter: {
     title: "EUR ↔ CFA franc converter",

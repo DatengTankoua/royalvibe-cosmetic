@@ -10,12 +10,14 @@ import {
   getApiErrorMessage,
   isNetworkError,
   type ApiProduct,
+  type UpdateProductPayload,
 } from "@/lib/api";
 import { useSocket } from "@/contexts/socket-context";
 import { useSaleInvalidation } from "@/hooks/use-sale-invalidation";
 import { useLiveRefresh } from "@/hooks/use-live-refresh";
 import { useImageRenewal } from "@/hooks/use-image-renewal";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
+import { notifyStorageChanged } from "@/lib/storage-usage";
 
 // 1-12H : les diffusions Socket.IO ne portent que les champs standard ; les
 // champs étendus (selon les permissions) ne viennent que de l'API.
@@ -131,6 +133,8 @@ export function useProducts(sectionId?: string) {
       image: File;
     }) => {
       const p = await createProduct(payload);
+      // 1-17B : photo comptée dans le quota → occupation relue si affichée.
+      notifyStorageChanged();
       // socket also emits product:created; guard against double-insert
       setProducts((prev) =>
         prev.some((x) => x._id === p._id) ? prev : [p, ...prev],
@@ -141,23 +145,17 @@ export function useProducts(sectionId?: string) {
   );
 
   const editProduct = useCallback(
-    async (
-      id: string,
-      payload: {
-        name?: string;
-        purchasePrice?: number;
-        salePrice?: number;
-        additionalStock?: number;
-      },
-    ) => {
-      const p = await updateProduct(id, payload);
+    async (id: string, payload: UpdateProductPayload) => {
+      // 1-17B : `image` facultative (ajout ou remplacement de la photo) ;
+      // `storageCleanup` = sort de l'ancienne photo, jamais stocké en liste.
+      const { storageCleanup, ...p } = await updateProduct(id, payload);
       // socket also emits product:updated; upsert to stay consistent
       setProducts((prev) =>
         prev.some((x) => x._id === id)
           ? prev.map((x) => (x._id === id ? p : x))
           : [p, ...prev],
       );
-      return p;
+      return { ...p, storageCleanup };
     },
     [],
   );

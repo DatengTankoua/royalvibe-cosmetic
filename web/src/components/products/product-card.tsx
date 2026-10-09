@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { useT } from "next-i18next/client";
 import { useFormat } from "@/i18n/use-format";
 import { rich } from "@/i18n/rich";
@@ -12,6 +12,7 @@ import {
   XCircleIcon,
   Trash2Icon,
   PencilIcon,
+  ShoppingCartIcon,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -26,7 +27,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { useIndicativeStock } from "@/contexts/offline-sales-context";
+import {
+  useIndicativeStock,
+  useOfflineSales,
+} from "@/contexts/offline-sales-context";
+import { SaleFormDialog } from "@/components/products/record-sale-dialog";
 import type { ApiProduct } from "@/lib/api";
 import { productInfoItems, type ProductInfoKey } from "@/lib/product-info";
 
@@ -75,6 +80,17 @@ export function ProductCard({
   const StatusIcon = cfg.icon;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmEdit, setConfirmEdit] = useState(false);
+  // 1-17B — « Vendre » : parcours de vente EXISTANT (outbox, en ligne comme
+  // hors connexion), produit présélectionné. Visible seulement si la saisie
+  // de ventes est permise (`sales.record` + accès commercial) ; l'API
+  // revérifie tout. Le formulaire, monté à la première ouverture, reste
+  // monté pour rendre le focus au bouton à la fermeture.
+  const { canRecordSales } = useOfflineSales();
+  const [saleOpen, setSaleOpen] = useState(false);
+  // Clé changée à chaque OUVERTURE : formulaire neuf (prix cible à jour),
+  // jamais démonté à la fermeture.
+  const [saleKey, setSaleKey] = useState(0);
+  const sellButtonRef = useRef<HTMLButtonElement>(null);
   // 1-11C.3 : stock serveur moins ventes locales non confirmées (≥ 0).
   const indicative = useIndicativeStock(
     product._id,
@@ -163,8 +179,38 @@ export function ProductCard({
               )}
             </div>
           )}
+          {canRecordSales && (
+            <Button
+              ref={sellButtonRef}
+              size="sm"
+              className="w-full"
+              disabled={indicative.value === 0}
+              aria-label={t("product.sellLabel", { name: product.name })}
+              onClick={() => {
+                setSaleKey((k) => k + 1);
+                setSaleOpen(true);
+              }}
+            >
+              <ShoppingCartIcon className="mr-1 h-3.5 w-3.5" aria-hidden />
+              {t("product.sell")}
+            </Button>
+          )}
         </CardContent>
       </Card>
+
+      {canRecordSales && saleKey > 0 && (
+        <SaleFormDialog
+          key={saleKey}
+          open={saleOpen}
+          onOpenChange={setSaleOpen}
+          productId={product._id}
+          productName={product.name}
+          targetPrice={product.salePrice}
+          remainingStock={product.remainingQuantity}
+          serverLoadedAt={serverLoadedAt}
+          finalFocus={sellButtonRef}
+        />
+      )}
 
       {/* Confirmation suppression */}
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>

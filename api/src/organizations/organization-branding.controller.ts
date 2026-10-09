@@ -4,7 +4,6 @@ import {
   Controller,
   Delete,
   Get,
-  Logger,
   Patch,
   UploadedFile,
   UseInterceptors,
@@ -14,7 +13,10 @@ import type { ResolvedOrganizationContext } from './organizations.service';
 import { UpdateBrandingDto } from './dto/update-branding.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
-import { S3Service, type StoredObjectRef } from '../s3/s3.service';
+import {
+  StorageQuotaService,
+  type StagedObject,
+} from '../storage-quota/storage-quota.service';
 import { LogoUploadInterceptor } from './logo/logo-upload.interceptor';
 import { validateLogoFile } from './logo/logo-validation';
 
@@ -28,11 +30,9 @@ import { validateLogoFile } from './logo/logo-validation';
  */
 @Controller('organizations/current')
 export class OrganizationBrandingController {
-  private readonly logger = new Logger(OrganizationBrandingController.name);
-
   constructor(
     private readonly organizationsService: OrganizationsService,
-    private readonly s3Service: S3Service,
+    private readonly storageQuota: StorageQuotaService,
   ) {}
 
   @Get()
@@ -42,37 +42,6 @@ export class OrganizationBrandingController {
     return this.organizationsService.getCurrent(
       organizationContext.organizationId,
     );
-  }
-
-  /**
-   * Écriture MongoDB échouée après l'upload : le nouveau logo est supprimé
-   * SEULEMENT s'il n'est pas référencé par l'organisation. Lecture
-   * impossible → objet conservé (orphelin journalisé).
-   */
-  private async discardUnreferencedLogo(
-    organizationId: string,
-    logo: StoredObjectRef,
-  ): Promise<void> {
-    let referenced: boolean;
-    try {
-      referenced = await this.organizationsService.isLogoReferenced(
-        organizationId,
-        logo.key,
-      );
-    } catch {
-      this.logger.warn(`Logo conservé (vérification impossible) : ${logo.key}`);
-      return;
-    }
-    if (referenced) return;
-    const cleanup = await this.s3Service.deleteStoredObject(
-      logo,
-      logoKeyPrefix(organizationId),
-    );
-    if (cleanup !== 'deleted') {
-      this.logger.warn(
-        `Logo non référencé conservé (${cleanup}) : ${logo.key}`,
-      );
-    }
   }
 
   @Patch('branding')
@@ -99,16 +68,18 @@ export class OrganizationBrandingController {
     const prefix = logoKeyPrefix(organizationId);
     // Upload AVANT la mutation DB : si l'upload échoue, aucune clé n'existe
     // encore, rien à nettoyer. Clé `<uuid>.<png|webp|jpg>` et `ContentType`
-    // canoniques issus du format détecté, jamais du client.
-    let uploaded: StoredObjectRef | undefined;
+    // canoniques issus du format détecté, jamais du client. 1-17B : capacité
+    // réservée avant l'envoi (quota de l'organisation, logo compris).
+    let uploaded: StagedObject | undefined;
     try {
       uploaded =
         file && validated
-          ? await this.s3Service.uploadValidatedImage(
-              file.buffer,
-              prefix,
-              validated,
-            )
+          ? await this.storageQuota.store({
+              organizationId,
+              kind: 'logo',
+              body: file.buffer,
+              image: validated,
+            })
           : undefined;
     } finally {
       // Plus aucune référence au contenu reçu une fois envoyé (ou refusé).
@@ -122,14 +93,17 @@ export class OrganizationBrandingController {
         uploaded,
       );
     } catch (err) {
-      if (uploaded)
-        await this.discardUnreferencedLogo(organizationId, uploaded);
+      // Écriture échouée : nouveau logo supprimé et libéré SEULEMENT s'il
+      // n'est pas référencé ; l'ancien logo reste en place.
+      if (uploaded) await this.storageQuota.discard(uploaded);
       throw err;
     }
     if (!uploaded) return result.organization;
     // APRÈS sauvegarde uniquement : ancien logo du stockage courant
     // supprimé ; un logo antérieur (stockage inconnu) est laissé en place.
-    const storageCleanup = await this.s3Service.deleteStoredObject(
+    // 1-17B : espace libéré seulement si la suppression est confirmée.
+    const storageCleanup = await this.storageQuota.deleteDetached(
+      organizationId,
       result.previousLogo,
       prefix,
     );
@@ -143,7 +117,8 @@ export class OrganizationBrandingController {
   ) {
     const organizationId = organizationContext.organizationId;
     const result = await this.organizationsService.removeLogo(organizationId);
-    const storageCleanup = await this.s3Service.deleteStoredObject(
+    const storageCleanup = await this.storageQuota.deleteDetached(
+      organizationId,
       result.previousLogo,
       logoKeyPrefix(organizationId),
     );

@@ -76,3 +76,13 @@ export function roleGrantsAllPermissions(role: OrganizationRole): boolean {
 export function isOrganizationRole(value: unknown): value is OrganizationRole {
   return value === "owner" || value === "admin" || value === "seller";
 }
+
+/**
+ * 1-17B — droits qui créent ou libèrent des fichiers : l'un d'eux suffit
+ * pour consulter l'occupation du stockage (même liste que l'API).
+ */
+export const STORAGE_USAGE_PERMISSIONS: readonly DelegablePermission[] = [
+  "products.manage",
+  "branding.manage",
+  "trash.manage",
+];

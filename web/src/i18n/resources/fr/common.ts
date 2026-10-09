@@ -47,6 +47,7 @@ const commonFr = {
     server: "Erreur serveur. Réessayez dans quelques instants.",
     status: "Erreur {{status}}.",
     unexpected: "Une erreur inattendue s'est produite.",
+    uploadInterrupted: "L'envoi du fichier a été interrompu. Réessayez.",
   },
   converter: {
     title: "Convertisseur EUR ↔ Franc CFA",
