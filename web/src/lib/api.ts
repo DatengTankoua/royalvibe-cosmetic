@@ -418,22 +418,103 @@ export async function authRegister(payload: {
   return data;
 }
 
-// 1-6B.2 : acceptation d'invitation — aucun token renvoyé (redirection login).
-export interface AcceptInvitationResult {
-  user: { _id: string; name: string; email: string };
-  organization: { _id: string; name: string; slug: string };
-  membership: { role: string; status: string };
-  emailVerification: { status: EmailVerificationDelivery };
+// 1-18B — Invitations. Le lien remis au créateur ne prouve ni l'identité
+// de son détenteur ni le contrôle de l'adresse invitée :
+// - compte existant : session de CE compte (jeton applicatif ou limité,
+//   passé explicitement) et accord explicite ;
+// - nouveau compte : lien de création envoyé à l'adresse invitée.
+export interface InvitationPreview {
+  organization: { name: string };
+  role: "admin" | "seller";
 }
 
-export async function acceptInvitation(payload: {
+export interface InvitationAcceptance {
+  organization: { _id: string; name: string; slug: string };
+  membership: { role: string; status: string };
+}
+
+export interface InvitationAccountResult {
+  user: { email: string };
+  organization: { name: string };
+}
+
+const bearer = (sessionToken: string) => ({
+  headers: { Authorization: `Bearer ${sessionToken}` },
+});
+
+/** Aperçu (organisation, rôle) pour la session ; aucune écriture. */
+export async function inspectInvitation(
+  token: string,
+  sessionToken: string,
+): Promise<InvitationPreview> {
+  const { data } = await apiClient.post(
+    "/auth/invitations/inspect",
+    { token },
+    bearer(sessionToken),
+  );
+  return data;
+}
+
+/** Rattachement du compte de la session, après accord explicite. */
+export async function acceptInvitation(
+  token: string,
+  sessionToken: string,
+): Promise<InvitationAcceptance> {
+  const { data } = await apiClient.post(
+    "/auth/invitations/accept",
+    { token, consent: true },
+    bearer(sessionToken),
+  );
+  return data;
+}
+
+/**
+ * Compte existant SANS organisation active (aucune session possible) :
+ * preuve par les identifiants, même vérification et même limitation que la
+ * connexion. Aucun jeton n'est renvoyé ; la connexion se fait ensuite.
+ */
+export async function inspectInvitationWithCredentials(
+  token: string,
+  email: string,
+  password: string,
+): Promise<InvitationPreview> {
+  const { data } = await apiClient.post(
+    "/auth/invitations/credentials/inspect",
+    { token, email, password },
+  );
+  return data;
+}
+
+export async function acceptInvitationWithCredentials(
+  token: string,
+  email: string,
+  password: string,
+): Promise<InvitationAcceptance> {
+  const { data } = await apiClient.post(
+    "/auth/invitations/credentials/accept",
+    { token, email, password, consent: true },
+  );
+  return data;
+}
+
+/** Demande du lien de création : réponse neutre (202) dans tous les cas. */
+export async function requestInvitationAccountLink(
+  token: string,
+): Promise<void> {
+  await apiClient.post("/auth/invitations/account-link", { token });
+}
+
+/** Création du compte depuis le lien reçu par e-mail (aucun JWT renvoyé). */
+export async function createInvitationAccount(payload: {
   token: string;
-  name?: string;
-  password?: string;
-  /** 1-16C.2 : requis seulement pour CRÉER un compte (case cochée). */
-  legalAcceptance?: LegalAcceptancePayload;
-}): Promise<AcceptInvitationResult> {
-  const { data } = await apiClient.post("/auth/invitations/accept", payload);
+  name: string;
+  password: string;
+  legalAcceptance: LegalAcceptancePayload;
+}): Promise<InvitationAccountResult> {
+  const { data } = await apiClient.post(
+    "/auth/invitations/create-account",
+    payload,
+  );
   return data;
 }
 

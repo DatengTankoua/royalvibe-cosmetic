@@ -7,7 +7,6 @@ import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { ThrottlerStorage } from '@nestjs/throttler';
-import * as bcrypt from 'bcryptjs';
 import request from 'supertest';
 import { io } from 'socket.io-client';
 import { App } from 'supertest/types';
@@ -38,11 +37,14 @@ import {
 import { ResendEmailSender } from '../src/email-verification/resend-email-sender';
 import { EMAIL_VERIFICATION_REQUEST_ACCEPTED_MESSAGE } from '../src/auth/auth.controller';
 import {
-  E2E_EMAIL_VERIFIED_AT,
   RecordingEmailSender,
   verificationTokenFrom,
 } from './e2e/email-verification-fixtures';
-import { INVITATION_TERMS, OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import {
+  acceptWithSession,
+  createInvitedAccount,
+} from './e2e/invitation-acceptance-fixtures';
 
 /**
  * E2E 1-13A — vérification des emails : `MongoMemoryReplSet` éphémère,
@@ -323,7 +325,7 @@ describe('Vérification des emails (e2e 1-13A)', () => {
   });
 
   describe('2. Invitation, inscription publique fermée', () => {
-    it('compte créé par invitation : non vérifié, puis organisation et permissions conservées après confirmation', async () => {
+    it('compte créé par invitation (1-18B) : adresse prouvée par le lien reçu, aucun lien de vérification, organisation et permissions conservées', async () => {
       const owner = await verifiedOwner('owner-2-13a@verify.test', 'Org Inv');
       process.env.PUBLIC_REGISTRATION_ENABLED = 'false';
       const closed = await http()
@@ -353,33 +355,22 @@ describe('Vérification des emails (e2e 1-13A)', () => {
         inv.body.invitationUrl as string,
       ).searchParams.get('token')!;
 
-      const accepted = await http()
-        .post('/auth/invitations/accept')
-        .send({
-          ...INVITATION_TERMS,
-          token: invitationToken,
-          name: 'Invited',
-          password: PASSWORD,
-        });
-      expect(accepted.status).toBe(200);
-      expect(accepted.body.emailVerification).toEqual({ status: 'sent' });
-      // Le lien d'invitation n'est PAS une preuve d'accès à la boîte mail.
-      expect((await internals(invited))!.emailVerifiedAt ?? null).toBeNull();
-
-      const refused = await login(invited, owner.orgId);
-      expect(refused.status).toBe(403);
-      expect(refused.body.code).toBe('EMAIL_NOT_VERIFIED');
-
-      const membershipBefore = await membershipModel
-        .findOne({ userId: (await internals(invited))!._id })
-        .lean()
-        .exec();
-      expect((await confirm({ token: lastTokenTo(invited) })).status).toBe(200);
-      const membershipAfter = await membershipModel
-        .findOne({ userId: (await internals(invited))!._id })
-        .lean()
-        .exec();
-      expect(membershipAfter).toEqual(membershipBefore);
+      // Le lien d'invitation n'est PAS une preuve d'accès à la boîte mail :
+      // seul le lien envoyé à l'adresse invitée permet de créer le compte.
+      const created = await createInvitedAccount(
+        app.getHttpServer(),
+        recorder,
+        invitationToken,
+        invited,
+        { name: 'Invited', password: PASSWORD },
+      );
+      expect(created.status).toBe(200);
+      expect((await internals(invited))!.emailVerifiedAt).toBeInstanceOf(Date);
+      expect(
+        recorder
+          .sentTo(invited)
+          .filter((m) => m.text.includes('/auth/verify-email')),
+      ).toHaveLength(0);
 
       const ok = await login(invited, owner.orgId);
       expect(ok.status).toBe(201);
@@ -391,33 +382,28 @@ describe('Vérification des emails (e2e 1-13A)', () => {
       expect(context.body.permissions).toEqual(['products.view_financials']);
     });
 
-    it('compte existant déjà vérifié qui accepte une invitation : aucun envoi (not_required)', async () => {
+    it('compte existant déjà vérifié qui accepte avec sa session : aucun envoi', async () => {
       const owner = await verifiedOwner(
         'owner-2b-13a@verify.test',
         'Org Inv B',
       );
       const existing = 'existing-2b-13a@verify.test';
-      await userModel.create({
-        emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
-        name: 'Existing',
-        email: existing,
-        password: await bcrypt.hash(PASSWORD, 10),
-      });
+      const member = await verifiedOwner(existing, 'Org Existing');
       const inv = await http()
         .post('/organizations/invitations')
         .set(auth(owner.token))
         .send({ email: existing, role: 'seller' });
       const token = new URL(inv.body.invitationUrl as string).searchParams.get(
         'token',
+      )!;
+      const sentBefore = recorder.sentTo(existing).length;
+      const accepted = await acceptWithSession(
+        app.getHttpServer(),
+        member.token,
+        token,
       );
-      const accepted = await http()
-        .post('/auth/invitations/accept')
-        .send({ token });
       expect(accepted.status).toBe(200);
-      expect(accepted.body.emailVerification).toEqual({
-        status: 'not_required',
-      });
-      expect(recorder.sentTo(existing)).toHaveLength(0);
+      expect(recorder.sentTo(existing)).toHaveLength(sentBefore);
     });
   });
 

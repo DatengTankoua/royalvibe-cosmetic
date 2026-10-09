@@ -36,6 +36,12 @@ import {
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
 import { INVITATION_TERMS, OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import {
+  accountTokenFrom,
+  createInvitedAccount,
+  requestAccountToken,
+  waitFor,
+} from './e2e/invitation-acceptance-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -721,422 +727,942 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
     });
   });
 
-  describe('Acceptation (POST /auth/invitations/accept) — 1-6B.2', () => {
+  // ===========================================================================
+  // 1-18B — Acceptation : le lien remis au créateur ne prouve ni l'identité
+  // de son détenteur ni le contrôle de l'adresse invitée.
+  // ===========================================================================
+  describe('Acceptation (1-18B) — session du compte invité ou lien reçu à l’adresse invitée', () => {
     const clearThrottle = (): void => {
       moduleFixture.get(ThrottlerStorage).onApplicationShutdown();
     };
-    beforeEach(clearThrottle);
-
-    // 1-16C.2 : un corps qui CRÉE un compte (mot de passe fourni) porte
-    // l'acceptation du web ; `{ token }` seul reste inchangé.
-    const accept = (body: Record<string, unknown>) =>
-      request(app.getHttpServer())
-        .post('/auth/invitations/accept')
-        .send('password' in body ? { ...INVITATION_TERMS, ...body } : body);
-
-    it('publique même si PUBLIC_REGISTRATION_ENABLED=false (jamais bloquée par ce flag)', async () => {
-      delete process.env.PUBLIC_REGISTRATION_ENABLED;
-      const res = await accept({ token: 'unknown-token' });
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
-      process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+    beforeEach(() => {
+      clearThrottle();
+      emailSender.reset();
     });
 
-    it('parcours du lien (1-12G), inscription publique fermée : { token } → ACCOUNT_DETAILS_REQUIRED sans consommer, puis compte créé, rejeu refusé, mot de passe non trimé', async () => {
-      delete process.env.PUBLIC_REGISTRATION_ENABLED;
-      try {
-        const email = `link-flow-${Date.now()}@royalvibe.test`;
-        const issued = await invite(ownerAToken, {
-          email,
-          role: 'seller',
-          permissions: ['analytics.read'],
-        });
-        expect(issued.status).toBe(201);
-        const token = tokenOf(issued);
+    const server = () => app.getHttpServer();
+    const inspect = (jwt: string | null, body: Record<string, unknown>) => {
+      const req = request(server()).post('/auth/invitations/inspect');
+      if (jwt) req.set('Authorization', `Bearer ${jwt}`);
+      return req.send(body);
+    };
+    const accept = (jwt: string | null, body: Record<string, unknown>) => {
+      const req = request(server()).post('/auth/invitations/accept');
+      if (jwt) req.set('Authorization', `Bearer ${jwt}`);
+      return req.send(body);
+    };
+    const accountLink = (token: string) =>
+      request(server()).post('/auth/invitations/account-link').send({ token });
+    const createAccount = (body: Record<string, unknown>) =>
+      request(server())
+        .post('/auth/invitations/create-account')
+        .send({ ...INVITATION_TERMS, ...body });
+    const login = (email: string, organizationId?: string) =>
+      request(server())
+        .post('/auth/login')
+        .send({ email, password: PASSWORD, organizationId });
 
-        const first = await accept({ token });
-        expect(first.status).toBe(400);
-        expect(first.body.code).toBe('ACCOUNT_DETAILS_REQUIRED');
-        const pending = await invitationModel.findOne({ email }).exec();
-        expect(pending!.status).toBe('pending');
-        expect(await userModel.countDocuments({ email })).toBe(0);
-
-        // Espaces de bord conservés : le mot de passe n'est jamais trimé.
-        const password = '  link-flow pw !1  ';
-        const second = await accept({ token, name: '  Lien  ', password });
-        expect(second.status).toBe(200);
-        expect(second.body.user).toMatchObject({ email, name: 'Lien' });
-        expect(second.body.organization._id).toBe(orgAId);
-        expect(second.body.membership).toEqual({
-          role: 'seller',
-          status: 'active',
-        });
-        const membership = await membershipModel
-          .findOne({
-            userId: new Types.ObjectId(second.body.user._id as string),
-          })
-          .exec();
-        expect(membership!.permissions).toEqual(['analytics.read']);
-
-        const replay = await accept({ token, name: 'Autre', password });
-        expect(replay.status).toBe(400);
-        expect(replay.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
-        expect(await userModel.countDocuments({ email })).toBe(1);
-
-        const trimmed = await request(app.getHttpServer())
-          .post('/auth/login')
-          .send({ email, password: password.trim() });
-        expect(trimmed.status).toBe(401);
-        const login = await request(app.getHttpServer())
-          .post('/auth/login')
-          .send({ email, password });
-        expect(login.status).toBe(201);
-        const payload = jwtService.decode(String(login.body.access_token));
-        expect(String(payload.orgId)).toBe(orgAId);
-      } finally {
-        process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
-      }
-    });
-
-    it('token inconnu → 400 générique, zéro écriture', async () => {
-      const usersBefore = await userModel.countDocuments();
-      const res = await accept({ token: 'totally-unknown-token' });
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
-      expect(await userModel.countDocuments()).toBe(usersBefore);
-    });
-
-    it('nouveau user : triplet atomique, password haché, rôle legacy `seller` (jamais admin), rôle/permissions/invitedBy copiés, réponse sans donnée sensible', async () => {
-      const email = `accept-new-${Date.now()}@royalvibe.test`;
-      const issued = await invite(ownerAToken, {
-        email,
-        role: 'admin',
-        permissions: ['analytics.read'],
-      });
-      expect(issued.status).toBe(201);
-
-      const res = await accept({
-        token: tokenOf(issued),
-        name: 'New User',
-        password: 'accept-pw-!1x',
-      });
-      expect(res.status).toBe(200);
-      const body = res.body as Record<string, unknown>;
-      expect(Object.keys(body).sort()).toEqual([
-        'emailVerification',
-        'membership',
-        'organization',
-        'user',
-      ]);
-      // 1-13A : compte créé non vérifié, lien envoyé après le commit.
-      expect(res.body.emailVerification).toEqual({ status: 'sent' });
-      expect(res.body.user.email).toBe(email);
-      expect(res.body.organization._id).toBe(orgAId);
-      expect(res.body.membership.role).toBe('admin');
-      expect(res.body.membership.status).toBe('active');
-      const flat = JSON.stringify(res.body);
-      expect(flat).not.toContain('password');
-      expect(flat).not.toContain('access_token');
-      expect(flat).not.toContain('tokenHash');
-      expect(flat).not.toContain('permissions'); // membership ne renvoie que role+status
-
-      // Rôle LEGACY `User.role` : seller — jamais promu même pour un invite `admin`.
-      const userDoc = await userModel
-        .findOne({ email })
-        .select('+password')
-        .exec();
-      expect(userDoc!.role).toBe('seller');
-      expect(userDoc!.password).not.toBe('accept-pw-!1x');
-      await expect(
-        bcrypt.compare('accept-pw-!1x', userDoc!.password),
-      ).resolves.toBe(true);
-
-      // role/permissions/invitedById EXACTEMENT copiés de l'invitation :
-      const membership = await membershipModel
-        .findOne({
-          organizationId: new Types.ObjectId(orgAId),
-          userId: userDoc!._id,
-        })
-        .exec();
-      expect(membership!.role).toBe('admin');
-      expect(membership!.permissions).toEqual(['analytics.read']);
-      const ownerADoc = await userModel
-        .findOne({ email: OWNER_A_EMAIL })
-        .exec();
-      expect(membership!.invitedById!.toString()).toBe(
-        ownerADoc!._id.toString(),
-      );
-
-      const invitationDoc = await invitationModel
-        .findById(issued.body.invitation._id as string)
-        .exec();
-      expect(invitationDoc!.status).toBe('accepted');
-      expect(invitationDoc!.acceptedAt).toBeTruthy();
-    });
-
-    it('user existant : aucune modification du User (password/name/role intacts)', async () => {
-      const before = await userModel
-        .findOne({ email: SELLER_A_EMAIL })
-        .select('+password')
-        .exec();
-      // sellerA n'a AUCUNE membership dans B : l'émission y est acceptée.
-      const issued = await invite(ownerBToken, {
-        email: SELLER_A_EMAIL,
-        role: 'seller',
-      });
-      expect(issued.status).toBe(201);
-
-      const res = await accept({ token: tokenOf(issued) });
-      expect(res.status).toBe(200);
-      expect(res.body.user.name).toBe(before!.name);
-      expect(res.body.organization._id).toBe(orgBId);
-
-      const after = await userModel
-        .findOne({ email: SELLER_A_EMAIL })
-        .select('+password')
-        .exec();
-      expect(after!.password).toBe(before!.password);
-      expect(after!.name).toBe(before!.name);
-      expect(after!.role).toBe(before!.role);
-
-      const membership = await membershipModel
-        .findOne({
-          organizationId: new Types.ObjectId(orgBId),
-          userId: after!._id,
-        })
-        .exec();
-      expect(membership).toBeTruthy();
-      expect(membership!.role).toBe('seller');
-    });
-
-    it('token expiré/révoqué/déjà accepté → même 400, zéro écriture', async () => {
-      // expiré :
-      const emailExp = `accept-exp-${Date.now()}@royalvibe.test`;
-      const issuedExp = await invite(ownerAToken, {
-        email: emailExp,
-        role: 'seller',
-      });
-      await invitationModel.updateOne(
-        { _id: new Types.ObjectId(issuedExp.body.invitation._id as string) },
-        { expiresAt: new Date(Date.now() - 1000) },
-      );
-      const usersBefore = await userModel.countDocuments();
-      const resExp = await accept({
-        token: tokenOf(issuedExp),
-        name: 'X',
-        password: 'accept-pw-!1x',
-      });
-      expect(resExp.status).toBe(400);
-      expect(resExp.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
-      expect(await userModel.countDocuments()).toBe(usersBefore);
-
-      // révoqué :
-      const emailRev = `accept-rev-${Date.now()}@royalvibe.test`;
-      const issuedRev = await invite(ownerAToken, {
-        email: emailRev,
-        role: 'seller',
-      });
-      await revoke(ownerAToken, issuedRev.body.invitation._id as string);
-      const resRev = await accept({
-        token: tokenOf(issuedRev),
-        name: 'X',
-        password: 'accept-pw-!1x',
-      });
-      expect(resRev.status).toBe(400);
-      expect(resRev.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
-
-      // déjà accepté (réutilisation du même token) :
-      const emailAcc = `accept-acc-${Date.now()}@royalvibe.test`;
-      const issuedAcc = await invite(ownerAToken, {
-        email: emailAcc,
-        role: 'seller',
-      });
-      const firstAccept = await accept({
-        token: tokenOf(issuedAcc),
-        name: 'Y',
-        password: 'accept-pw-!1x',
-      });
-      expect(firstAccept.status).toBe(200);
-      const secondAccept = await accept({
-        token: tokenOf(issuedAcc),
-        name: 'Y2',
-        password: 'accept-pw-!1x',
-      });
-      expect(secondAccept.status).toBe(400);
-      expect(secondAccept.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
-    });
-
-    it('organisation suspendue → même 400 générique', async () => {
-      const email = `accept-susp-${Date.now()}@royalvibe.test`;
-      const issued = await invite(ownerAToken, { email, role: 'seller' });
-      await organizationModel.updateOne(
-        { _id: new Types.ObjectId(orgAId) },
-        { status: 'suspended' },
-      );
-      try {
-        const res = await accept({
-          token: tokenOf(issued),
-          name: 'Z',
-          password: 'accept-pw-!1x',
-        });
-        expect(res.status).toBe(400);
-        expect(res.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
-      } finally {
-        await organizationModel.updateOne(
-          { _id: new Types.ObjectId(orgAId) },
-          { status: 'active' },
-        );
-      }
-    });
-
-    it('membership déjà existante (même révoquée) → 409, AUCUNE réactivation silencieuse', async () => {
-      const email = `accept-conflict-${Date.now()}@royalvibe.test`;
-      const revokedUser = await userModel.create({
+    let seq = 0;
+    /** Compte vérifié existant, membre actif de A seulement, et sa session. */
+    async function existingAccount(label: string) {
+      seq += 1;
+      const email = `${label}-${seq}-${Date.now()}@royalvibe.test`;
+      const user = await userModel.create({
         emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
-        name: 'Revoked',
+        name: `Nom secret ${seq}`,
         email,
         password: await bcrypt.hash(PASSWORD, 10),
       });
       await membershipModel.create({
         organizationId: new Types.ObjectId(orgAId),
-        userId: revokedUser._id,
+        userId: user._id,
         role: 'seller',
-        status: 'revoked',
+        status: 'active',
       });
-
-      // Émission acceptée : le pré-check d'émission n'exclut QUE les membres ACTIFS.
-      const issued = await invite(ownerAToken, { email, role: 'admin' });
-      expect(issued.status).toBe(201);
-
-      const res = await accept({ token: tokenOf(issued) });
-      expect(res.status).toBe(409);
-      expect(res.body.code).toBe('MEMBERSHIP_ALREADY_EXISTS');
-
-      const membership = await membershipModel
-        .findOne({
-          organizationId: new Types.ObjectId(orgAId),
-          userId: revokedUser._id,
-        })
-        .exec();
-      expect(membership!.status).toBe('revoked');
-    });
-
-    it('rollback après création User + Membership (garde finale) → aucune trace', async () => {
-      const email = `accept-rollback-${Date.now()}@royalvibe.test`;
-      const issued = await invite(ownerAToken, { email, role: 'seller' });
-      const membershipsBefore = await membershipModel.countDocuments({
-        organizationId: new Types.ObjectId(orgAId),
-      });
-
-      const originalCount = membershipModel.countDocuments.bind(
-        membershipModel,
-      ) as (filter?: unknown, opts?: { session?: unknown }) => Promise<number>;
-      membershipModel.countDocuments = ((
-        filter?: unknown,
-        opts?: { session?: unknown },
-      ) => {
-        if (opts?.session) {
-          return Promise.resolve(2); // force l'invariant à échouer
-        }
-        return originalCount(filter, opts);
-      }) as unknown as typeof membershipModel.countDocuments;
-
-      let res: request.Response;
-      try {
-        res = await accept({
-          token: tokenOf(issued),
-          name: 'Rollback',
-          password: 'accept-pw-!1x',
-        });
-      } finally {
-        membershipModel.countDocuments =
-          originalCount as unknown as typeof membershipModel.countDocuments;
-      }
-      expect(res.status).toBeGreaterThanOrEqual(500);
-      expect(await userModel.countDocuments({ email })).toBe(0);
-      expect(
-        await membershipModel.countDocuments({
-          organizationId: new Types.ObjectId(orgAId),
-        }),
-      ).toBe(membershipsBefore);
-    });
-
-    it('acceptation concurrente (même token) : exactement une réussite, aucune duplication', async () => {
-      const email = `accept-race-${Date.now()}@royalvibe.test`;
-      const issued = await invite(ownerAToken, { email, role: 'seller' });
-      const body = {
-        token: tokenOf(issued),
-        name: 'Race',
-        password: 'accept-pw-!1x',
+      const res = await login(email, orgAId);
+      expect(res.status).toBe(201);
+      return {
+        email,
+        name: user.name,
+        id: user._id,
+        jwt: res.body.access_token as string,
       };
-      const [a, b] = await Promise.all([accept(body), accept(body)]);
-      const statuses = [a.status, b.status].sort();
-      expect(statuses).toEqual([200, 400]);
-      expect(await userModel.countDocuments({ email })).toBe(1);
-      const user = await userModel.findOne({ email }).exec();
-      expect(
-        await membershipModel.countDocuments({
+    }
+
+    /** Invitation émise par owner B (organisation dont le compte n'est pas membre). */
+    async function inviteToB(
+      email: string,
+      body: Record<string, unknown> = {},
+    ) {
+      const issued = await invite(ownerBToken, {
+        email,
+        role: 'seller',
+        ...body,
+      });
+      expect(issued.status).toBe(201);
+      return {
+        token: tokenOf(issued),
+        id: issued.body.invitation._id as string,
+      };
+    }
+
+    const invitationStatus = async (id: string) =>
+      (await invitationModel.findById(id).exec())!.status;
+    const membershipsInB = (userId: Types.ObjectId) =>
+      membershipModel.countDocuments({
+        organizationId: new Types.ObjectId(orgBId),
+        userId,
+      });
+
+    describe('compte existant : session et accord explicite', () => {
+      it('sans session : 401 pour toute variante du corps, réponses identiques, invitation intacte, aucun nom', async () => {
+        const target = await existingAccount('no-session');
+        const invitation = await inviteToB(target.email);
+        const variants: Record<string, unknown>[] = [
+          { token: invitation.token },
+          { token: invitation.token, consent: true },
+          { token: invitation.token, name: 'X', password: 'secret-123' },
+          { token: invitation.token, email: target.email },
+          { token: 'unknown-token', consent: true },
+          {},
+        ];
+        const bodies = new Set<string>();
+        for (const body of variants) {
+          for (const route of [accept, inspect]) {
+            const res = await route(null, body);
+            expect(res.status).toBe(401);
+            const { timestamp, path, ...stable } = res.body as Record<
+              string,
+              unknown
+            >;
+            void timestamp;
+            void path;
+            bodies.add(JSON.stringify(stable));
+            expect(JSON.stringify(res.body)).not.toContain(target.name);
+            expect(JSON.stringify(res.body)).not.toContain(target.email);
+          }
+        }
+        expect(bodies.size).toBe(1);
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+        expect(await membershipsInB(target.id)).toBe(0);
+      });
+
+      it('créateur qui tente d’accepter pour un tiers avec SA session : 403 mauvais compte, rien consommé, aucun nom', async () => {
+        const target = await existingAccount('creator-third');
+        const invitation = await inviteToB(target.email);
+
+        const preview = await inspect(ownerBToken, { token: invitation.token });
+        expect(preview.status).toBe(403);
+        expect(preview.body.code).toBe('INVITATION_ACCOUNT_MISMATCH');
+        const res = await accept(ownerBToken, {
+          token: invitation.token,
+          consent: true,
+        });
+        expect(res.status).toBe(403);
+        expect(res.body.code).toBe('INVITATION_ACCOUNT_MISMATCH');
+        for (const body of [preview.body, res.body]) {
+          expect(JSON.stringify(body)).not.toContain(target.name);
+          expect(JSON.stringify(body)).not.toContain(target.email);
+        }
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+        expect(await membershipsInB(target.id)).toBe(0);
+      });
+
+      it('mauvais compte (autre utilisateur connecté) : 403, jamais de rattachement, l’invitation reste utilisable par le bon compte', async () => {
+        const target = await existingAccount('right');
+        const other = await existingAccount('wrong');
+        const invitation = await inviteToB(target.email);
+
+        const wrong = await accept(other.jwt, {
+          token: invitation.token,
+          consent: true,
+        });
+        expect(wrong.status).toBe(403);
+        expect(wrong.body.code).toBe('INVITATION_ACCOUNT_MISMATCH');
+        expect(await membershipsInB(other.id)).toBe(0);
+        expect(await membershipsInB(target.id)).toBe(0);
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+
+        const right = await accept(target.jwt, {
+          token: invitation.token,
+          consent: true,
+        });
+        expect(right.status).toBe(200);
+      });
+
+      it('session expirée ou révoquée : 401, invitation intacte', async () => {
+        const target = await existingAccount('expired');
+        const invitation = await inviteToB(target.email);
+        const expired = jwtService.sign(
+          { sub: target.id.toString(), orgId: orgAId },
+          { expiresIn: -60 },
+        );
+        const res = await accept(expired, {
+          token: invitation.token,
+          consent: true,
+        });
+        expect(res.status).toBe(401);
+
+        // Réinitialisation du mot de passe : version de session incrémentée.
+        await userModel.updateOne(
+          { _id: target.id },
+          { $inc: { authVersion: 1 } },
+        );
+        const revoked = await accept(target.jwt, {
+          token: invitation.token,
+          consent: true,
+        });
+        expect(revoked.status).toBe(401);
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+        expect(await membershipsInB(target.id)).toBe(0);
+      });
+
+      it('bon compte : aperçu sans écriture, accord obligatoire, puis rattachement exact (sans adhésion préalable à B), compte inchangé', async () => {
+        const target = await existingAccount('consent');
+        const before = await userModel
+          .findById(target.id)
+          .select('+password +authVersion')
+          .lean()
+          .exec();
+        const invitation = await inviteToB(target.email, {
+          permissions: ['analytics.read'],
+        });
+
+        const preview = await inspect(target.jwt, { token: invitation.token });
+        expect(preview.status).toBe(200);
+        expect(preview.body).toEqual({
+          organization: { name: 'Org B 16B1' },
+          role: 'seller',
+        });
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+
+        // Accord absent, faux ou mal typé : refus, rien consommé.
+        for (const consent of [undefined, false, 'true']) {
+          const refused = await accept(target.jwt, {
+            token: invitation.token,
+            ...(consent === undefined ? {} : { consent }),
+          });
+          expect(refused.status).toBe(400);
+        }
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+        expect(await membershipsInB(target.id)).toBe(0);
+
+        const res = await accept(target.jwt, {
+          token: invitation.token,
+          consent: true,
+        });
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({
+          organization: {
+            _id: orgBId,
+            name: 'Org B 16B1',
+            slug: expect.any(String),
+          },
+          membership: { role: 'seller', status: 'active' },
+        });
+        const membership = await membershipModel
+          .findOne({
+            organizationId: new Types.ObjectId(orgBId),
+            userId: target.id,
+          })
+          .exec();
+        expect(membership!.permissions).toEqual(['analytics.read']);
+        const ownerB = await userModel.findOne({ email: OWNER_B_EMAIL }).exec();
+        expect(membership!.invitedById!.toString()).toBe(
+          ownerB!._id.toString(),
+        );
+
+        const after = await userModel
+          .findById(target.id)
+          .select('+password +authVersion')
+          .lean()
+          .exec();
+        expect(after).toEqual(before);
+        expect(await invitationStatus(invitation.id)).toBe('accepted');
+
+        // Usage unique ; connexion à B ensuite possible.
+        const replay = await accept(target.jwt, {
+          token: invitation.token,
+          consent: true,
+        });
+        expect(replay.status).toBe(400);
+        expect(replay.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
+        const inB = await login(target.email, orgBId);
+        expect(inB.status).toBe(201);
+        const payload = jwtService.decode(String(inB.body.access_token));
+        expect(String(payload.orgId)).toBe(orgBId);
+      });
+
+      it('expirée, révoquée, déjà utilisée, organisation suspendue → même 400, rien écrit', async () => {
+        const target = await existingAccount('states');
+        const expired = await inviteToB(target.email);
+        await invitationModel.updateOne(
+          { _id: new Types.ObjectId(expired.id) },
+          { expiresAt: new Date(Date.now() - 1000) },
+        );
+        const res = await accept(target.jwt, {
+          token: expired.token,
+          consent: true,
+        });
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
+        await invitationModel.updateOne(
+          { _id: new Types.ObjectId(expired.id) },
+          { status: 'expired' },
+        );
+
+        const revoked = await inviteToB(target.email);
+        await revoke(ownerBToken, revoked.id);
+        const resRevoked = await accept(target.jwt, {
+          token: revoked.token,
+          consent: true,
+        });
+        expect(resRevoked.status).toBe(400);
+        expect(resRevoked.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
+
+        const suspended = await inviteToB(target.email);
+        await organizationModel.updateOne(
+          { _id: new Types.ObjectId(orgBId) },
+          { status: 'suspended' },
+        );
+        try {
+          for (const resSuspended of [
+            await inspect(target.jwt, { token: suspended.token }),
+            await accept(target.jwt, { token: suspended.token, consent: true }),
+          ]) {
+            expect(resSuspended.status).toBe(400);
+            expect(resSuspended.body.code).toBe(
+              'INVITATION_INVALID_OR_EXPIRED',
+            );
+          }
+        } finally {
+          await organizationModel.updateOne(
+            { _id: new Types.ObjectId(orgBId) },
+            { status: 'active' },
+          );
+        }
+        expect(await invitationStatus(suspended.id)).toBe('pending');
+        expect(await membershipsInB(target.id)).toBe(0);
+      });
+
+      it('membership déjà existante (même révoquée) → 409, invitation non consommée, aucune réactivation', async () => {
+        const target = await existingAccount('member');
+        await membershipModel.create({
+          organizationId: new Types.ObjectId(orgBId),
+          userId: target.id,
+          role: 'seller',
+          status: 'revoked',
+        });
+        const invitation = await inviteToB(target.email, { role: 'admin' });
+        const preview = await inspect(target.jwt, { token: invitation.token });
+        expect(preview.status).toBe(409);
+        const res = await accept(target.jwt, {
+          token: invitation.token,
+          consent: true,
+        });
+        expect(res.status).toBe(409);
+        expect(res.body.code).toBe('MEMBERSHIP_ALREADY_EXISTS');
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+        const membership = await membershipModel
+          .findOne({
+            organizationId: new Types.ObjectId(orgBId),
+            userId: target.id,
+          })
+          .exec();
+        expect(membership!.status).toBe('revoked');
+      });
+
+      it('acceptations concurrentes (même session, même token) : une seule réussite, une seule membership', async () => {
+        const target = await existingAccount('race');
+        const invitation = await inviteToB(target.email);
+        const body = { token: invitation.token, consent: true };
+        const [a, b] = await Promise.all([
+          accept(target.jwt, body),
+          accept(target.jwt, body),
+        ]);
+        expect([a.status, b.status].sort()).toEqual([200, 400]);
+        expect(await membershipsInB(target.id)).toBe(1);
+      }, 20_000);
+    });
+
+    describe('nouveau compte : lien envoyé à l’adresse invitée', () => {
+      it('demande du lien : réponse identique (statut et corps) que l’adresse ait un compte ou non ; aucun envoi pour un compte existant', async () => {
+        const target = await existingAccount('link-existing');
+        const existing = await inviteToB(target.email);
+        const freshEmail = `link-new-${Date.now()}@royalvibe.test`;
+        const fresh = await inviteToB(freshEmail);
+
+        const a = await accountLink(existing.token);
+        const b = await accountLink(fresh.token);
+        expect(a.status).toBe(202);
+        expect(b.status).toBe(202);
+        expect(a.body).toEqual(b.body);
+        expect(JSON.stringify(a.body)).not.toContain(target.name);
+
+        await waitFor(() => emailSender.sentTo(freshEmail).length === 1);
+        // Laisse au traitement différé du compte existant le temps d'agir.
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(emailSender.sentTo(target.email)).toHaveLength(0);
+        // Aucune écriture : aucune membership, invitations toujours en attente.
+        expect(await invitationStatus(existing.id)).toBe('pending');
+        expect(await invitationStatus(fresh.id)).toBe('pending');
+        expect(await userModel.countDocuments({ email: freshEmail })).toBe(0);
+      });
+
+      it('le lien du créateur ne crée jamais de compte : create-account avec ce lien → 400, aucune écriture', async () => {
+        const email = `creator-link-${Date.now()}@royalvibe.test`;
+        const invitation = await inviteToB(email);
+        const res = await createAccount({
+          token: invitation.token,
+          name: 'Usurpateur',
+          password: 'creator-pw-!1x',
+        });
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('INVITATION_INVALID_OR_EXPIRED');
+        expect(await userModel.countDocuments({ email })).toBe(0);
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+      });
+
+      it('parcours complet : lien reçu à l’adresse, compte vérifié créé par la personne qui l’ouvre, membership exacte, preuve légale, connexion', async () => {
+        const email = `new-account-${Date.now()}@royalvibe.test`;
+        const invitation = await inviteToB(email, {
+          role: 'admin',
+          permissions: ['analytics.read'],
+        });
+        // Espaces de bord conservés : le mot de passe n'est jamais trimé.
+        const password = '  new-account pw !1  ';
+        const res = await createInvitedAccount(
+          server(),
+          emailSender,
+          invitation.token,
+          email,
+          { name: '  Nouvelle  ', password },
+        );
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({
+          user: { email },
+          organization: { name: 'Org B 16B1' },
+        });
+
+        const user = await userModel
+          .findOne({ email })
+          .select('+password')
+          .exec();
+        expect(user!.name).toBe('Nouvelle');
+        expect(user!.role).toBe('seller'); // jamais promu
+        expect(user!.emailVerifiedAt).toBeInstanceOf(Date);
+        await expect(bcrypt.compare(password, user!.password)).resolves.toBe(
+          true,
+        );
+        const membership = await membershipModel
+          .findOne({
+            organizationId: new Types.ObjectId(orgBId),
+            userId: user!._id,
+          })
+          .exec();
+        expect(membership!.role).toBe('admin');
+        expect(membership!.permissions).toEqual(['analytics.read']);
+        expect(await invitationStatus(invitation.id)).toBe('accepted');
+        const stored = await invitationModel
+          .findById(invitation.id)
+          .select('+accountTokenHash +accountTokenExpiresAt')
+          .lean()
+          .exec();
+        expect(stored!.accountTokenHash).toBeUndefined();
+        expect(stored!.accountTokenExpiresAt).toBeUndefined();
+
+        // Aucun nouvel e-mail de vérification : l'adresse est déjà prouvée.
+        expect(
+          emailSender
+            .sentTo(email)
+            .filter((m) => m.text.includes('/auth/verify-email')),
+        ).toHaveLength(0);
+        const trimmed = await request(server())
+          .post('/auth/login')
+          .send({ email, password: password.trim() });
+        expect(trimmed.status).toBe(401);
+        const loginRes = await request(server())
+          .post('/auth/login')
+          .send({ email, password });
+        expect(loginRes.status).toBe(201);
+        const payload = jwtService.decode(String(loginRes.body.access_token));
+        expect(String(payload.orgId)).toBe(orgBId);
+
+        // Les deux liens sont désormais inutilisables.
+        expect((await accountLink(invitation.token)).status).toBe(400);
+      });
+
+      it('mot de passe choisi APRÈS le lien : aucun compte avant la création, connexion impossible avec un mot de passe du créateur', async () => {
+        const email = `no-oracle-${Date.now()}@royalvibe.test`;
+        const invitation = await inviteToB(email);
+        expect((await accountLink(invitation.token)).status).toBe(202);
+        await waitFor(() => emailSender.sentTo(email).length === 1);
+        expect(await userModel.countDocuments({ email })).toBe(0);
+        const probe = await request(server())
+          .post('/auth/login')
+          .send({ email, password: 'creator-guess-!1' });
+        expect(probe.status).toBe(401);
+      });
+
+      it('compte créé entre-temps pour l’adresse : 409 à la personne qui contrôle la boîte, invitation et lien conservés', async () => {
+        const email = `raced-${Date.now()}@royalvibe.test`;
+        const invitation = await inviteToB(email);
+        const accountToken = await requestAccountToken(
+          server(),
+          emailSender,
+          invitation.token,
+          email,
+        );
+        await userModel.create({
+          emailVerifiedAt: E2E_EMAIL_VERIFIED_AT,
+          name: 'Déjà là',
+          email,
+          password: await bcrypt.hash(PASSWORD, 10),
+        });
+        const res = await createAccount({
+          token: accountToken,
+          name: 'Nouveau',
+          password: 'raced-pw-!1x',
+        });
+        expect(res.status).toBe(409);
+        expect(res.body.code).toBe('INVITATION_ACCOUNT_EXISTS');
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+      });
+
+      it('cooldown, envois concurrents, remplacement du lien, plafond par invitation', async () => {
+        const email = `link-limits-${Date.now()}@royalvibe.test`;
+        const invitation = await inviteToB(email);
+        const [a, b] = await Promise.all([
+          accountLink(invitation.token),
+          accountLink(invitation.token),
+        ]);
+        expect([a.status, b.status]).toEqual([202, 202]);
+        await waitFor(() => emailSender.sentTo(email).length >= 1);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(emailSender.sentTo(email)).toHaveLength(1);
+        const first = accountTokenFrom(emailSender.sentTo(email)[0]);
+
+        // Cooldown : rien de plus dans les 60 s.
+        expect((await accountLink(invitation.token)).status).toBe(202);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(emailSender.sentTo(email)).toHaveLength(1);
+
+        // Après le cooldown : nouveau lien, l'ancien est remplacé.
+        await invitationModel.updateOne(
+          { _id: new Types.ObjectId(invitation.id) },
+          { accountLinkLastSentAt: new Date(Date.now() - 61_000) },
+        );
+        expect((await accountLink(invitation.token)).status).toBe(202);
+        await waitFor(() => emailSender.sentTo(email).length === 2);
+        const second = accountTokenFrom(emailSender.sentTo(email)[1]);
+        expect(second).not.toBe(first);
+        const stale = await createAccount({
+          token: first,
+          name: 'Ancien',
+          password: 'stale-pw-!1x',
+        });
+        expect(stale.status).toBe(400);
+
+        // Plafond : au-delà de 5 envois pour cette invitation, plus rien.
+        await invitationModel.updateOne(
+          { _id: new Types.ObjectId(invitation.id) },
+          {
+            accountLinkLastSentAt: new Date(Date.now() - 61_000),
+            accountLinkSendCount: 5,
+          },
+        );
+        expect((await accountLink(invitation.token)).status).toBe(202);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(emailSender.sentTo(email)).toHaveLength(2);
+      });
+
+      it('lien de création expiré, invitation révoquée ou expirée, déjà utilisée → 400, rien écrit', async () => {
+        const email = `link-states-${Date.now()}@royalvibe.test`;
+        const invitation = await inviteToB(email);
+        const token = await requestAccountToken(
+          server(),
+          emailSender,
+          invitation.token,
+          email,
+        );
+        const body = { token, name: 'États', password: 'states-pw-!1x' };
+
+        await invitationModel.updateOne(
+          { _id: new Types.ObjectId(invitation.id) },
+          { accountTokenExpiresAt: new Date(Date.now() - 1000) },
+        );
+        expect((await createAccount(body)).status).toBe(400);
+
+        await invitationModel.updateOne(
+          { _id: new Types.ObjectId(invitation.id) },
+          { accountTokenExpiresAt: new Date(Date.now() + 60_000) },
+        );
+        await revoke(ownerBToken, invitation.id);
+        expect((await createAccount(body)).status).toBe(400);
+        expect(await userModel.countDocuments({ email })).toBe(0);
+
+        // Lien borné par l'expiration de l'invitation (jamais au-delà).
+        const shortEmail = `link-short-${Date.now()}@royalvibe.test`;
+        const short = await inviteToB(shortEmail);
+        const shortExpiry = new Date(Date.now() + 5 * 60_000);
+        await invitationModel.updateOne(
+          { _id: new Types.ObjectId(short.id) },
+          { expiresAt: shortExpiry },
+        );
+        await requestAccountToken(
+          server(),
+          emailSender,
+          short.token,
+          shortEmail,
+        );
+        const stored = await invitationModel
+          .findById(short.id)
+          .select('+accountTokenExpiresAt')
+          .lean()
+          .exec();
+        expect(stored!.accountTokenExpiresAt!.getTime()).toBeLessThanOrEqual(
+          shortExpiry.getTime(),
+        );
+      });
+
+      it('créations concurrentes (même lien) : une seule réussite, un seul compte', async () => {
+        const email = `create-race-${Date.now()}@royalvibe.test`;
+        const invitation = await inviteToB(email);
+        const token = await requestAccountToken(
+          server(),
+          emailSender,
+          invitation.token,
+          email,
+        );
+        const body = { token, name: 'Course', password: 'race-pw-!1x' };
+        const [a, b] = await Promise.all([
+          createAccount(body),
+          createAccount(body),
+        ]);
+        expect([a.status, b.status].sort()).toEqual([200, 400]);
+        expect(await userModel.countDocuments({ email })).toBe(1);
+      }, 20_000);
+
+      it('échec après création User + Membership (garde finale) → rollback complet, invitation et lien conservés', async () => {
+        const email = `create-rollback-${Date.now()}@royalvibe.test`;
+        const invitation = await inviteToB(email);
+        const token = await requestAccountToken(
+          server(),
+          emailSender,
+          invitation.token,
+          email,
+        );
+        const originalCount = membershipModel.countDocuments.bind(
+          membershipModel,
+        ) as (
+          filter?: unknown,
+          opts?: { session?: unknown },
+        ) => Promise<number>;
+        membershipModel.countDocuments = ((
+          filter?: unknown,
+          opts?: { session?: unknown },
+        ) =>
+          opts?.session
+            ? Promise.resolve(2)
+            : originalCount(
+                filter,
+                opts,
+              )) as unknown as typeof membershipModel.countDocuments;
+        let res: request.Response;
+        try {
+          res = await createAccount({
+            token,
+            name: 'Rollback',
+            password: 'rollback-pw-!1x',
+          });
+        } finally {
+          membershipModel.countDocuments =
+            originalCount as unknown as typeof membershipModel.countDocuments;
+        }
+        expect(res.status).toBeGreaterThanOrEqual(500);
+        expect(await userModel.countDocuments({ email })).toBe(0);
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+        const retry = await createAccount({
+          token,
+          name: 'Rollback',
+          password: 'rollback-pw-!1x',
+        });
+        expect(retry.status).toBe(200);
+      });
+
+      it('création indépendante de PUBLIC_REGISTRATION_ENABLED ; champs interdits → 400 sans écriture', async () => {
+        delete process.env.PUBLIC_REGISTRATION_ENABLED;
+        try {
+          const email = `closed-${Date.now()}@royalvibe.test`;
+          const invitation = await inviteToB(email);
+          const token = await requestAccountToken(
+            server(),
+            emailSender,
+            invitation.token,
+            email,
+          );
+          const forbidden = await createAccount({
+            token,
+            name: 'F',
+            password: 'closed-pw-!1x',
+            role: 'owner',
+          });
+          expect(forbidden.status).toBe(400);
+          expect(await userModel.countDocuments({ email })).toBe(0);
+          const ok = await createAccount({
+            token,
+            name: 'Fermé',
+            password: 'closed-pw-!1x',
+          });
+          expect(ok.status).toBe(200);
+        } finally {
+          process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+        }
+      });
+    });
+
+    describe('compte existant sans organisation active : identifiants et accord explicite', () => {
+      const credentials = (
+        action: 'inspect' | 'accept',
+        body: Record<string, unknown>,
+      ) =>
+        request(server())
+          .post(`/auth/invitations/credentials/${action}`)
+          .send(body);
+
+      /** Compte vérifié dont la seule membership est révoquée : aucun JWT possible. */
+      async function orphanAccount(label: string, verified = true) {
+        seq += 1;
+        const email = `${label}-${seq}-${Date.now()}@royalvibe.test`;
+        const user = await userModel.create({
+          ...(verified ? { emailVerifiedAt: E2E_EMAIL_VERIFIED_AT } : {}),
+          name: `Orphelin ${seq}`,
+          email,
+          password: await bcrypt.hash(PASSWORD, 10),
+        });
+        await membershipModel.create({
           organizationId: new Types.ObjectId(orgAId),
-          userId: user!._id,
-        }),
-      ).toBe(1);
-    }, 20_000);
-
-    it('émission concurrente (même org+email) → 201/409, jamais 500', async () => {
-      const email = `issue-race-${Date.now()}@royalvibe.test`;
-      const [a, b] = await Promise.all([
-        invite(ownerAToken, { email, role: 'seller' }),
-        invite(ownerAToken, { email, role: 'admin' }),
-      ]);
-      const statuses = [a.status, b.status].sort((x, y) => x - y);
-      expect(statuses).toEqual([201, 409]);
-      const conflict = a.status === 409 ? a : b;
-      expect(conflict.body.code).toBe('INVITATION_ALREADY_PENDING');
-      expect(
-        await invitationModel.countDocuments({ email, status: 'pending' }),
-      ).toBe(1);
-    }, 20_000);
-
-    it('login après acceptation retourne un JWT avec le bon orgId', async () => {
-      const email = `accept-login-${Date.now()}@royalvibe.test`;
-      const password = 'accept-pw-!1x';
-      const issued = await invite(ownerAToken, { email, role: 'seller' });
-      const acc = await accept({
-        token: tokenOf(issued),
-        name: 'Login Test',
-        password,
-      });
-      expect(acc.status).toBe(200);
-
-      const loginRes = await request(app.getHttpServer())
-        .post('/auth/login')
-        .send({ email, password });
-      expect(loginRes.status).toBe(201);
-      const payload = jwtService.decode(String(loginRes.body.access_token));
-      expect(String(payload.orgId)).toBe(orgAId);
-    });
-
-    it('champs interdits (role/organizationId/permissions/invitedById) → 400 avant toute écriture', async () => {
-      const email = `accept-forbidden-${Date.now()}@royalvibe.test`;
-      const issued = await invite(ownerAToken, { email, role: 'seller' });
-      const usersBefore = await userModel.countDocuments();
-      const res = await accept({
-        token: tokenOf(issued),
-        name: 'F',
-        password: 'accept-pw-!1x',
-        role: 'owner',
-      });
-      expect(res.status).toBe(400);
-      expect(await userModel.countDocuments()).toBe(usersBefore);
-    });
-
-    it('rate limiting existant (429) s’applique aussi à /auth/invitations/accept', async () => {
-      let last: request.Response | undefined;
-      for (let i = 0; i < 11; i++) {
-        last = await accept({ token: `rl-${i}-${Date.now()}` });
+          userId: user._id,
+          role: 'seller',
+          status: 'revoked',
+        });
+        return { email, name: user.name, id: user._id };
       }
-      expect(last!.status).toBe(429);
-      expect(last!.body.code).toBe(AUTH_RATE_LIMIT_CODE);
+
+      it('avant l’adhésion : connexion refusée, aucune route métier, aucun jeton délivré par l’aperçu', async () => {
+        const target = await orphanAccount('orphan-before');
+        const invitation = await inviteToB(target.email);
+        const denied = await login(target.email);
+        expect(denied.status).toBe(403);
+        expect(denied.body.code).toBe('ORGANIZATION_ACCESS_DENIED');
+        expect(denied.body.access_token).toBeUndefined();
+
+        const preview = await credentials('inspect', {
+          token: invitation.token,
+          email: target.email,
+          password: PASSWORD,
+        });
+        expect(preview.status).toBe(200);
+        expect(preview.body).toEqual({
+          organization: { name: 'Org B 16B1' },
+          role: 'seller',
+        });
+        expect(JSON.stringify(preview.body)).not.toMatch(/token/i);
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+        expect((await request(server()).get('/auth/context')).status).toBe(401);
+      });
+
+      it('mauvais identifiants (mot de passe, adresse inconnue, mot de passe changé) : 401 identiques au login, rien consommé', async () => {
+        const target = await orphanAccount('orphan-bad');
+        const invitation = await inviteToB(target.email);
+        const loginRefusal = await request(server())
+          .post('/auth/login')
+          .send({ email: target.email, password: 'wrong-password-x' });
+        const variants = [
+          { email: target.email, password: 'wrong-password-x' },
+          { email: `unknown-${Date.now()}@royalvibe.test`, password: PASSWORD },
+        ];
+        for (const action of ['inspect', 'accept'] as const) {
+          for (const variant of variants) {
+            const res = await credentials(action, {
+              token: invitation.token,
+              ...(action === 'accept' ? { consent: true } : {}),
+              ...variant,
+            });
+            expect(res.status).toBe(401);
+            expect(res.body.message).toBe(loginRefusal.body.message);
+            expect(JSON.stringify(res.body)).not.toContain(target.name);
+          }
+        }
+        // Mot de passe changé (réinitialisation) : l'ancien ne prouve plus rien.
+        await userModel.updateOne(
+          { _id: target.id },
+          { password: await bcrypt.hash('new-password-!1x', 10) },
+        );
+        const stale = await credentials('accept', {
+          token: invitation.token,
+          email: target.email,
+          password: PASSWORD,
+          consent: true,
+        });
+        expect(stale.status).toBe(401);
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+        expect(await membershipsInB(target.id)).toBe(0);
+      });
+
+      it('adresse non vérifiée : 403 EMAIL_NOT_VERIFIED après le mot de passe, rien consommé', async () => {
+        const target = await orphanAccount('orphan-unverified', false);
+        const invitation = await inviteToB(target.email);
+        const res = await credentials('accept', {
+          token: invitation.token,
+          email: target.email,
+          password: PASSWORD,
+          consent: true,
+        });
+        expect(res.status).toBe(403);
+        expect(res.body.code).toBe('EMAIL_NOT_VERIFIED');
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+        expect(await membershipsInB(target.id)).toBe(0);
+      });
+
+      it('mauvais compte (identifiants valides d’une autre adresse) : 403, rien consommé, aucun nom', async () => {
+        const target = await orphanAccount('orphan-target');
+        const other = await orphanAccount('orphan-other');
+        const invitation = await inviteToB(target.email);
+        for (const action of ['inspect', 'accept'] as const) {
+          const res = await credentials(action, {
+            token: invitation.token,
+            email: other.email,
+            password: PASSWORD,
+            ...(action === 'accept' ? { consent: true } : {}),
+          });
+          expect(res.status).toBe(403);
+          expect(res.body.code).toBe('INVITATION_ACCOUNT_MISMATCH');
+          expect(JSON.stringify(res.body)).not.toContain(target.name);
+          expect(JSON.stringify(res.body)).not.toContain(target.email);
+        }
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+        expect(await membershipsInB(other.id)).toBe(0);
+      });
+
+      it('accord absent, faux ou mal typé : 400, rien consommé', async () => {
+        const target = await orphanAccount('orphan-consent');
+        const invitation = await inviteToB(target.email);
+        for (const consent of [undefined, false, 'true']) {
+          const res = await credentials('accept', {
+            token: invitation.token,
+            email: target.email,
+            password: PASSWORD,
+            ...(consent === undefined ? {} : { consent }),
+          });
+          expect(res.status).toBe(400);
+        }
+        expect(await invitationStatus(invitation.id)).toBe('pending');
+        expect(await membershipsInB(target.id)).toBe(0);
+      });
+
+      it('acceptation réussie : aucun jeton délivré, membership exacte, puis connexion normale à B uniquement', async () => {
+        const target = await orphanAccount('orphan-ok');
+        const invitation = await inviteToB(target.email, {
+          permissions: ['analytics.read'],
+        });
+        const res = await credentials('accept', {
+          token: invitation.token,
+          email: target.email,
+          password: PASSWORD,
+          consent: true,
+        });
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({
+          organization: {
+            _id: orgBId,
+            name: 'Org B 16B1',
+            slug: expect.any(String),
+          },
+          membership: { role: 'seller', status: 'active' },
+        });
+        expect(await invitationStatus(invitation.id)).toBe('accepted');
+        const membership = await membershipModel
+          .findOne({
+            organizationId: new Types.ObjectId(orgBId),
+            userId: target.id,
+          })
+          .exec();
+        expect(membership!.permissions).toEqual(['analytics.read']);
+        // L'ancienne membership révoquée n'est jamais réactivée.
+        const inA = await membershipModel
+          .findOne({
+            organizationId: new Types.ObjectId(orgAId),
+            userId: target.id,
+          })
+          .exec();
+        expect(inA!.status).toBe('revoked');
+
+        const replay = await credentials('accept', {
+          token: invitation.token,
+          email: target.email,
+          password: PASSWORD,
+          consent: true,
+        });
+        expect(replay.status).toBe(400);
+
+        const loginRes = await login(target.email);
+        expect(loginRes.status).toBe(201);
+        const payload = jwtService.decode(String(loginRes.body.access_token));
+        expect(String(payload.orgId)).toBe(orgBId);
+        const context = await request(server())
+          .get('/auth/context')
+          .set('Authorization', `Bearer ${loginRes.body.access_token}`);
+        expect(context.status).toBe(200);
+        expect(context.body.organizationId).toBe(orgBId);
+        expect((await login(target.email, orgAId)).status).toBe(403);
+      });
+
+      it('limitation PARTAGÉE avec le login : aucun essai de mot de passe supplémentaire par IP', async () => {
+        const target = await orphanAccount('orphan-rl');
+        const invitation = await inviteToB(target.email);
+        clearThrottle();
+        for (let i = 0; i < 6; i++) {
+          const res = await request(server())
+            .post('/auth/login')
+            .send({ email: target.email, password: 'wrong-password-x' });
+          expect(res.status).toBe(401);
+        }
+        const statuses: number[] = [];
+        for (let i = 0; i < 5; i++) {
+          statuses.push(
+            (
+              await credentials('inspect', {
+                token: invitation.token,
+                email: target.email,
+                password: 'wrong-password-x',
+              })
+            ).status,
+          );
+        }
+        // 6 + 4 = 10 essais autorisés ; le 11ᵉ (5ᵉ ici) est refusé.
+        expect(statuses).toEqual([401, 401, 401, 401, 429]);
+        const blockedLogin = await login(target.email);
+        expect(blockedLogin.status).toBe(429);
+        expect(blockedLogin.body.code).toBe(AUTH_RATE_LIMIT_CODE);
+      });
+    });
+
+    it('limitation par IP existante (429) sur les routes publiques d’invitation', async () => {
+      for (const path of [
+        '/auth/invitations/account-link',
+        '/auth/invitations/create-account',
+      ]) {
+        clearThrottle();
+        let last: request.Response | undefined;
+        for (let i = 0; i < 11; i++) {
+          last = await request(server())
+            .post(path)
+            .send({ token: `rl-${i}-${Date.now()}` });
+        }
+        expect(last!.status).toBe(429);
+        expect(last!.body.code).toBe(AUTH_RATE_LIMIT_CODE);
+      }
     });
   });
 });

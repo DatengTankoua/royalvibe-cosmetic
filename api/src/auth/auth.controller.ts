@@ -8,21 +8,37 @@ import {
   HttpCode,
   Post,
   Put,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { SkipThrottle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
 import { effectivePermissions } from '../organizations/permissions';
 import { AllowInactiveSubscription } from '../subscriptions/subscription-access';
-import { AuthThrottlerGuard } from '../common/auth-rate-limiting';
+import {
+  AuthThrottlerGuard,
+  LoginSharedThrottlerGuard,
+} from '../common/auth-rate-limiting';
 import { SKIP_PAYMENT_THROTTLERS } from '../common/subscription-payment-rate-limiting';
 import { SKIP_SUPPORT_THROTTLER } from '../support/support-rate-limiting';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { SwitchOrganizationDto } from './dto/switch-organization.dto';
-import { AcceptInvitationDto } from './dto/accept-invitation.dto';
+import {
+  AcceptInvitationDto,
+  AcceptInvitationWithCredentialsDto,
+  CreateInvitationAccountDto,
+  InvitationCredentialsDto,
+  InvitationTokenDto,
+} from './dto/accept-invitation.dto';
+import {
+  INVITATION_ACCOUNT_LINK_ACCEPTED_MESSAGE,
+  InvitationAcceptanceService,
+} from '../organizations/invitation-acceptance.service';
+import { localeFromRequest } from '../common/i18n/locale';
 import { UpdateLocaleDto } from './dto/update-locale.dto';
 import { UsersService } from '../users/users.service';
 import { Public } from './decorators/public.decorator';
@@ -64,7 +80,7 @@ export function isPublicRegistrationEnabled(): boolean {
   return process.env.PUBLIC_REGISTRATION_ENABLED === 'true';
 }
 
-// `AuthThrottlerGuard` (login/register/accept-invitation) trace par IP ;
+// `AuthThrottlerGuard` (login/register/invitations) trace par IP ;
 // exclusion explicite de la fenêtre `invitation-create` (1-10B, tracker
 // utilisateur+organisation, sans rapport avec ces routes publiques) —
 // jamais l'inverse (`OrganizationsController` exclut symétriquement les
@@ -83,6 +99,7 @@ export class AuthController {
     private emailVerificationService: EmailVerificationService,
     private passwordResetService: PasswordResetService,
     private usersService: UsersService,
+    private invitationAcceptance: InvitationAcceptanceService,
   ) {}
 
   // Rate limiting (0B.6) : MÊME garde/fenêtres que /auth/login, sans
@@ -112,16 +129,108 @@ export class AuthController {
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }
-  // 1-6B.2 : publique et rate-limitée, INDÉPENDANTE de
-  // PUBLIC_REGISTRATION_ENABLED (une invitation valide EST l'autorisation).
-  // 200 explicite (pas de ressource "créée" au sens REST du POST par défaut).
+  // 1-18B : le lien d'invitation est remis au créateur ; il ne prouve ni
+  // l'identité de son détenteur ni le contrôle de l'adresse invitée.
+  // Compte existant : session de CE compte + accord explicite. Nouveau
+  // compte : second lien envoyé à l'adresse invitée. Toutes ces routes sont
+  // INDÉPENDANTES de PUBLIC_REGISTRATION_ENABLED et limitées par IP.
+  //
+  // Session requise (JWT applicatif ou limité : l'abonnement de
+  // l'organisation COURANTE n'intervient pas, aucune adhésion préalable à
+  // l'organisation cible). Sans session : 401 avant tout contrôle du corps.
   @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(AuthThrottlerGuard)
+  @AllowInactiveSubscription('identity')
+  @SkipOrganizationContext()
+  @Post('invitations/inspect')
+  inspectInvitation(
+    @CurrentUser() user: AuthenticatedPrincipal,
+    @Body() dto: InvitationTokenDto,
+  ) {
+    return this.invitationAcceptance.inspect(dto.token, user);
+  }
+
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(AuthThrottlerGuard)
+  @AllowInactiveSubscription('identity')
+  @SkipOrganizationContext()
+  @Post('invitations/accept')
+  acceptInvitation(
+    @CurrentUser() user: AuthenticatedPrincipal,
+    @Body() dto: AcceptInvitationDto,
+  ) {
+    return this.invitationAcceptance.acceptForAccount(dto, user);
+  }
+
+  // Compte existant SANS organisation active : la connexion lui est refusée
+  // (aucun JWT possible), l'identité est donc prouvée par les identifiants,
+  // avec la MÊME vérification que le login (mot de passe, adresse vérifiée)
+  // et les MÊMES compteurs de limitation (aucun essai supplémentaire par
+  // IP). Aucun JWT n'est délivré : aucune route métier ni d'organisation
+  // n'est accessible avant l'adhésion, puis via un login normal.
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(LoginSharedThrottlerGuard)
+  @Public()
+  @Post('invitations/credentials/inspect')
+  async inspectInvitationWithCredentials(
+    @Body() dto: InvitationCredentialsDto,
+  ) {
+    const user = await this.authService.verifyCredentials(
+      dto.email,
+      dto.password,
+    );
+    return this.invitationAcceptance.inspect(dto.token, user);
+  }
+
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(LoginSharedThrottlerGuard)
+  @Public()
+  @Post('invitations/credentials/accept')
+  async acceptInvitationWithCredentials(
+    @Body() dto: AcceptInvitationWithCredentialsDto,
+  ) {
+    const user = await this.authService.verifyCredentials(
+      dto.email,
+      dto.password,
+    );
+    return this.invitationAcceptance.acceptForAccount(
+      { token: dto.token, consent: dto.consent },
+      user,
+    );
+  }
+
+  // Public : réponse neutre (202) quel que soit l'état du compte invité ;
+  // recherche, réservation et envoi après la réponse.
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
   @UseGuards(AuthThrottlerGuard)
   @Public()
-  @Post('invitations/accept')
-  acceptInvitation(@Body() dto: AcceptInvitationDto) {
-    // 1-13A : acceptation puis envoi éventuel du lien de vérification.
-    return this.authService.acceptInvitation(dto);
+  @Post('invitations/account-link')
+  async requestInvitationAccountLink(
+    @Body() dto: InvitationTokenDto,
+    @Req() request: Request,
+  ) {
+    const { delivery } = await this.invitationAcceptance.requestAccountLink(
+      dto.token,
+      localeFromRequest(request),
+    );
+    void delivery;
+    return { message: INVITATION_ACCOUNT_LINK_ACCEPTED_MESSAGE };
+  }
+
+  // Public : `token` = lien reçu à l'adresse invitée. Compte créé vérifié,
+  // aucun JWT, aucune connexion automatique.
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(AuthThrottlerGuard)
+  @Public()
+  @Post('invitations/create-account')
+  createInvitationAccount(@Body() dto: CreateInvitationAccountDto) {
+    return this.invitationAcceptance.createAccount(dto);
   }
 
   // 1-13A : (ré)envoi public du lien de vérification. Limité par IP

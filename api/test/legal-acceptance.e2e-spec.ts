@@ -69,6 +69,10 @@ import {
   OWNER_TERMS,
   legalAcceptanceFor,
 } from './e2e/legal-acceptance-fixtures';
+import {
+  acceptWithSession,
+  requestAccountToken,
+} from './e2e/invitation-acceptance-fixtures';
 
 /**
  * E2E 1-16C.2 — Acceptation versionnée des conditions.
@@ -579,11 +583,21 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
 
   it('invitation, nouveau compte : refus sans case (invitation intacte), puis preuve des seules conditions d’utilisation', async () => {
     const address = email('invitee');
-    const token = await invite(address);
+    const invitationToken = await invite(address);
+    // 1-18B : compte créé depuis le lien reçu à l'adresse invitée.
+    const token = await requestAccountToken(
+      app.getHttpServer(),
+      sender,
+      invitationToken,
+      address,
+    );
+    const createAccount = (body: Record<string, unknown>) =>
+      http()
+        .post('/auth/invitations/create-account')
+        .send({ token, name: 'Invité', password: PASSWORD, ...body });
 
-    const refused = await http()
-      .post('/auth/invitations/accept')
-      .send({ token, name: 'Invité', password: PASSWORD });
+    await resetQuota();
+    const refused = await createAccount({});
     expect(refused.status).toBe(400);
     expect(refused.body.code).toBe('LEGAL_ACCEPTANCE_REQUIRED');
     expect((await invitationModel.findOne({ email: address }))!.status).toBe(
@@ -593,26 +607,19 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
 
     // Les conditions d'abonnement ne concernent pas un membre invité.
     await resetQuota();
-    const withSubscription = await http()
-      .post('/auth/invitations/accept')
-      .send({
-        token,
-        name: 'Invité',
-        password: PASSWORD,
-        legalAcceptance: legalAcceptanceFor(
-          LegalAcceptanceContext.OWNER_REGISTRATION,
-        ),
-      });
+    const withSubscription = await createAccount({
+      legalAcceptance: legalAcceptanceFor(
+        LegalAcceptanceContext.OWNER_REGISTRATION,
+      ),
+    });
     expect(withSubscription.status).toBe(400);
     expect(withSubscription.body.code).toBe('LEGAL_DOCUMENTS_INVALID');
 
     await resetQuota();
     legalNow = new Date('2031-05-07T10:00:00.000Z');
-    const accepted = await http()
-      .post('/auth/invitations/accept')
-      .send({ ...INVITATION_TERMS, token, name: 'Invité', password: PASSWORD });
+    const accepted = await createAccount({ ...INVITATION_TERMS });
     expect(accepted.status).toBe(200);
-    const userId = accepted.body.user._id as string;
+    const userId = (await userModel.findOne({ email: address }))!._id;
     const proofs = await acceptanceModel.find({ userId }).lean();
     expect(proofs).toHaveLength(1);
     expect(proofs[0].context).toBe('invitation_account');
@@ -626,7 +633,7 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
     ]);
   });
 
-  it('invitation, compte existant : rattaché sans preuve, même si une acceptation est jointe (le lien ne prouve pas l’identité)', async () => {
+  it('invitation, compte existant : rattaché par sa session sans preuve ; une acceptation jointe est refusée (le lien ne prouve pas l’identité)', async () => {
     const other = await http()
       .post('/auth/register')
       .send({
@@ -641,9 +648,19 @@ describe('Acceptation versionnée des conditions (e2e 1-16C.2)', () => {
     });
     const token = await invite(existingEmail);
     await resetQuota();
-    const res = await http()
+    const session = await tokenFor(
+      existingEmail,
+      other.body.organization._id as string,
+    );
+    const withTerms = await http()
       .post('/auth/invitations/accept')
-      .send({ ...INVITATION_TERMS, token });
+      .set('Authorization', `Bearer ${session}`)
+      .send({ ...INVITATION_TERMS, token, consent: true });
+    expect(withTerms.status).toBe(400);
+    expect(
+      (await invitationModel.findOne({ email: existingEmail }))!.status,
+    ).toBe('pending');
+    const res = await acceptWithSession(app.getHttpServer(), session, token);
     expect(res.status).toBe(200);
     expect(await acceptanceModel.countDocuments({ userId: existingId })).toBe(
       before,

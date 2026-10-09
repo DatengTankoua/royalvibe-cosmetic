@@ -15,6 +15,19 @@ import type { SelectableOrganization } from "@/lib/api";
 import { Wordmark } from "@/components/brand/wordmark";
 import { BackToHome } from "@/components/landing/back-to-home";
 import Link from "next/link";
+import {
+  INVITATION_ACCEPT_PATH,
+  INVITATION_RETURN_MARKER,
+  clearPendingInvitation,
+  readPendingInvitation,
+} from "@/lib/pending-invitation";
+import {
+  acceptInvitationWithCredentials,
+  getApiErrorCode,
+  getApiErrorMessage,
+  inspectInvitationWithCredentials,
+  type InvitationPreview,
+} from "@/lib/api";
 
 export default function LoginPage() {
   const { t } = useT("auth");
@@ -38,14 +51,80 @@ export default function LoginPage() {
   // 1-14C.2 : retour d'une session limitée expirée (message seul, aucune
   // donnée lue dans l'URL au-delà de ce marqueur).
   const [notice, setNotice] = useState(false);
+  // 1-18B : retour vers l'invitation en cours après connexion. Marqueur
+  // fixe (jamais une URL lue depuis la requête) ET invitation présente dans
+  // le stockage de l'onglet : aucune redirection ouverte.
+  const [forInvitation, setForInvitation] = useState(false);
   useEffect(() => {
-    if (
-      new URLSearchParams(window.location.search).get("session") ===
-      "limitee-expiree"
-    ) {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("session") === "limitee-expiree") {
       setNotice(true);
     }
+    if (
+      params.get("next") === INVITATION_RETURN_MARKER &&
+      readPendingInvitation()
+    ) {
+      setForInvitation(true);
+    }
   }, []);
+
+  // 1-18B : compte SANS organisation active (connexion refusée) venu pour
+  // une invitation — aperçu puis accord explicite, prouvés par les
+  // identifiants saisis (aucune session ouverte avant l'adhésion).
+  const [invitationPreview, setInvitationPreview] =
+    useState<InvitationPreview | null>(null);
+  const [invitationNotice, setInvitationNotice] = useMessage("auth");
+
+  const inspectWithCredentials = async (): Promise<boolean> => {
+    const token = readPendingInvitation();
+    if (!token) return false;
+    try {
+      setInvitationPreview(
+        await inspectInvitationWithCredentials(token, email, password),
+      );
+    } catch (err: unknown) {
+      const code = getApiErrorCode(err);
+      if (code === "INVITATION_ACCOUNT_MISMATCH") {
+        setError((tr) => tr("invitation.mismatchText"));
+      } else if (code === "MEMBERSHIP_ALREADY_EXISTS") {
+        clearPendingInvitation();
+        setError((tr) => tr("invitation.alreadyMember"));
+      } else {
+        if (code === "INVITATION_INVALID_OR_EXPIRED") clearPendingInvitation();
+        setError(getApiErrorMessage(err));
+      }
+    }
+    return true;
+  };
+
+  const acceptWithCredentials = async () => {
+    const token = readPendingInvitation();
+    if (!token || loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await acceptInvitationWithCredentials(token, email, password);
+      clearPendingInvitation();
+      setForInvitation(false);
+      setInvitationPreview(null);
+    } catch (err: unknown) {
+      setInvitationPreview(null);
+      setError(getApiErrorMessage(err));
+      setLoading(false);
+      return;
+    }
+    setLoading(false);
+    // Adhésion faite : connexion normale (l'organisation est désormais active).
+    await submit();
+  };
+
+  const declineWithCredentials = () => {
+    clearPendingInvitation();
+    setForInvitation(false);
+    setInvitationPreview(null);
+    setPassword("");
+    setInvitationNotice((tr) => tr("invitation.cancelledText"));
+  };
 
   const submit = async (organizationId?: string) => {
     setLoading(true);
@@ -58,6 +137,12 @@ export default function LoginPage() {
         return;
       }
       setPassword("");
+      // 1-18B : l'invitation en cours s'accepte aussi avec une session
+      // limitée (abonnement inactif de l'organisation courante).
+      if (forInvitation && readPendingInvitation()) {
+        router.push(INVITATION_ACCEPT_PATH);
+        return;
+      }
       // 1-14C.2 : abonnement inactif → écran d'accès limité (hors /app).
       router.push(
         outcome.status === "subscriptionInactive" ? "/access" : "/app",
@@ -66,6 +151,14 @@ export default function LoginPage() {
       if (err instanceof LoginError && err.code === "EMAIL_NOT_VERIFIED") {
         setOrganizations(null);
         setUnverifiedEmail(email.trim());
+        return;
+      }
+      if (
+        err instanceof LoginError &&
+        err.code === "ORGANIZATION_ACCESS_DENIED" &&
+        forInvitation &&
+        (await inspectWithCredentials())
+      ) {
         return;
       }
       // Message de l'API déjà dans la langue de la requête.
@@ -87,6 +180,61 @@ export default function LoginPage() {
     setPassword("");
     setError(null);
   };
+
+  if (invitationPreview) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-4 py-12 pb-[max(3rem,env(safe-area-inset-bottom))]">
+        <div className="w-full max-w-sm space-y-6 text-center">
+          <Wordmark className="mx-auto" size="large" />
+          <section className="space-y-4" aria-labelledby="inv-login-title">
+            <div className="space-y-1">
+              <h1
+                id="inv-login-title"
+                className="text-lg font-semibold break-words"
+              >
+                {t("invitation.confirmTitle", {
+                  organization: invitationPreview.organization.name,
+                })}
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                {t("invitation.confirmRole", {
+                  role:
+                    invitationPreview.role === "admin"
+                      ? t("invitation.roles.admin")
+                      : t("invitation.roles.seller"),
+                })}
+              </p>
+              <p className="text-sm text-muted-foreground break-all">
+                {t("invitation.accountLabel", { email: email.trim() })}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {t("invitation.noOrganizationNotice")}
+              </p>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Button
+                type="button"
+                className="w-full"
+                disabled={loading}
+                onClick={() => void acceptWithCredentials()}
+              >
+                {loading ? t("invitation.accepting") : t("invitation.accept")}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                disabled={loading}
+                onClick={declineWithCredentials}
+              >
+                {t("invitation.decline")}
+              </Button>
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
 
   if (organizations) {
     return (
@@ -144,6 +292,18 @@ export default function LoginPage() {
         {notice && !error && (
           <p role="status" className="text-center text-sm">
             {t("login.limitedExpired")}
+          </p>
+        )}
+
+        {forInvitation && (
+          <p role="status" className="text-center text-sm">
+            {t("invitation.loginNotice")}
+          </p>
+        )}
+
+        {invitationNotice && !error && (
+          <p role="status" className="text-center text-sm">
+            {invitationNotice}
           </p>
         )}
 
