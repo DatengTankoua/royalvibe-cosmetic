@@ -14,6 +14,7 @@ import {
   isNetworkError,
   requestPasswordReset,
 } from "@/lib/api";
+import { TurnstileWidget } from "@/components/auth/turnstile-widget";
 
 /** Même délai que le cooldown serveur (60 s entre deux envois). */
 const COOLDOWN_SECONDS = 60;
@@ -27,6 +28,11 @@ function errorMessage(err: unknown) {
         return t("resend.errors.rateLimited");
       case "EMAIL_DELIVERY_UNAVAILABLE":
         return t("resend.errors.deliveryUnavailable");
+      case "TURNSTILE_REQUIRED":
+      case "TURNSTILE_FAILED":
+        return t("resend.errors.antiBotFailed");
+      case "TURNSTILE_UNAVAILABLE":
+        return t("resend.errors.antiBotUnavailable");
       default:
         return t("forgot.errors.generic");
     }
@@ -44,6 +50,10 @@ export default function ForgotPasswordPage() {
   const [remaining, setRemaining] = useState(0);
   const [notice, setNotice] = useState(false);
   const [error, setError] = useMessage("auth");
+  // 1-18D : vérification anti-robot (action `password-reset`), neuve pour
+  // chaque demande ; renouvelée après usage ou expiration.
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileReset, setTurnstileReset] = useState(0);
 
   useEffect(() => {
     if (remaining <= 0) return;
@@ -59,12 +69,19 @@ export default function ForgotPasswordPage() {
       setError((tr) => tr("forgot.emailRequired"));
       return;
     }
+    if (!turnstileToken) {
+      setError((tr) => tr("resend.errors.antiBotRequired"));
+      return;
+    }
+    const token = turnstileToken;
+    setTurnstileToken(null);
+    setTurnstileReset((n) => n + 1);
     sending.current = true;
     setPending(true);
     setNotice(false);
     setError(null);
     try {
-      await requestPasswordReset(address);
+      await requestPasswordReset(address, token);
       setNotice(true);
       setRemaining(COOLDOWN_SECONDS);
     } catch (err: unknown) {
@@ -108,6 +125,13 @@ export default function ForgotPasswordPage() {
               disabled={pending}
             />
           </div>
+
+          <TurnstileWidget
+            action="password-reset"
+            onToken={setTurnstileToken}
+            resetSignal={turnstileReset}
+            disabled={pending}
+          />
 
           {notice && (
             <p role="status" className="text-sm text-muted-foreground">

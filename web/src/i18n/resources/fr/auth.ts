@@ -60,7 +60,7 @@ const authFr = {
     antiBot: {
       loading: "Chargement de la vérification anti-robot…",
       notConfigured:
-        "La vérification anti-robot n'est pas disponible : l'inscription est momentanément impossible.",
+        "La vérification anti-robot n'est pas disponible : cette action est momentanément impossible.",
       loadError:
         "La vérification anti-robot n'a pas pu se charger. Vérifie ta connexion, puis réessaie.",
       failed:
@@ -103,6 +103,12 @@ const authFr = {
       deliveryUnavailable:
         "L'envoi d'emails est momentanément indisponible. Réessayez plus tard.",
       generic: "La demande n'a pas pu aboutir. Réessayez plus tard.",
+      // 1-18D : vérification anti-robot avant chaque demande de lien.
+      antiBotRequired: "Validez d'abord la vérification anti-robot.",
+      antiBotFailed:
+        "La vérification anti-robot a échoué ou a expiré. Recommencez-la, puis réessayez.",
+      antiBotUnavailable:
+        "La vérification anti-robot est momentanément indisponible. Réessayez dans un instant.",
     },
   },
   forgot: {
