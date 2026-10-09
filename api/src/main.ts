@@ -52,6 +52,13 @@ async function bootstrap() {
   new Logger('Bootstrap').log(
     `Anti-robot de l'inscription : ${turnstile.mode}`,
   );
+  if (turnstile.mode === 'unconfigured') {
+    // 1-18D : demandes de liens (réinitialisation, vérification) refusées
+    // sans vérification anti-robot possible.
+    new Logger('Bootstrap').warn(
+      'Turnstile non configuré : demandes de réinitialisation et de vérification d’e-mail refusées (503).',
+    );
+  }
   if (
     turnstile.mode === 'unconfigured' &&
     process.env.PUBLIC_REGISTRATION_ENABLED === 'true'

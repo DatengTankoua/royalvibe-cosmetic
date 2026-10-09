@@ -59,7 +59,7 @@ const authEn: Translation<typeof authFr> = {
     antiBot: {
       loading: "Loading the anti-bot check…",
       notConfigured:
-        "The anti-bot check is not available: sign-up is temporarily impossible.",
+        "The anti-bot check is not available: this action is temporarily impossible.",
       loadError:
         "The anti-bot check could not load. Check your connection, then try again.",
       failed:
@@ -101,6 +101,12 @@ const authEn: Translation<typeof authFr> = {
       deliveryUnavailable:
         "Sending emails is temporarily unavailable. Try again later.",
       generic: "The request could not be completed. Try again later.",
+      // 1-18D: anti-bot check before each link request.
+      antiBotRequired: "Complete the anti-bot check first.",
+      antiBotFailed:
+        "The anti-bot check failed or expired. Complete it again, then try again.",
+      antiBotUnavailable:
+        "The anti-bot check is temporarily unavailable. Try again in a moment.",
     },
   },
   forgot: {

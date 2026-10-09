@@ -48,7 +48,10 @@ import {
   verificationTokenFrom,
 } from './e2e/email-verification-fixtures';
 import { acceptWithSession } from './e2e/invitation-acceptance-fixtures';
-import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import {
+  OWNER_TERMS,
+  simulatedTurnstileToken,
+} from './e2e/legal-acceptance-fixtures';
 
 /**
  * E2E 1-13B — mot de passe oublié et réinitialisation : `MongoMemoryReplSet`
@@ -128,8 +131,14 @@ describe('Mot de passe oublié et réinitialisation (e2e 1-13B)', () => {
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
   const login = (email: string, password: string, organizationId?: string) =>
     http().post('/auth/login').send({ email, password, organizationId });
+  // 1-18D : défi anti-robot simulé neuf (action propre à la route).
   const requestReset = (email: string) =>
-    http().post('/auth/password-reset/request').send({ email });
+    http()
+      .post('/auth/password-reset/request')
+      .send({
+        email,
+        turnstileToken: simulatedTurnstileToken('password-reset'),
+      });
   const confirmReset = (body: Record<string, unknown>) =>
     http().post('/auth/password-reset/confirm').send(body);
 
@@ -431,7 +440,10 @@ describe('Mot de passe oublié et réinitialisation (e2e 1-13B)', () => {
       const res = await http()
         .post('/auth/password-reset/request')
         .set('Accept-Language', 'en')
-        .send({ email: legacy });
+        .send({
+          email: legacy,
+          turnstileToken: simulatedTurnstileToken('password-reset'),
+        });
       expect(res.status).toBe(202);
       await nextResetToken(legacy, count + 1);
       expect(resetMailsTo(legacy).at(-1)!.subject).toBe(
@@ -669,7 +681,10 @@ describe('Mot de passe oublié et réinitialisation (e2e 1-13B)', () => {
       expect(statuses).toEqual([202, 202, 202, 202, 202, 429]);
       const verification = await http()
         .post('/auth/email-verification/request')
-        .send({ email: 'limit-13b@reset.test' });
+        .send({
+          email: 'limit-13b@reset.test',
+          turnstileToken: simulatedTurnstileToken('email-verification'),
+        });
       expect(verification.status).toBe(202);
     });
   });

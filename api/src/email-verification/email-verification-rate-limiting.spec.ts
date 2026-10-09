@@ -1,28 +1,22 @@
-import { ExecutionContext, HttpException } from '@nestjs/common';
 import type { ThrottlerStorage } from '@nestjs/throttler';
 import {
+  AddressRequestLimiter,
   EMAIL_VERIFICATION_ADDRESS_BLOCK,
   EMAIL_VERIFICATION_ADDRESS_LIMIT,
   EMAIL_VERIFICATION_ADDRESS_THROTTLER,
   EMAIL_VERIFICATION_ADDRESS_TTL,
-  EmailVerificationAddressThrottlerGuard,
+  EMAIL_VERIFICATION_RATE_LIMIT_CODE,
   emailVerificationAddressKey,
 } from './email-verification-rate-limiting';
+import { RateLimitedException } from '../common/auth-rate-limiting';
+import {
+  PASSWORD_RESET_ADDRESS_THROTTLER,
+  PASSWORD_RESET_RATE_LIMIT_CODE,
+} from '../password-reset/password-reset-rate-limiting';
 
-function makeContext(body: unknown) {
-  const setHeader = jest.fn();
-  const context = {
-    switchToHttp: () => ({
-      getRequest: () => ({ body }),
-      getResponse: () => ({ setHeader }),
-    }),
-  } as unknown as ExecutionContext;
-  return { context, setHeader };
-}
-
-describe('EmailVerificationAddressThrottlerGuard (1-13A)', () => {
+describe('AddressRequestLimiter (1-13A, service depuis 1-18D)', () => {
   let increment: jest.Mock;
-  let guard: EmailVerificationAddressThrottlerGuard;
+  let limiter: AddressRequestLimiter;
 
   beforeEach(() => {
     increment = jest.fn().mockResolvedValue({
@@ -31,13 +25,16 @@ describe('EmailVerificationAddressThrottlerGuard (1-13A)', () => {
       isBlocked: false,
       timeToBlockExpire: 0,
     });
-    const storage = { increment } as unknown as ThrottlerStorage;
-    guard = new EmailVerificationAddressThrottlerGuard(storage);
+    const storage: ThrottlerStorage = { increment };
+    limiter = new AddressRequestLimiter(storage);
   });
 
   it('clé = SHA-256 de l’adresse normalisée, jamais l’adresse en clair', async () => {
-    const { context } = makeContext({ email: '  Ada@Example.com ' });
-    await expect(guard.canActivate(context)).resolves.toBe(true);
+    await limiter.consume(
+      EMAIL_VERIFICATION_ADDRESS_THROTTLER,
+      EMAIL_VERIFICATION_RATE_LIMIT_CODE,
+      '  Ada@Example.com ',
+    );
     const [key, ttl, limit, block, name] = increment.mock.calls[0] as [
       string,
       number,
@@ -56,34 +53,45 @@ describe('EmailVerificationAddressThrottlerGuard (1-13A)', () => {
     ]);
   });
 
-  it('bloqué → 429 stable + Retry-After', async () => {
+  it('bloqué → 429 stable + Retry-After (via le filtre global)', async () => {
     increment.mockResolvedValue({
       totalHits: 6,
       timeToExpire: 900,
       isBlocked: true,
       timeToBlockExpire: 42,
     });
-    const { context, setHeader } = makeContext({ email: 'ada@example.com' });
-    const error: unknown = await guard
-      .canActivate(context)
+    const error: unknown = await limiter
+      .consume(
+        PASSWORD_RESET_ADDRESS_THROTTLER,
+        PASSWORD_RESET_RATE_LIMIT_CODE,
+        'ada@example.com',
+      )
       .catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(HttpException);
-    expect((error as HttpException).getStatus()).toBe(429);
-    expect((error as HttpException).getResponse()).toMatchObject({
-      code: 'EMAIL_VERIFICATION_RATE_LIMITED',
+    expect(error).toBeInstanceOf(RateLimitedException);
+    expect((error as RateLimitedException).getStatus()).toBe(429);
+    expect((error as RateLimitedException).getResponse()).toEqual({
+      statusCode: 429,
+      code: 'PASSWORD_RESET_RATE_LIMITED',
+      message: 'Trop de demandes. Réessayez plus tard.',
     });
+    expect((error as RateLimitedException).retryAfterSeconds).toBe(42);
     expect(
-      JSON.stringify((error as HttpException).getResponse()),
+      JSON.stringify((error as RateLimitedException).getResponse()),
     ).not.toContain('ada@');
-    expect(setHeader).toHaveBeenCalledWith('Retry-After', '42');
   });
 
-  it.each([undefined, {}, { email: 42 }, { email: '  ' }])(
-    'adresse absente/mal typée (%p) → laissée à la validation, aucun compteur',
-    async (body) => {
-      const { context } = makeContext(body);
-      await expect(guard.canActivate(context)).resolves.toBe(true);
-      expect(increment).not.toHaveBeenCalled();
-    },
-  );
+  it('namespaces distincts : vérification et réinitialisation ne partagent pas leurs compteurs', async () => {
+    await limiter.consume(
+      EMAIL_VERIFICATION_ADDRESS_THROTTLER,
+      EMAIL_VERIFICATION_RATE_LIMIT_CODE,
+      'a@b.co',
+    );
+    await limiter.consume(
+      PASSWORD_RESET_ADDRESS_THROTTLER,
+      PASSWORD_RESET_RATE_LIMIT_CODE,
+      'a@b.co',
+    );
+    const keys = increment.mock.calls.map((call) => call[0] as string);
+    expect(keys[0]).not.toBe(keys[1]);
+  });
 });

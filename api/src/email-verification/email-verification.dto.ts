@@ -1,5 +1,11 @@
 import { Transform } from 'class-transformer';
-import { Allow, IsEmail, MaxLength } from 'class-validator';
+import {
+  Allow,
+  IsEmail,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 /** POST /auth/email-verification/request — adresse normalisée (trim + minuscules). */
 export class RequestEmailVerificationDto {
@@ -9,6 +15,13 @@ export class RequestEmailVerificationDto {
   @IsEmail()
   @MaxLength(254)
   email: string;
+
+  // 1-18D : jeton Turnstile (action propre à chaque route). Facultatif AU
+  // DTO pour un refus au code stable `TURNSTILE_REQUIRED` par le service.
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  turnstileToken?: string;
 }
 
 /**

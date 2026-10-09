@@ -191,15 +191,16 @@ describe('EmailVerificationService (1-13A)', () => {
   });
 
   describe('requestByEmail', () => {
-    it('adresse normalisée ; envoi retourné sans être attendu', async () => {
+    it('1-18D : aucune lecture avant la réponse ; adresse normalisée ensuite ; envoi non attendu', async () => {
       let release: () => void = () => undefined;
       sender.send.mockImplementation(
         () => new Promise<void>((resolve) => (release = resolve)),
       );
-      const { delivery } = await service.requestByEmail(
-        '  Ada@Example.COM ',
-        NOW,
-      );
+      const { delivery } = service.requestByEmail('  Ada@Example.COM ', NOW);
+      // Retour synchrone : la recherche du compte n'a pas encore eu lieu.
+      expect(userModel.findOne).not.toHaveBeenCalled();
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
       expect(userModel.findOne).toHaveBeenCalledWith({
         email: 'ada@example.com',
       });
@@ -212,22 +213,25 @@ describe('EmailVerificationService (1-13A)', () => {
       ['déjà vérifié', makeUser({ emailVerifiedAt: new Date() })],
     ])('%s → aucun envoi, même forme de résultat', async (_l, user) => {
       findOneResult = user;
-      const { delivery } = await service.requestByEmail('x@example.com', NOW);
+      const { delivery } = service.requestByEmail('x@example.com', NOW);
       await expect(delivery).resolves.toBeUndefined();
       expect(sender.send).not.toHaveBeenCalled();
     });
 
     it('échec fournisseur → promesse résolue (réponse neutre préservée)', async () => {
       sender.send.mockRejectedValue(new EmailDeliveryError('timeout'));
-      const { delivery } = await service.requestByEmail('ada@example.com', NOW);
+      const { delivery } = service.requestByEmail('ada@example.com', NOW);
       await expect(delivery).resolves.toBeUndefined();
     });
 
-    it('configuration globale absente → 503 contrôlé AVANT toute lecture', async () => {
+    it('configuration globale absente → 503 contrôlé AVANT toute lecture', () => {
       sender.isConfigured.mockReturnValue(false);
-      const error: unknown = await service
-        .requestByEmail('ada@example.com', NOW)
-        .catch((e: unknown) => e);
+      let error: unknown;
+      try {
+        service.requestByEmail('ada@example.com', NOW);
+      } catch (e: unknown) {
+        error = e;
+      }
       expect(error).toBeInstanceOf(ServiceUnavailableException);
       expect(
         (error as ServiceUnavailableException).getResponse(),

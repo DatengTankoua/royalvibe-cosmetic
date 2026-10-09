@@ -4,7 +4,7 @@ import { User, UserSchema } from '../users/schemas/user.schema';
 import { EMAIL_SENDER } from './email-sender';
 import { ResendEmailSender } from './resend-email-sender';
 import { EmailVerificationService } from './email-verification.service';
-import { EmailVerificationAddressThrottlerGuard } from './email-verification-rate-limiting';
+import { AddressRequestLimiter } from './email-verification-rate-limiting';
 
 /**
  * 1-13A — Vérification des emails. `EMAIL_SENDER` = Resend en production ;
@@ -17,14 +17,10 @@ import { EmailVerificationAddressThrottlerGuard } from './email-verification-rat
   providers: [
     { provide: EMAIL_SENDER, useClass: ResendEmailSender },
     EmailVerificationService,
-    EmailVerificationAddressThrottlerGuard,
+    AddressRequestLimiter,
   ],
   // 1-13B : `EMAIL_SENDER` exporté — un seul expéditeur Resend, réutilisé
   // par la réinitialisation du mot de passe.
-  exports: [
-    EMAIL_SENDER,
-    EmailVerificationService,
-    EmailVerificationAddressThrottlerGuard,
-  ],
+  exports: [EMAIL_SENDER, EmailVerificationService, AddressRequestLimiter],
 })
 export class EmailVerificationModule {}

@@ -40,7 +40,10 @@ import {
   RecordingEmailSender,
   verificationTokenFrom,
 } from './e2e/email-verification-fixtures';
-import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import {
+  OWNER_TERMS,
+  simulatedTurnstileToken,
+} from './e2e/legal-acceptance-fixtures';
 import {
   acceptWithSession,
   createInvitedAccount,
@@ -104,8 +107,14 @@ describe('Vérification des emails (e2e 1-13A)', () => {
     http()
       .post('/auth/login')
       .send({ email, password: PASSWORD, organizationId });
+  // 1-18D : défi anti-robot simulé neuf (action propre à la route).
   const requestLink = (email: string) =>
-    http().post('/auth/email-verification/request').send({ email });
+    http()
+      .post('/auth/email-verification/request')
+      .send({
+        email,
+        turnstileToken: simulatedTurnstileToken('email-verification'),
+      });
   const confirm = (body: Record<string, unknown>) =>
     http().post('/auth/email-verification/confirm').send(body);
 
