@@ -34,7 +34,8 @@ import {
   autoConfirmVerificationEmails,
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
-import { INVITATION_TERMS, OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { createInvitedAccount } from './e2e/invitation-acceptance-fixtures';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -627,7 +628,7 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
       expect(res.status).toBe(400);
     });
 
-    it('acceptation d’invitation (nouveau compte) : 80 → 201 trimé ; 81 et espaces → 400', async () => {
+    it('création du compte invité (1-18B) : 20 → 200 trimé ; 21 et espaces → 400', async () => {
       const issue = async (to: string) => {
         const res = await request(app.getHttpServer())
           .post('/organizations/invitations')
@@ -639,19 +640,28 @@ describe('Branding d’organisation + logo tenant (e2e 1-8A)', () => {
           ''
         );
       };
-      const accept = (token: string, name: string) =>
-        request(app.getHttpServer())
-          .post('/auth/invitations/accept')
-          .send({ ...INVITATION_TERMS, token, name, password: PASSWORD });
+      // Lien de création reçu à l'adresse invitée (jamais celui du créateur).
+      const accept = (invitationToken: string, to: string, name: string) =>
+        createInvitedAccount(
+          app.getHttpServer(),
+          emailSender,
+          invitationToken,
+          to,
+          { name, password: PASSWORD },
+        );
 
-      const t81 = await issue(email());
-      expect((await accept(t81, 'u'.repeat(21))).status).toBe(400);
-      const tBlank = await issue(email());
-      expect((await accept(tBlank, '    ')).status).toBe(400);
+      const a81 = email();
+      expect((await accept(await issue(a81), a81, 'u'.repeat(21))).status).toBe(
+        400,
+      );
+      const aBlank = email();
+      expect((await accept(await issue(aBlank), aBlank, '    ')).status).toBe(
+        400,
+      );
 
       const addr = email();
       const t80 = await issue(addr);
-      const ok = await accept(t80, `  ${'é'.repeat(20)}  `);
+      const ok = await accept(t80, addr, `  ${'é'.repeat(20)}  `);
       expect(ok.status).toBe(200);
       const user = await userModel.findOne({ email: addr }).exec();
       expect(user!.name).toBe('é'.repeat(20));

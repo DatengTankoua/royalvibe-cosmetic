@@ -355,36 +355,6 @@ describe('AuthService', () => {
       await expect(service.register(VALID_DTO)).rejects.toThrow('boom');
       expect(emailVerification.issueForUser).not.toHaveBeenCalled();
     });
-
-    it('acceptInvitation : acceptation déléguée puis envoi pour le User rattaché', async () => {
-      const acceptInvitation = jest.fn().mockResolvedValue({
-        user: { _id: USER_OBJECT_ID, name: 'Ada', email: 'ada@example.com' },
-        organization: { _id: ORG_A_ID, name: 'Ada Corp', slug: 'ada-corp' },
-        membership: { role: 'seller', status: 'active' },
-      });
-      service = await build();
-      (organizations as unknown as Record<string, jest.Mock>).acceptInvitation =
-        acceptInvitation;
-      emailVerification.issueForUser.mockResolvedValue('not_required');
-      const dto = { token: 'tok' };
-      const result = await service.acceptInvitation(dto);
-      expect(acceptInvitation).toHaveBeenCalledWith(dto);
-      expect(emailVerification.issueForUser).toHaveBeenCalledWith(
-        USER_OBJECT_ID,
-      );
-      expect(result.emailVerification).toEqual({ status: 'not_required' });
-      expect(result.membership).toEqual({ role: 'seller', status: 'active' });
-    });
-
-    it('acceptInvitation refusée → aucun envoi', async () => {
-      service = await build();
-      (organizations as unknown as Record<string, jest.Mock>).acceptInvitation =
-        jest.fn().mockRejectedValue(new BadRequestException());
-      await expect(service.acceptInvitation({ token: 'x' })).rejects.toThrow(
-        BadRequestException,
-      );
-      expect(emailVerification.issueForUser).not.toHaveBeenCalled();
-    });
   });
 
   describe('login — adresse non vérifiée (1-13A)', () => {

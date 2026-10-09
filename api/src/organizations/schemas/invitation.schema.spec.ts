@@ -9,6 +9,10 @@ import {
   OrganizationInvitation,
   OrganizationInvitationSchema,
 } from './invitation.schema';
+import {
+  INVITATION_ACCOUNT_TOKEN_INDEX_FILTER,
+  INVITATION_ACCOUNT_TOKEN_INDEX_NAME,
+} from '../invitation-account-index';
 
 type InvitationInstance = {
   organizationId: Types.ObjectId | undefined;
@@ -143,9 +147,32 @@ describe('OrganizationInvitationSchema', () => {
     }
   });
 
-  it('déclare exactement les 3 index attendus (tokenHash unique, liste, pending unique partiel)', () => {
+  it('déclare exactement les 4 index attendus (tokenHash unique, liste, pending unique partiel, lien de création partiel)', () => {
     const indexes = OrganizationInvitationSchema.indexes();
-    expect(indexes).toHaveLength(3);
+    expect(indexes).toHaveLength(4);
+
+    // 1-18B : lien de création de compte, partiel (seulement s'il existe).
+    const accountIndex = indexes.find(
+      ([key]) => (key as Record<string, number>).accountTokenHash === 1,
+    );
+    expect(accountIndex![1]).toEqual({
+      name: INVITATION_ACCOUNT_TOKEN_INDEX_NAME,
+      partialFilterExpression: { ...INVITATION_ACCOUNT_TOKEN_INDEX_FILTER },
+    });
+    for (const field of [
+      'accountTokenHash',
+      'accountTokenExpiresAt',
+      'accountLinkLastSentAt',
+      'accountLinkSendCount',
+    ]) {
+      expect(
+        (
+          OrganizationInvitationSchema.path(field) as unknown as {
+            options: { select?: boolean };
+          }
+        ).options.select,
+      ).toBe(false);
+    }
 
     const tokenHashIndex = indexes.find(
       ([key]) => (key as Record<string, number>).tokenHash === 1,

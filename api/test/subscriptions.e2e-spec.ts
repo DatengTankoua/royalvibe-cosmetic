@@ -50,7 +50,8 @@ import {
   createE2eEmailSender,
   verificationTokenFrom,
 } from './e2e/email-verification-fixtures';
-import { INVITATION_TERMS, OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { createInvitedAccount } from './e2e/invitation-acceptance-fixtures';
+import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -344,6 +345,8 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
           'createdAt',
           'currency',
           'logoKey',
+          // 1-17A : identité du stockage du logo (jamais commerciale).
+          'logoStorage',
           'name',
           'slug',
           'status',
@@ -351,6 +354,9 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
         ].sort(),
       );
       expect(org!.status).toBe('active');
+      // Aucun logo à l'inscription : clé et stockage absents.
+      expect(org!.logoKey).toBeNull();
+      expect(org!.logoStorage).toBeNull();
     });
 
     it('échec de l’essai → rollback complet (ni User, ni Organization, ni période)', async () => {
@@ -502,14 +508,13 @@ describe('Abonnements par organisation (e2e 1-14B)', () => {
         new URL(String(issued.body.invitationUrl)).searchParams.get('token') ??
         '';
       clearThrottle();
-      const accepted = await request(app.getHttpServer())
-        .post('/auth/invitations/accept')
-        .send({
-          ...INVITATION_TERMS,
-          token,
-          name: 'Invitee',
-          password: PASSWORD,
-        });
+      const accepted = await createInvitedAccount(
+        app.getHttpServer(),
+        emailSender,
+        token,
+        inviteeEmail,
+        { name: 'Invitee', password: PASSWORD },
+      );
       expect(accepted.status).toBe(200);
       await login(inviteeEmail);
       await login(owner.email);

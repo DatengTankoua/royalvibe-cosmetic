@@ -41,8 +41,10 @@ const PUBLIC_NAVIGATIONS = new Set(["/", OFFLINE_URL, "/auth/login", "/auth/regi
 // en query string (?token=...) — jamais de cache/precache/fallback pour ce
 // chemin, quel que soit le mode de requête, vérifié AVANT toute autre
 // stratégie.
+// 1-18B : tout le parcours d'invitation, dont la page de création de compte
+// (lien envoyé à l'adresse invitée, ?token=...).
 function isInvitationAcceptPath(pathname) {
-  return pathname.startsWith("/auth/invitations/accept");
+  return pathname.startsWith("/auth/invitations/");
 }
 
 // 1-13A : même règle pour le lien de vérification d'email (?token=...) —

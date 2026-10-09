@@ -25,6 +25,12 @@ import { PasswordResetService } from '../password-reset/password-reset.service';
 import { PasswordResetAddressThrottlerGuard } from '../password-reset/password-reset-rate-limiting';
 import { UsersService } from '../users/users.service';
 import { PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE } from './auth.controller';
+import type { Request } from 'express';
+import type { AuthenticatedPrincipal } from './strategies/jwt.strategy';
+import {
+  INVITATION_ACCOUNT_LINK_ACCEPTED_MESSAGE,
+  InvitationAcceptanceService,
+} from '../organizations/invitation-acceptance.service';
 
 /**
  * AuthController — garde de l'inscription publique (0B.5) +
@@ -36,6 +42,7 @@ describe('AuthController', () => {
   let loginMock: jest.Mock;
   let switchMock: jest.Mock;
   let acceptInvitationMock: jest.Mock;
+  let requestAccountLinkMock: jest.Mock;
   let listActiveOrganizationsMock: jest.Mock;
   let requestByEmailMock: jest.Mock;
   let confirmMock: jest.Mock;
@@ -77,6 +84,7 @@ describe('AuthController', () => {
     loginMock = jest.fn();
     switchMock = jest.fn();
     acceptInvitationMock = jest.fn();
+    requestAccountLinkMock = jest.fn();
     listActiveOrganizationsMock = jest.fn();
     requestByEmailMock = jest.fn();
     confirmMock = jest.fn();
@@ -97,7 +105,6 @@ describe('AuthController', () => {
             register: registerMock,
             login: loginMock,
             switchOrganization: switchMock,
-            acceptInvitation: acceptInvitationMock,
             // 1-14C.1 : projection d'accès (abonnement actif simulé).
             accessViewFor: jest.fn().mockResolvedValue({
               subscriptionState: 'active',
@@ -130,6 +137,14 @@ describe('AuthController', () => {
         },
         // 1-16G : préférence de langue du compte.
         { provide: UsersService, useValue: { setLocale: setLocaleMock } },
+        // 1-18B : acceptation des invitations.
+        {
+          provide: InvitationAcceptanceService,
+          useValue: {
+            acceptForAccount: acceptInvitationMock,
+            requestAccountLink: requestAccountLinkMock,
+          },
+        },
         AuthThrottlerGuard,
         EmailVerificationAddressThrottlerGuard,
         PasswordResetAddressThrottlerGuard,
@@ -296,21 +311,36 @@ describe('AuthController', () => {
     });
   });
 
-  // ---- acceptation d'invitation (1-6B.2) ----
+  // ---- acceptation d'invitation (1-18B) ----
 
-  it('acceptInvitation : délègue à AuthService.acceptInvitation (acceptation + envoi 1-13A) avec le DTO exact', async () => {
+  it('accept : session (principal du JWT) et DTO exacts, jamais une identité du corps', async () => {
     const result = {
-      user: { _id: '1', name: 'A', email: 'a@b.co' },
       organization: { _id: '2', name: 'Org', slug: 'org' },
       membership: { role: 'seller', status: 'active' },
-      emailVerification: { status: 'sent' },
     };
     acceptInvitationMock.mockResolvedValue(result);
-    const dto = { token: 'raw-token', name: 'Ada', password: 'secret-123' };
-    const out = await controller.acceptInvitation(dto);
+    const dto = { token: 'raw-token', consent: true as const };
+    const out = await controller.acceptInvitation(
+      AUTH_USER as AuthenticatedPrincipal,
+      dto,
+    );
     expect(acceptInvitationMock).toHaveBeenCalledTimes(1);
-    expect(acceptInvitationMock).toHaveBeenCalledWith(dto);
+    expect(acceptInvitationMock).toHaveBeenCalledWith(dto, AUTH_USER);
     expect(out).toEqual(result);
+  });
+
+  it('account-link : réponse neutre, sans attendre l’envoi', async () => {
+    requestAccountLinkMock.mockResolvedValue({
+      delivery: new Promise<void>(() => undefined),
+    });
+    const out = await controller.requestInvitationAccountLink(
+      { token: 'raw-token' },
+      { headers: { 'accept-language': 'en' } } as unknown as Request,
+    );
+    expect(requestAccountLinkMock).toHaveBeenCalledWith('raw-token', 'en');
+    expect(out).toEqual({
+      message: INVITATION_ACCOUNT_LINK_ACCEPTED_MESSAGE,
+    });
   });
 
   // ---- vérification des emails (1-13A) ----

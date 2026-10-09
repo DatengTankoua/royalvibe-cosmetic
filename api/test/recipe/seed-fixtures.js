@@ -43,6 +43,9 @@ async function main() {
   const { EmailVerificationService } = C.dist(
     'email-verification/email-verification.service',
   );
+  const { InvitationAcceptanceService } = C.dist(
+    'organizations/invitation-acceptance.service',
+  );
 
   const outbox = [];
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -58,6 +61,7 @@ async function main() {
     const schema = await createFixtureSchema(connection);
 
     const auth = moduleRef.get(AuthService);
+    const invitations = moduleRef.get(InvitationAcceptanceService);
     const organizations = moduleRef.get(OrganizationsService);
     const verification = moduleRef.get(EmailVerificationService);
     const confirm = async (email) => {
@@ -95,15 +99,25 @@ async function main() {
         },
       );
       const token = new URL(invitationUrl).searchParams.get('token');
-      const accepted = await auth.acceptInvitation({
-        token,
+      // 1-18B : lien de création envoyé à l'adresse invitée (compte vérifié).
+      const { delivery } = await invitations.requestAccountLink(token, 'fr');
+      await delivery;
+      const mail = outbox.filter((m) => m.to === account.email).pop();
+      const match =
+        mail &&
+        /\/auth\/invitations\/create-account\?token=([^\s"&]+)/.exec(mail.text);
+      if (!match) throw new Error(`Lien de création absent : ${account.email}`);
+      await invitations.createAccount({
+        token: decodeURIComponent(match[1]),
         name: account.name,
         password: C.PASSWORD,
         legalAcceptance: legalAcceptance('invitation_account'),
       });
-      await confirm(account.email);
+      const user = await connection
+        .collection('users')
+        .findOne({ email: account.email });
       created[account.key] = {
-        userId: String(accepted.user._id),
+        userId: String(user._id),
         organizationId: owner.organizationId,
       };
     }

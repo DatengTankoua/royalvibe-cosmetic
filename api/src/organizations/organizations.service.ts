@@ -35,11 +35,9 @@ import {
   PERMISSION_DENIED_RESPONSE,
 } from './permissions';
 import { UsersService } from '../users/users.service';
-import { UserRole } from '../users/schemas/user.schema';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { UpdateMembershipDto } from './dto/update-membership.dto';
 import { UpdateBrandingDto } from './dto/update-branding.dto';
-import { AcceptInvitationDto } from '../auth/dto/accept-invitation.dto';
 import { SocketRegistryService } from './socket-registry.service';
 import { S3Service, type StoredObjectRef } from '../s3/s3.service';
 import { logoKeyPrefix } from '../storage-quota/storage-prefixes';
@@ -53,11 +51,6 @@ import {
   ORGANIZATION_NAME_MAX_LENGTH,
   ORGANIZATION_NAME_MESSAGE,
 } from '../common/validation/name-rules';
-import * as bcrypt from 'bcryptjs';
-import { LegalAcceptanceService } from '../legal/legal-acceptance.service';
-import type { ResolvedLegalSubmission } from '../legal/legal-acceptance.service';
-import { LegalAcceptanceContext } from '../legal/legal-documents';
-import { isAppLocale } from '../common/i18n/locale';
 
 // Session transactionnelle Mongoose (`mongodb.ClientSession`) : même
 // convention que `products.service.ts`/`audit.service.ts`.
@@ -205,7 +198,6 @@ export class OrganizationsService {
     private s3Service: S3Service,
     private configService: ConfigService,
     private subscriptionsService: SubscriptionsService,
-    private legalAcceptance: LegalAcceptanceService,
     private storageQuota: StorageQuotaService,
   ) {}
 
@@ -585,176 +577,6 @@ export class OrganizationsService {
       'invitations:changed',
     );
     return this.toInvitationView(invitation);
-  }
-
-  /**
-   * Acceptation atomique (1-6B.2) : réclame l'invitation par un filtre
-   * CONDITIONNEL (`pending` + `expiresAt > now`, une seule écriture
-   * atomique — la garde anti-concurrence), crée le User SI absent (rôle
-   * legacy `seller` — JAMAIS `admin`, même pour une invitation
-   * `role: admin` : l'autorité effective vient de la membership, 1-7+),
-   * puis la Membership (`role`/`permissions`/`organizationId`/
-   * `invitedById` EXCLUSIVEMENT copiés de l'invitation). Toute erreur
-   * abandonne TOUTE la transaction (l'invitation redevient `pending`).
-   * Erreur générique et STABLE (`INVITATION_INVALID_OR_EXPIRED`) pour toute
-   * invitation invalide (inconnue/expirée/revoked/accepted) ET pour une
-   * organisation absente/suspendue : ne révèle jamais laquelle.
-   */
-  async acceptInvitation(
-    dto: AcceptInvitationDto,
-    now: Date = new Date(),
-  ): Promise<InvitationAcceptanceResult> {
-    const tokenHash = createHash('sha256').update(dto.token).digest('hex');
-    const session = await this.connection.startSession();
-    let result: InvitationAcceptanceResult | undefined;
-
-    try {
-      await session.withTransaction(async () => {
-        const invitation = await this.invitationModel
-          .findOneAndUpdate(
-            {
-              tokenHash,
-              status: InvitationStatus.PENDING,
-              expiresAt: { $gt: now },
-            },
-            { status: InvitationStatus.ACCEPTED, acceptedAt: now },
-            { session, new: true },
-          )
-          .exec();
-        if (!invitation) {
-          throw this.invitationInvalidOrExpired();
-        }
-
-        const organization = await this.organizationModel
-          .findById(invitation.organizationId)
-          .session(session)
-          .exec();
-        if (
-          !organization ||
-          organization.status !== OrganizationStatus.ACTIVE
-        ) {
-          throw this.invitationInvalidOrExpired();
-        }
-
-        let user = await this.usersService.findByEmail(
-          invitation.email,
-          session,
-        );
-        // 1-16C.2 : preuve seulement pour un compte CRÉÉ ici. Un compte
-        // existant n'accepte rien par ce lien (il ne prouve pas l'identité) ;
-        // son accord lui est demandé après connexion.
-        let legal: ResolvedLegalSubmission | null = null;
-        if (!user) {
-          if (!dto.name || !dto.password) {
-            throw new BadRequestException({
-              code: 'ACCOUNT_DETAILS_REQUIRED',
-              message: 'name et password sont requis pour créer un compte.',
-            });
-          }
-          // Refus (case absente, version périmée…) → toute la transaction
-          // est annulée : l'invitation reste `pending`.
-          legal = this.legalAcceptance.resolveSubmission(
-            LegalAcceptanceContext.INVITATION_ACCOUNT,
-            dto.legalAcceptance,
-          );
-          const hashed = await bcrypt.hash(dto.password, 10);
-          user = await this.usersService.create(
-            {
-              name: dto.name,
-              email: invitation.email,
-              password: hashed,
-              role: UserRole.SELLER,
-              // 1-16G : langue des conditions acceptées.
-              ...(isAppLocale(legal.locale) ? { locale: legal.locale } : {}),
-            },
-            session,
-          );
-        }
-
-        // Membre déjà présent (même suspendu/révoqué) : refus stable,
-        // AUCUNE réactivation silencieuse.
-        const existingMembership = await this.membershipModel
-          .findOne({
-            organizationId: invitation.organizationId,
-            userId: user._id,
-          })
-          .session(session)
-          .exec();
-        if (existingMembership) {
-          throw new ConflictException({
-            code: 'MEMBERSHIP_ALREADY_EXISTS',
-            message: 'Ce compte appartient déjà à cette organisation.',
-          });
-        }
-
-        const [membership] = await this.membershipModel.create(
-          [
-            {
-              organizationId: invitation.organizationId,
-              userId: user._id,
-              role: invitation.role,
-              permissions: [...invitation.permissions],
-              invitedById: invitation.invitedById,
-            },
-          ],
-          { session },
-        );
-
-        // Garde défensive finale (même esprit que `createOwnerOrganization`) :
-        // l'index unique `{organizationId,userId}` garantit au plus une
-        // membership, cette vérification prouve qu'elle existe bien.
-        const memberships = await this.membershipModel.countDocuments(
-          { organizationId: invitation.organizationId, userId: user._id },
-          { session },
-        );
-        if (memberships !== 1) {
-          throw new Error(
-            'Invitation acceptance invariant violated: expected exactly one membership.',
-          );
-        }
-
-        if (legal) {
-          await this.legalAcceptance.record(session, {
-            userId: user._id.toString(),
-            organizationId: invitation.organizationId.toString(),
-            submission: legal,
-          });
-        }
-
-        result = {
-          user: {
-            _id: user._id.toString(),
-            name: user.name,
-            email: user.email,
-          },
-          organization: {
-            _id: organization._id.toString(),
-            name: organization.name,
-            slug: organization.slug,
-          },
-          membership: { role: membership.role, status: membership.status },
-        };
-      });
-    } finally {
-      // Session fermée dans TOUS les cas (succès ou erreur) — pas de fuite.
-      await session.endSession();
-    }
-
-    if (!result) {
-      throw new Error(
-        'Invitation acceptance transaction completed without a result',
-      );
-    }
-    // 1-15C : APRÈS le commit, hors du callback rejouable de la transaction.
-    this.socketRegistry.signalOrganization(
-      result.organization._id,
-      'invitations:changed',
-    );
-    this.socketRegistry.signalOrganization(
-      result.organization._id,
-      'members:changed',
-    );
-    return result;
   }
 
   /** Membres de l'organisation courante uniquement, jamais `password`/`User.role`. */

@@ -69,6 +69,21 @@ export class OrganizationInvitation {
 
   @Prop({ type: Date, default: null })
   acceptedAt: Date | null;
+
+  // 1-18B : lien de création de compte envoyé à l'adresse invitée (preuve
+  // de contrôle de la boîte, distincte du lien remis au créateur). Hash
+  // SHA-256 uniquement ; jamais sélectionnés par défaut.
+  @Prop({ type: String, select: false })
+  accountTokenHash?: string;
+
+  @Prop({ type: Date, select: false })
+  accountTokenExpiresAt?: Date;
+
+  @Prop({ type: Date, select: false })
+  accountLinkLastSentAt?: Date;
+
+  @Prop({ type: Number, select: false })
+  accountLinkSendCount?: number;
 }
 
 export const OrganizationInvitationSchema = SchemaFactory.createForClass(
@@ -89,5 +104,17 @@ OrganizationInvitationSchema.index(
   {
     unique: true,
     partialFilterExpression: { status: InvitationStatus.PENDING },
+  },
+);
+
+// 1-18B : recherche du lien de création de compte (invitations qui en ont un).
+// Mêmes nom et options que la migration de pré-déploiement
+// `create-invitation-account-token-index` (invitation-account-index.ts) :
+// `autoIndex` et la migration aboutissent au même index, sans conflit.
+OrganizationInvitationSchema.index(
+  { accountTokenHash: 1 },
+  {
+    name: 'accountTokenHash_1',
+    partialFilterExpression: { accountTokenHash: { $exists: true } },
   },
 );

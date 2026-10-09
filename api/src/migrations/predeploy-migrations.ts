@@ -40,6 +40,8 @@ export const PREDEPLOY_MIGRATIONS: readonly string[] = Object.freeze([
   'create-support-request-indexes.js',
   // 1-16C.2 : collections et index des preuves d'acceptation.
   'create-legal-acceptance-indexes.js',
+  // 1-18B : index partiel du lien de création de compte d'un invité.
+  'create-invitation-account-token-index.js',
 ]);
 
 function main(): number {

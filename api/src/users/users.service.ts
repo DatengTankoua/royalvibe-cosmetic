@@ -42,6 +42,8 @@ export class UsersService {
       password: string;
       role?: UserRole;
       locale?: AppLocale;
+      /** 1-18B : adresse prouvée à la création (lien reçu à cette adresse). */
+      emailVerifiedAt?: Date;
     },
     session?: MongooseSession,
   ): Promise<UserDocument> {

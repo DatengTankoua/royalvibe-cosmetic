@@ -4,7 +4,7 @@ import { join } from 'path';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { RegisterDto } from '../../auth/dto/register.dto';
-import { AcceptInvitationDto } from '../../auth/dto/accept-invitation.dto';
+import { CreateInvitationAccountDto } from '../../auth/dto/accept-invitation.dto';
 import { UpdateBrandingDto } from '../../organizations/dto/update-branding.dto';
 import {
   ORGANIZATION_NAME_MAX_LENGTH,
@@ -38,7 +38,7 @@ const register = (fields: Record<string, unknown>) =>
     ...fields,
   });
 const accept = (name: unknown) =>
-  check(AcceptInvitationDto, { token: 't', name, password: 'secret1' });
+  check(CreateInvitationAccountDto, { token: 't', name, password: 'secret1' });
 const branding = (name: unknown) => check(UpdateBrandingDto, { name });
 
 describe('Limites de noms (1-12D : 20/20)', () => {
@@ -117,7 +117,7 @@ describe('Limites de noms (1-12D : 20/20)', () => {
     });
   });
 
-  describe('utilisateur — register.name et acceptInvitation.name', () => {
+  describe('utilisateur — register.name et create-account.name (1-18B)', () => {
     it('20 caractères → accepté ; 21 → refusé', async () => {
       expect((await register({ name: 'u'.repeat(20) })).errors).toEqual([]);
       expect((await register({ name: 'u'.repeat(21) })).errors).toEqual([
@@ -140,14 +140,19 @@ describe('Limites de noms (1-12D : 20/20)', () => {
       expect((await accept('  ')).errors).toEqual(['name']);
     });
 
-    it('Unicode/accents acceptés ; name absent reste optionnel à l’acceptation', async () => {
+    it('Unicode/accents acceptés ; name requis pour créer le compte invité', async () => {
       expect((await register({ name: 'Anne-Sophie Oyono' })).errors).toEqual(
         [],
       );
       expect((await accept('李小龙 Ñandú')).errors).toEqual([]);
-      expect((await check(AcceptInvitationDto, { token: 't' })).errors).toEqual(
-        [],
-      );
+      expect(
+        (
+          await check(CreateInvitationAccountDto, {
+            token: 't',
+            password: 'secret1',
+          })
+        ).errors,
+      ).toEqual(['name']);
     });
 
     it('valeur non chaîne → refusée (jamais convertie)', async () => {

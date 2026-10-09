@@ -9,6 +9,7 @@ import { AuthService } from './auth.service';
 import {
   AUTH_THROTTLER_WINDOWS,
   AuthThrottlerGuard,
+  LoginSharedThrottlerGuard,
 } from '../common/auth-rate-limiting';
 import { createInvitationThrottlerWindow } from '../common/invitation-rate-limiting';
 import { createSupportThrottlerWindow } from '../support/support-rate-limiting';
@@ -74,6 +75,8 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
     AuthService,
     JwtStrategy,
     AuthThrottlerGuard,
+    // 1-18B : compteurs partagés avec le login (acceptation par identifiants).
+    LoginSharedThrottlerGuard,
     // Ordre global FIXÉ (NestJS exécute dans l'ordre du tableau) :
     // 1. JwtAuthGuard → 401 si absent/invalide / laisse passer si @Public()
     // 2. OrganizationGuard → 403 uniforme si membership/organisation inactive

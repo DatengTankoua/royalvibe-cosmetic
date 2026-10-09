@@ -119,7 +119,12 @@ describe('Matrice des routes — contrôle commercial (1-14C.1)', () => {
         'POST /payments/webhooks/campay',
         'POST /auth/email-verification/confirm',
         'POST /auth/email-verification/request',
-        'POST /auth/invitations/accept',
+        // 1-18B : demande du lien de création et création du compte invité.
+        'POST /auth/invitations/account-link',
+        'POST /auth/invitations/create-account',
+        // 1-18B : compte sans organisation active (identifiants, aucun JWT).
+        'POST /auth/invitations/credentials/accept',
+        'POST /auth/invitations/credentials/inspect',
         'POST /auth/login',
         'POST /auth/password-reset/confirm',
         'POST /auth/password-reset/request',
@@ -134,6 +139,9 @@ describe('Matrice des routes — contrôle commercial (1-14C.1)', () => {
         'GET /auth/context',
         'GET /auth/me',
         'GET /auth/organizations',
+        // 1-18B : acceptation par la session du compte invité.
+        'POST /auth/invitations/accept',
+        'POST /auth/invitations/inspect',
         'POST /auth/subscription-access/complete',
         'POST /auth/switch-organization',
         // 1-16A : retrait de l'appareil de l'utilisateur courant (déconnexion
@@ -339,6 +347,10 @@ describe('Matrice des routes — contrôle commercial (1-14C.1)', () => {
     const skipping = collectRoutes().filter((r) => r.skipsOrganizationContext);
     expect(skipping.map((r) => r.route)).toEqual([
       'GET /auth/organizations',
+      // 1-18B : aucune adhésion préalable à l'organisation cible ; seule
+      // l'identité de la session compte.
+      'POST /auth/invitations/accept',
+      'POST /auth/invitations/inspect',
       'POST /auth/switch-organization',
       'PUT /auth/me/locale',
     ]);
