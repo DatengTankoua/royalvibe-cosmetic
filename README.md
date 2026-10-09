@@ -249,6 +249,42 @@ non consultée par le lot 1-16D).
 NEXT_PUBLIC_API_URL=https://<votre-service>.railway.app
 ```
 
+#### Anti-abus de l'authentification (1-18C)
+
+| Variable | Où | Défaut | Rôle |
+|---|---|---|---|
+| `TURNSTILE_SECRET_KEY` | API (secret) | vide | Clé secrète du widget Turnstile. Vide → toute inscription refusée (503) |
+| `TURNSTILE_ALLOWED_HOSTNAMES` | API | vide | Noms d'hôte exacts acceptés dans la réponse `siteverify` (ex. `www.stock-master.app`). Requis avec la clé |
+| `TURNSTILE_TIMEOUT_MS` | API | 5000 | Délai de `siteverify` (500–10000 ms) ; dépassé → 503 réessayable |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | Web (public, build) | vide | Clé de site du même widget. Vide → formulaire d'inscription inactif |
+| `AUTH_ACCOUNT_FAILURE_LIMIT` / `AUTH_ACCOUNT_FAILURE_WINDOW_SECONDS` | API | 10 / 900 | Échecs de mot de passe par identifiant normalisé (login et routes par identifiants), fenêtre fixe. Au-delà : défi Turnstile (action `login`) exigé pour chaque essai |
+| `AUTH_CHALLENGED_FAILURE_LIMIT` | API | 5 | Échecs APRÈS défi, par compte ET IP (/64 en IPv6), même fenêtre (1–20) |
+| `INVITATION_EMAIL_RECIPIENT_LIMIT` / `INVITATION_EMAIL_RECIPIENT_WINDOW_SECONDS` | API | 5 / 86400 | E-mails de création de compte par adresse invitée, toutes invitations confondues |
+
+Activation de Turnstile (aucun compte Cloudflare n'est configuré par le
+dépôt) :
+
+1. Dans Cloudflare, créer UN widget Turnstile pour le domaine du web
+   (`www.stock-master.app`, et le domaine Vercel s'il sert aussi les
+   formulaires). Mode conseillé : *Managed*. Il sert à l'inscription
+   (action `register`) et au défi de récupération d'accès de la connexion
+   (action `login`) ; aucune action n'est à déclarer dans Cloudflare.
+2. Railway (API) : `TURNSTILE_SECRET_KEY` (secret) et
+   `TURNSTILE_ALLOWED_HOSTNAMES` (mêmes noms d'hôte). Redémarrer : le mode
+   effectif est journalisé (« Anti-robot de l'inscription : cloudflare »).
+3. Vercel (web) : `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, puis redéployer (valeur
+   inlinée au build).
+4. Seulement ensuite, si l'inscription doit être ouverte :
+   `PUBLIC_REGISTRATION_ENABLED=true` (API) et
+   `NEXT_PUBLIC_REGISTRATION_ENABLED=true` (web).
+
+Les clés de test publiques de Cloudflare et le mode simulé
+(`TURNSTILE_SIMULATED`) sont refusés au démarrage dès que
+`NODE_ENV=production`, quelles que soient les origines configurées. Recette
+locale : `start --anti-bot=simulated` (API en `development`). Le web n'a pas de CSP : s'il en
+reçoit une, autoriser `https://challenges.cloudflare.com` en `script-src` et
+`frame-src`.
+
 ### Migrations à exécuter avant l'activation d'une version
 
 **Règle : une migration requise par une version s'exécute AVANT que cette
@@ -293,6 +329,7 @@ Elle lance dans l'ordre, et s'arrête au premier échec :
 | `create-push-notification-indexes.js` | 1-16A | Vérifiée au démarrage en production, même avec `WEB_PUSH_ENABLED=false` |
 | `create-support-request-indexes.js` | 1-16C.1 | Index TTL `createdAt_1_ttl` (`expireAfterSeconds = 2592000`, 30 jours) du registre `support_requests`. Non bloquante au démarrage : sans elle, l'assistance fonctionne mais le registre n'expire jamais |
 | `create-legal-acceptance-indexes.js` | 1-16C.2 | Collections `legal_acceptances` et `legal_document_versions`, index `{ userId, acceptedAt }`. Non bloquante au démarrage |
+| `create-rate-limit-indexes.js` | 1-18C | Index TTL `expiresAt_1_ttl` de `rate_limit_buckets` (plafonds persistants par compte et par destinataire d'invitation). Migration d'index uniquement. Nettoyage : non bloquante au démarrage, l'exactitude des plafonds n'en dépend pas. Lecture seule : `--check` |
 | `create-invitation-account-token-index.js` | 1-18B | Index partiel `accountTokenHash_1` de `organizationinvitations` (lien de création de compte d'un invité). Migration d'index uniquement, aucune donnée. Index de performance, non bloquant au démarrage ; aussi déclaré dans le schéma (mêmes nom et options), donc compatible avec `autoIndex`. Lecture seule : `--check` |
 
 **Échec partiel :** chaque migration s'exécute à part et s'arrête au premier

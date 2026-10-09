@@ -73,6 +73,7 @@ interface AuthContextValue {
     email: string,
     password: string,
     organizationId?: string,
+    challengeToken?: string,
   ) => Promise<LoginOutcome>;
   logout: () => Promise<void>;
   // 1-14C.2 : jeton LIMITÉ courant (sessionStorage), jamais le JWT applicatif.
@@ -166,10 +167,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       email: string,
       password: string,
       organizationId?: string,
+      challengeToken?: string,
     ): Promise<LoginOutcome> => {
       epochRef.current += 1;
       try {
-        const result = await authLogin({ email, password, organizationId });
+        const result = await authLogin({
+          email,
+          password,
+          organizationId,
+          ...(challengeToken ? { challengeToken } : {}),
+        });
         if ("organizationSelectionRequired" in result) {
           return {
             status: "organizationSelectionRequired",

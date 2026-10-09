@@ -102,6 +102,23 @@ export const ERROR_MESSAGE_TRANSLATIONS: Readonly<
   'Une invitation est déjà en attente pour cet email.': {
     en: 'An invitation is already pending for this email.',
   },
+  // 1-18C : récupération d'accès après plafond par compte.
+  'Trop de tentatives pour ce compte. Validez la vérification anti-robot pour réessayer.':
+    {
+      en: 'Too many attempts for this account. Complete the anti-bot check to try again.',
+    },
+  // 1-18C : vérification anti-robot de l'inscription.
+  'Validez la vérification anti-robot, puis réessayez.': {
+    en: 'Complete the anti-bot check, then try again.',
+  },
+  'La vérification anti-robot a échoué ou a expiré. Recommencez-la, puis réessayez.':
+    {
+      en: 'The anti-bot check failed or expired. Complete it again, then try again.',
+    },
+  'La vérification anti-robot est momentanément indisponible. Réessayez plus tard.':
+    {
+      en: 'The anti-bot check is temporarily unavailable. Try again later.',
+    },
   // 1-18B : acceptation des invitations.
   "Cette invitation est destinée à un autre compte. Connectez-vous avec l'adresse invitée.":
     {

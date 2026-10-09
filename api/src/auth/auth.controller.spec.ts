@@ -25,6 +25,7 @@ import { PasswordResetService } from '../password-reset/password-reset.service';
 import { PasswordResetAddressThrottlerGuard } from '../password-reset/password-reset-rate-limiting';
 import { UsersService } from '../users/users.service';
 import { PASSWORD_RESET_REQUEST_ACCEPTED_MESSAGE } from './auth.controller';
+import { TurnstileService } from '../anti-bot/turnstile.service';
 import type { Request } from 'express';
 import type { AuthenticatedPrincipal } from './strategies/jwt.strategy';
 import {
@@ -49,6 +50,7 @@ describe('AuthController', () => {
   let resetRequestMock: jest.Mock;
   let resetConfirmMock: jest.Mock;
   let setLocaleMock: jest.Mock;
+  let turnstileVerifyMock: jest.Mock;
 
   const VALID_REG: RegisterDto = {
     name: 'E2E User',
@@ -91,6 +93,7 @@ describe('AuthController', () => {
     resetRequestMock = jest.fn();
     resetConfirmMock = jest.fn();
     setLocaleMock = jest.fn().mockResolvedValue(undefined);
+    turnstileVerifyMock = jest.fn().mockResolvedValue(undefined);
 
     const module: TestingModule = await Test.createTestingModule({
       // Garde 0B.6 : enregistrée pour que la DI du contrôleur se résolve
@@ -137,6 +140,11 @@ describe('AuthController', () => {
         },
         // 1-16G : préférence de langue du compte.
         { provide: UsersService, useValue: { setLocale: setLocaleMock } },
+        // 1-18C : vérification anti-robot de l'inscription.
+        {
+          provide: TurnstileService,
+          useValue: { verify: turnstileVerifyMock },
+        },
         // 1-18B : acceptation des invitations.
         {
           provide: InvitationAcceptanceService,
@@ -202,13 +210,51 @@ describe('AuthController', () => {
     expect(out).toEqual(result);
   });
 
+  // ---- 1-18C : anti-robot AVANT toute logique d'inscription ----
+
+  it('inscription : Turnstile vérifié (jeton du corps, action register) avant AuthService.register', async () => {
+    process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+    const order: string[] = [];
+    turnstileVerifyMock.mockImplementation(() => {
+      order.push('turnstile');
+      return Promise.resolve();
+    });
+    registerMock.mockImplementation(() => {
+      order.push('register');
+      return Promise.resolve({});
+    });
+    await controller.register({ ...VALID_REG, turnstileToken: 'tok' });
+    expect(turnstileVerifyMock).toHaveBeenCalledWith('tok', 'register');
+    expect(order).toEqual(['turnstile', 'register']);
+  });
+
+  it('inscription : refus anti-robot → AuthService.register jamais appelé', async () => {
+    process.env.PUBLIC_REGISTRATION_ENABLED = 'true';
+    turnstileVerifyMock.mockRejectedValue(new BadRequestException());
+    await expect(
+      controller.register({ ...VALID_REG, turnstileToken: 'tok' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(registerMock).not.toHaveBeenCalled();
+  });
+
+  it('inscription désactivée : refus 403 sans même consulter Turnstile', () => {
+    delete process.env.PUBLIC_REGISTRATION_ENABLED;
+    expect(callRegister()).toBeInstanceOf(ForbiddenException);
+    expect(turnstileVerifyMock).not.toHaveBeenCalled();
+  });
+
   // ---- login : forwarding de l'organisation ----
 
   it('login sans organisation → le service reçoit le DTO sans organizationId', async () => {
     loginMock.mockResolvedValue({ access_token: 'ok' });
-    await controller.login(VALID_LOGIN);
+    await controller.login(VALID_LOGIN, {
+      ip: '::ffff:203.0.113.7',
+    } as unknown as Request);
     expect(loginMock).toHaveBeenCalledTimes(1);
-    expect(loginMock).toHaveBeenCalledWith(VALID_LOGIN);
+    // 1-18C : clé client normalisée comme le throttler (jamais du corps).
+    expect(loginMock).toHaveBeenCalledWith(VALID_LOGIN, {
+      clientKey: '203.0.113.7',
+    });
     expect(VALID_LOGIN).not.toHaveProperty('organizationId');
   });
 
@@ -216,9 +262,10 @@ describe('AuthController', () => {
     const ORG_ID = '223344556677889900112233';
     loginMock.mockResolvedValue({ access_token: 'ok' });
     const dto: LoginDto = { ...VALID_LOGIN, organizationId: ORG_ID };
-    await controller.login(dto);
+    await controller.login(dto, { ip: '127.0.0.1' } as unknown as Request);
     expect(loginMock).toHaveBeenCalledWith(
       expect.objectContaining({ organizationId: ORG_ID }),
+      { clientKey: '127.0.0.1' },
     );
   });
 

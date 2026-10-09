@@ -31,6 +31,10 @@ import { BackToHome } from "@/components/landing/back-to-home";
 import { AuthLegalLinks } from "@/components/legal/auth-legal-links";
 import { TermsAcceptanceField } from "@/components/legal/terms-acceptance-field";
 import {
+  TURNSTILE_AVAILABLE,
+  TurnstileWidget,
+} from "@/components/auth/turnstile-widget";
+import {
   buildLegalAcceptance,
   legalAcceptanceErrorKey,
 } from "@/lib/legal/acceptance";
@@ -57,6 +61,10 @@ export default function RegisterPage() {
     delivery: EmailVerificationDelivery;
   } | null>(null);
   const submitting = useRef(false);
+  // 1-18C : jeton anti-robot courant (usage unique) ; `resetSignal` exige une
+  // nouvelle vérification après chaque échec d'envoi.
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileReset, setTurnstileReset] = useState(0);
   // 0B.5 : parcours d'inscription fermé — par défaut, un accès direct à la
   // route affiche un court message (affichage seulement ; le backend est
   // l'autorité finale et refuse déjà côté API).
@@ -138,6 +146,10 @@ export default function RegisterPage() {
       return;
     }
     setTermsError(false);
+    if (!turnstileToken) {
+      setError((tr) => tr("register.antiBot.required"));
+      return;
+    }
     submitting.current = true;
     setLoading(true);
     setError(null);
@@ -149,6 +161,7 @@ export default function RegisterPage() {
         organizationName,
         // 1-16G : langue des documents affichés (celle de l'interface).
         legalAcceptance: buildLegalAcceptance("owner_registration", locale),
+        turnstileToken,
       });
       setPassword("");
       setConfirmation("");
@@ -159,12 +172,19 @@ export default function RegisterPage() {
     } catch (err: unknown) {
       const code = getApiErrorCode(err);
       const legalKey = legalAcceptanceErrorKey(code);
+      // Jeton consommé ou refusé : toujours une nouvelle vérification.
+      setTurnstileToken(null);
+      setTurnstileReset((n) => n + 1);
       setError(
         code === "REGISTRATION_DISABLED"
           ? (tr) => tr("register.disabled")
-          : legalKey
-            ? () => tl(legalKey)
-            : getApiErrorMessage(err),
+          : code === "TURNSTILE_REQUIRED" || code === "TURNSTILE_FAILED"
+            ? (tr) => tr("register.antiBot.failed")
+            : code === "TURNSTILE_UNAVAILABLE"
+              ? (tr) => tr("register.antiBot.unavailable")
+              : legalKey
+                ? () => tl(legalKey)
+                : getApiErrorMessage(err),
       );
     } finally {
       submitting.current = false;
@@ -278,7 +298,18 @@ export default function RegisterPage() {
             </p>
           )}
 
-          <Button type="submit" className="w-full" disabled={loading}>
+          <TurnstileWidget
+            action="register"
+            onToken={setTurnstileToken}
+            resetSignal={turnstileReset}
+            disabled={loading}
+          />
+
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={loading || !TURNSTILE_AVAILABLE}
+          >
             {loading ? t("register.submitting") : t("register.submit")}
           </Button>
         </form>

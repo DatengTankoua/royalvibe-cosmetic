@@ -53,4 +53,11 @@ export class RegisterDto {
   @ValidateNested()
   @Type(() => LegalAcceptanceDto)
   legalAcceptance?: LegalAcceptanceDto;
+
+  // 1-18C : jeton Cloudflare Turnstile (ou simulé en test). Facultatif AU
+  // DTO pour un refus au code stable `TURNSTILE_REQUIRED` par le service.
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  turnstileToken?: string;
 }

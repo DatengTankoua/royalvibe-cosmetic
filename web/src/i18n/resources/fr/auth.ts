@@ -35,6 +35,12 @@ const authFr = {
     errors: {
       generic: "Erreur de connexion",
     },
+    // 1-18C : récupération d'accès après trop de tentatives sur ce compte.
+    challenge: {
+      required:
+        "Trop de tentatives pour ce compte. Valide la vérification anti-robot ci-dessous, puis reconnecte-toi.",
+      missing: "Valide d'abord la vérification anti-robot.",
+    },
   },
   register: {
     closedTitle: "Inscription désactivée",
@@ -50,6 +56,22 @@ const authFr = {
     submit: "Créer mon entreprise",
     submitting: "Création…",
     haveAccount: "Déjà un compte ?",
+    // 1-18C : vérification anti-robot (Cloudflare Turnstile).
+    antiBot: {
+      loading: "Chargement de la vérification anti-robot…",
+      notConfigured:
+        "La vérification anti-robot n'est pas disponible : l'inscription est momentanément impossible.",
+      loadError:
+        "La vérification anti-robot n'a pas pu se charger. Vérifie ta connexion, puis réessaie.",
+      failed:
+        "La vérification anti-robot a échoué ou a expiré. Recommence-la, puis réessaie.",
+      required:
+        "Valide la vérification anti-robot avant de créer ton entreprise.",
+      unavailable:
+        "La vérification anti-robot est momentanément indisponible. Réessaie dans un instant.",
+      retry: "Recommencer la vérification",
+      simulated: "Je ne suis pas un robot (simulation locale)",
+    },
   },
   verify: {
     metaTitle: "Confirmer mon adresse email",

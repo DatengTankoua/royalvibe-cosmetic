@@ -25,6 +25,7 @@ import { InvitationCreateThrottlerGuard } from '../common/invitation-rate-limiti
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { EmailVerificationModule } from '../email-verification/email-verification.module';
 import { InvitationAcceptanceService } from './invitation-acceptance.service';
+import { RateLimitModule } from '../common/rate-limit/rate-limit.module';
 
 @Module({
   imports: [
@@ -37,6 +38,8 @@ import { InvitationAcceptanceService } from './invitation-acceptance.service';
     LegalModule,
     // 1-18B : expéditeur unique (lien de création de compte d'un invité).
     EmailVerificationModule,
+    // 1-18C : plafond persistant par destinataire d'invitation.
+    RateLimitModule,
     MongooseModule.forFeature([
       { name: Organization.name, schema: OrganizationSchema },
       {

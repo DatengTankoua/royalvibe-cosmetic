@@ -116,11 +116,11 @@ describe('Index accountTokenHash des invitations (e2e 1-18B)', () => {
   });
 
   it('pré-déploiement : migration listée, après les migrations existantes', () => {
-    expect(PREDEPLOY_MIGRATIONS.at(-1)).toBe(
+    const index = PREDEPLOY_MIGRATIONS.indexOf(
       'create-invitation-account-token-index.js',
     );
-    expect(PREDEPLOY_MIGRATIONS).toContain(
-      'create-legal-acceptance-indexes.js',
+    expect(index).toBeGreaterThan(
+      PREDEPLOY_MIGRATIONS.indexOf('create-legal-acceptance-indexes.js'),
     );
   });
 });
