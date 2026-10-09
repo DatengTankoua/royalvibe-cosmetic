@@ -62,6 +62,7 @@ import {
 } from './e2e/ephemeral-mongodb';
 import { SimulatedPaymentProvider } from './e2e/simulated-payment-provider';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 /**
  * E2E 1-14D.2B — demandes de paiement et moteur de confirmation, sur le
@@ -141,17 +142,15 @@ describe('Paiements d’abonnement (e2e 1-14D.2B)', () => {
     clearThrottle();
     seq += 1;
     const email = `${label}-${seq}-14d2b@pay.test`;
-    const reg = await request(server())
-      .post('/auth/register')
-      .send({
-        ...OWNER_TERMS,
-        name: 'Owner',
-        email,
-        password: PASSWORD,
-        organizationName: `Org ${seq}`,
-      });
-    expect(reg.status).toBe(201);
-    const orgId = reg.body.organization._id as string;
+    const reg = await postRegister(app, {
+      ...OWNER_TERMS,
+      name: 'Owner',
+      email,
+      password: PASSWORD,
+      organizationName: `Org ${seq}`,
+    });
+    expect(reg.status).toBe(202);
+    const orgId = reg.owner!.organization._id;
     return { email, orgId, token: await appToken(email) };
   }
 

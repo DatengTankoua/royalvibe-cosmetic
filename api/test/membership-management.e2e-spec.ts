@@ -31,6 +31,7 @@ import {
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -75,15 +76,13 @@ describe('Gestion des membres + transfert de propriété (e2e 1-7C)', () => {
   let transferTargetMembershipId = '';
 
   const register = (name: string, email: string, organizationName: string) =>
-    request(app.getHttpServer())
-      .post('/auth/register')
-      .send({
-        ...OWNER_TERMS,
-        name,
-        email,
-        password: PASSWORD,
-        organizationName,
-      });
+    postRegister(app, {
+      ...OWNER_TERMS,
+      name,
+      email,
+      password: PASSWORD,
+      organizationName,
+    });
   const login = (email: string, organizationId: string) =>
     request(app.getHttpServer())
       .post('/auth/login')
@@ -224,8 +223,8 @@ describe('Gestion des membres + transfert de propriété (e2e 1-7C)', () => {
         'owner-a-17c@royalvibe.test',
         'Org A 17C',
       );
-      expect(regA.status).toBe(201);
-      orgAId = regA.body.organization._id as string;
+      expect(regA.status).toBe(202);
+      orgAId = regA.owner!.organization._id;
       const loginA = await login('owner-a-17c@royalvibe.test', orgAId);
       expect(loginA.status).toBe(201);
       ownerAToken = loginA.body.access_token as string;
@@ -235,8 +234,8 @@ describe('Gestion des membres + transfert de propriété (e2e 1-7C)', () => {
         'owner-b-17c@royalvibe.test',
         'Org B 17C',
       );
-      expect(regB.status).toBe(201);
-      orgBId = regB.body.organization._id as string;
+      expect(regB.status).toBe(202);
+      orgBId = regB.owner!.organization._id;
       const loginB = await login('owner-b-17c@royalvibe.test', orgBId);
       expect(loginB.status).toBe(201);
 
@@ -245,8 +244,8 @@ describe('Gestion des membres + transfert de propriété (e2e 1-7C)', () => {
         'owner-d-17c@royalvibe.test',
         'Org D 17C',
       );
-      expect(regD.status).toBe(201);
-      orgDId = regD.body.organization._id as string;
+      expect(regD.status).toBe(202);
+      orgDId = regD.owner!.organization._id;
       const loginD = await login('owner-d-17c@royalvibe.test', orgDId);
       expect(loginD.status).toBe(201);
       ownerDToken = loginD.body.access_token as string;

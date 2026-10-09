@@ -33,6 +33,7 @@ import {
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -398,16 +399,14 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
       // un login SANS organizationId dans ce fichier (tous les logins ci-dessous
       // fournissent un organizationId explicite), donc aucune interférence.
       const register = (name: string, email: string, password: string) =>
-        request(app.getHttpServer())
-          .post('/auth/register')
-          .send({
-            ...OWNER_TERMS,
-            name,
-            email,
-            password,
-            // 1-12D : noms d'organisation limités à 20 caractères.
-            organizationName: `${name.slice(0, 16)} Org`,
-          });
+        postRegister(app, {
+          ...OWNER_TERMS,
+          name,
+          email,
+          password,
+          // 1-12D : noms d'organisation limités à 20 caractères.
+          organizationName: `${name.slice(0, 16)} Org`,
+        });
       const login = (
         email: string,
         password: string,
@@ -426,13 +425,13 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
         ADMIN_EMAIL,
         ADMIN_PW,
       );
-      expect(adminReg.status).toBe(201);
+      expect(adminReg.status).toBe(202);
       const sellerReg = await register(
         'Seller Socket E2E',
         SELLER_EMAIL,
         SELLER_PW,
       );
-      expect(sellerReg.status).toBe(201);
+      expect(sellerReg.status).toBe(202);
 
       // Élévation admin sur la base éphémère (périmètre : PAS de politique
       // d'inscription modifiée — écriture directe de test uniquement).
@@ -522,7 +521,7 @@ describe('Socket.IO (e2e — authentification du handshake + contrôle des origi
         DELETED_EMAIL,
         DELETED_PW,
       );
-      expect(deletedReg.status).toBe(201);
+      expect(deletedReg.status).toBe(202);
       // Membership active AVANT login (sinon 403 ORGANIZATION_ACCESS_DENIED).
       const deletedDoc = await userModel.findOne({ email: DELETED_EMAIL });
       expect(deletedDoc).toBeTruthy();

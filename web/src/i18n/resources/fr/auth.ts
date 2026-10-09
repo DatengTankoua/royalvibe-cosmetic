@@ -46,10 +46,15 @@ const authFr = {
     closedTitle: "Inscription désactivée",
     closedText:
       "L'inscription en ligne est momentanément indisponible. Si tu as déjà un compte, connecte-toi.",
-    doneTitle: "Compte créé",
-    doneText: "Ton entreprise et ton compte propriétaire ont été créés.",
-    deliveryFailed:
-      "L'email de confirmation n'a pas pu être envoyé. Ton compte est bien créé : demande un nouvel envoi ci-dessous.",
+    // 1-18E : même écran final que l'adresse ait déjà un compte ou non.
+    doneTitle: "Vérifie ta messagerie",
+    doneText:
+      "Si l'adresse {{email}} peut être utilisée pour un nouveau compte, un email de confirmation vient d'y être envoyé : ouvre le lien qu'il contient.",
+    doneExisting:
+      "Tu as déjà un compte avec cette adresse ? Connecte-toi, ou réinitialise ton mot de passe si tu l'as oublié.",
+    doneForgot: "Réinitialiser mon mot de passe",
+    doneResend:
+      "Rien reçu après quelques minutes ? Demande un nouveau lien de confirmation :",
     disabled: "L'inscription est actuellement désactivée.",
     title: "Créer ton entreprise",
     subtitle: "Ceci crée ton entreprise et ton compte propriétaire.",

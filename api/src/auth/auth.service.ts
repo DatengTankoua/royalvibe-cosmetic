@@ -2,6 +2,8 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
+  OnApplicationShutdown,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
@@ -99,8 +101,35 @@ export interface OwnerOnboardingResult {
 type MongooseSession = Awaited<ReturnType<Connection['startSession']>>;
 
 /** Conflit stable existant (0B.5) : ne révèle pas l'existence du compte. */
-const DUPLICATE_EMAIL_MESSAGE =
-  'Si cette adresse est valide, un email de confirmation a déjà été envoyé.';
+/**
+ * 1-18E — Réponse PUBLIQUE unique de l'inscription (202), identique pour une
+ * adresse nouvelle ou déjà utilisée : aucun identifiant, aucun jeton.
+ */
+export const REGISTRATION_ACCEPTED_MESSAGE =
+  "Si cette adresse peut être utilisée, un e-mail de confirmation vient d'y être envoyé. Si vous avez déjà un compte, connectez-vous ou réinitialisez votre mot de passe.";
+
+/** Résultat INTERNE de l'inscription : jamais renvoyé au client. */
+export type RegistrationOutcome =
+  | { created: true; userId: string; organizationId: string }
+  | { created: false };
+
+/**
+ * Doublon sur l'index unique de l'adresse (`users.email`) seulement : un
+ * doublon sur un autre index (ex. slug d'organisation) reste une erreur.
+ */
+function isDuplicateEmailError(err: unknown): boolean {
+  if (!isDuplicateKeyError(err)) return false;
+  const e = err as {
+    keyPattern?: Record<string, unknown>;
+    keyValue?: Record<string, unknown>;
+    message?: unknown;
+  };
+  return (
+    (e.keyPattern !== undefined && 'email' in e.keyPattern) ||
+    (e.keyValue !== undefined && 'email' in e.keyValue) ||
+    (typeof e.message === 'string' && /index: email_1\b/.test(e.message))
+  );
+}
 
 /** Erreur pilote MongoDB E11000 (clé dupliquée) — jamais un cast fragile. */
 function isDuplicateKeyError(err: unknown): boolean {
@@ -113,7 +142,7 @@ function isDuplicateKeyError(err: unknown): boolean {
 }
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnApplicationShutdown {
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
@@ -126,17 +155,72 @@ export class AuthService {
     private turnstile: TurnstileService,
   ) {}
 
+  /** 1-18E : envois de vérification différés en cours (arrêt propre, tests). */
+  private readonly pendingVerifications = new Set<Promise<void>>();
+
   /**
-   * 1-13A : le lien de vérification part APRÈS le commit de l'onboarding.
-   * Un échec d'envoi ne supprime ni ne vérifie le compte (statut `failed`,
-   * renvoi possible via /auth/email-verification/request).
+   * 1-18E — Inscription sans divulgation de l'existence d'un compte.
+   *
+   * - Validations communes AVANT toute recherche du compte (DTO, Turnstile
+   *   au contrôleur, conditions légales ici) : mêmes refus quelle que soit
+   *   l'adresse.
+   * - Adresse déjà utilisée : AUCUNE écriture (mot de passe, profil,
+   *   adhésion, preuves), aucune organisation, aucun hachage, aucun e-mail.
+   * - Adresse nouvelle : transaction inchangée (compte, organisation,
+   *   membership `owner`, preuve légale) ; une panne réelle reste une erreur.
+   * - Inscriptions concurrentes : le doublon sur l'index de l'adresse annule
+   *   la transaction perdante (aucun document orphelin) et se traduit par la
+   *   même issue qu'une adresse existante.
+   * - Le lien de vérification part APRÈS la réponse (1-13A : un échec d'envoi
+   *   ne supprime ni ne vérifie le compte ; renvoi possible) : la réponse ne
+   *   dépend plus du fournisseur d'e-mail.
    */
-  async register(dto: RegisterDto): Promise<OwnerOnboardingResult> {
-    const result = await this.registerOwner(dto);
-    const status = await this.emailVerificationService.issueForUser(
-      result.user._id,
+  async register(dto: RegisterDto): Promise<RegistrationOutcome> {
+    const legal = this.legalAcceptance.resolveSubmission(
+      LegalAcceptanceContext.OWNER_REGISTRATION,
+      dto.legalAcceptance,
     );
-    return { ...result, emailVerification: { status } };
+    if (await this.usersService.findByEmail(normalizeAccountEmail(dto.email))) {
+      return { created: false };
+    }
+    let created: Awaited<ReturnType<AuthService['registerOwner']>>;
+    try {
+      created = await this.registerOwner(dto, legal);
+    } catch (err) {
+      if (isDuplicateEmailError(err)) return { created: false };
+      throw err;
+    }
+    this.dispatchVerification(created.user._id);
+    return {
+      created: true,
+      userId: created.user._id,
+      organizationId: created.organization._id,
+    };
+  }
+
+  /** Envoi du lien après la réponse ; échec journalisé, jamais propagé. */
+  private dispatchVerification(userId: string): void {
+    const task = new Promise<void>((resolve) => setImmediate(resolve))
+      .then(() => this.emailVerificationService.issueForUser(userId))
+      .then(
+        () => undefined,
+        () => {
+          new Logger('Registration').warn('Verification dispatch failed');
+        },
+      )
+      .finally(() => this.pendingVerifications.delete(task));
+    this.pendingVerifications.add(task);
+  }
+
+  /** Attend les envois différés en cours (arrêt de l'application, tests). */
+  async settleVerificationDispatches(): Promise<void> {
+    while (this.pendingVerifications.size > 0) {
+      await Promise.all([...this.pendingVerifications]);
+    }
+  }
+
+  async onApplicationShutdown(): Promise<void> {
+    await this.settleVerificationDispatches();
   }
 
   /**
@@ -152,11 +236,8 @@ export class AuthService {
    */
   private async registerOwner(
     dto: RegisterDto,
+    legal: ReturnType<LegalAcceptanceService['resolveSubmission']>,
   ): Promise<Omit<OwnerOnboardingResult, 'emailVerification'>> {
-    const legal = this.legalAcceptance.resolveSubmission(
-      LegalAcceptanceContext.OWNER_REGISTRATION,
-      dto.legalAcceptance,
-    );
     const hashed = await bcrypt.hash(dto.password, PASSWORD_HASH_ROUNDS);
     const session = await this.connection.startSession();
     let created:
@@ -221,8 +302,9 @@ export class AuthService {
   /**
    * Rôle `User.role` legacy : `admin` (historique — jamais exposé dans la
    * réponse). L'autorité effective vient désormais de la membership
-   * `owner` (1-1A/1-7+). Email dupliqué (E11000) → conflit stable
-   * existant, sans donnée partielle (rollback de la transaction entière).
+   * `owner` (1-1A/1-7+). Email dupliqué (E11000) : propagé, la transaction
+   * entière est annulée ; `register` le traite comme une adresse existante
+   * (1-18E, aucune réponse révélatrice).
    */
   private async createOwnerUser(
     dto: RegisterDto,
@@ -230,23 +312,16 @@ export class AuthService {
     session: MongooseSession,
     locale: string,
   ): Promise<UserDocument> {
-    try {
-      return await this.usersService.create(
-        {
-          name: dto.name,
-          email: dto.email,
-          password: hashedPassword,
-          role: UserRole.ADMIN,
-          ...(isAppLocale(locale) ? { locale } : {}),
-        },
-        session,
-      );
-    } catch (err) {
-      if (isDuplicateKeyError(err)) {
-        throw new BadRequestException(DUPLICATE_EMAIL_MESSAGE);
-      }
-      throw err;
-    }
+    return this.usersService.create(
+      {
+        name: dto.name,
+        email: dto.email,
+        password: hashedPassword,
+        role: UserRole.ADMIN,
+        ...(isAppLocale(locale) ? { locale } : {}),
+      },
+      session,
+    );
   }
 
   /**

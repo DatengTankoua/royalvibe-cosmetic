@@ -46,10 +46,15 @@ const authEn: Translation<typeof authFr> = {
     closedTitle: "Sign-up disabled",
     closedText:
       "Online sign-up is temporarily unavailable. If you already have an account, log in.",
-    doneTitle: "Account created",
-    doneText: "Your business and your owner account have been created.",
-    deliveryFailed:
-      "The confirmation email could not be sent. Your account has been created: request a new email below.",
+    // 1-18E: same final screen whether or not the address already has an account.
+    doneTitle: "Check your inbox",
+    doneText:
+      "If {{email}} can be used for a new account, a confirmation email has just been sent to it: open the link it contains.",
+    doneExisting:
+      "Already have an account with this address? Log in, or reset your password if you forgot it.",
+    doneForgot: "Reset my password",
+    doneResend:
+      "Nothing received after a few minutes? Request a new confirmation link:",
     disabled: "Sign-up is currently disabled.",
     title: "Create your business",
     subtitle: "This creates your business and your owner account.",

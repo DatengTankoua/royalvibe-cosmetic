@@ -35,6 +35,7 @@ import {
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -189,19 +190,17 @@ describe('Phase 1-4E — portail transversal d’isolation multi-tenant', () => 
       saleModel = moduleFixture.get(getModelToken('Sale'));
       auditModel = moduleFixture.get(getModelToken('AuditLog'));
 
-      const registration = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Admin Gate 1-4E',
-          email: ADMIN_EMAIL,
-          password: ADMIN_PASSWORD,
-          // 1-6A : organizationName obligatoire ; l'org auto-cr\u00e9\u00e9e n'est
-          // jamais utilis\u00e9e (org A/B cr\u00e9\u00e9es manuellement ci-dessous, login
-          // toujours explicite).
-          organizationName: 'Admin Gate 1-4E Org',
-        });
-      expect(registration.status).toBe(201);
+      const registration = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Admin Gate 1-4E',
+        email: ADMIN_EMAIL,
+        password: ADMIN_PASSWORD,
+        // 1-6A : organizationName obligatoire ; l'org auto-cr\u00e9\u00e9e n'est
+        // jamais utilis\u00e9e (org A/B cr\u00e9\u00e9es manuellement ci-dessous, login
+        // toujours explicite).
+        organizationName: 'Admin Gate 1-4E Org',
+      });
+      expect(registration.status).toBe(202);
       const admin = await userModel.findOne({ email: ADMIN_EMAIL });
       expect(admin).not.toBeNull();
       admin!.role = UserRole.ADMIN;

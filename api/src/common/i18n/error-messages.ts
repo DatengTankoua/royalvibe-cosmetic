@@ -27,9 +27,6 @@ export const ERROR_MESSAGE_TRANSLATIONS: Readonly<
   'Email ou mot de passe incorrect!': {
     en: 'Incorrect email or password.',
   },
-  'Si cette adresse est valide, un email de confirmation a déjà été envoyé.': {
-    en: 'If this address is valid, a confirmation email has already been sent.',
-  },
   'Si un compte correspond à cette adresse, vous recevrez un lien pour réinitialiser votre mot de passe.':
     {
       en: 'If an account matches this address, you will receive a link to reset your password.',
@@ -102,6 +99,11 @@ export const ERROR_MESSAGE_TRANSLATIONS: Readonly<
   'Une invitation est déjà en attente pour cet email.': {
     en: 'An invitation is already pending for this email.',
   },
+  // 1-18E : réponse neutre de l'inscription publique.
+  "Si cette adresse peut être utilisée, un e-mail de confirmation vient d'y être envoyé. Si vous avez déjà un compte, connectez-vous ou réinitialisez votre mot de passe.":
+    {
+      en: 'If this address can be used, a confirmation email has just been sent to it. If you already have an account, log in or reset your password.',
+    },
   // 1-18C : récupération d'accès après plafond par compte.
   'Trop de tentatives pour ce compte. Validez la vérification anti-robot pour réessayer.':
     {

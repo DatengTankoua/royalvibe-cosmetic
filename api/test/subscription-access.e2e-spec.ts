@@ -45,6 +45,7 @@ import {
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -106,17 +107,15 @@ describe('Contrôle commercial de l’accès API (e2e 1-14C.1)', () => {
     clearThrottle();
     seq += 1;
     const email = `${label}-${seq}-14c1@access.test`;
-    const reg = await request(server())
-      .post('/auth/register')
-      .send({
-        ...OWNER_TERMS,
-        name: 'Owner',
-        email,
-        password: PASSWORD,
-        organizationName: `Org ${seq}`,
-      });
-    expect(reg.status).toBe(201);
-    return { email, orgId: reg.body.organization._id as string };
+    const reg = await postRegister(app, {
+      ...OWNER_TERMS,
+      name: 'Owner',
+      email,
+      password: PASSWORD,
+      organizationName: `Org ${seq}`,
+    });
+    expect(reg.status).toBe(202);
+    return { email, orgId: reg.owner!.organization._id };
   }
 
   function loginRaw(email: string, organizationId?: string) {

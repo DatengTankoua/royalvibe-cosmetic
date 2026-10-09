@@ -37,6 +37,7 @@ import {
 } from './e2e/email-verification-fixtures';
 import { createInvitedAccount } from './e2e/invitation-acceptance-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -220,17 +221,15 @@ describe('Permissions et visibilité des informations produit (e2e 1-12H)', () =
         ['a', 'Org A 12H'],
         ['b', 'Org B 12H'],
       ] as const) {
-        const reg = await http()
-          .post('/auth/register')
-          .send({
-            ...OWNER_TERMS,
-            name: `Owner ${key}`,
-            email: `owner-${key}-12h@royalvibe.test`,
-            password: PASSWORD,
-            organizationName: org,
-          });
-        expect(reg.status).toBe(201);
-        const orgId = reg.body.organization._id as string;
+        const reg = await postRegister(app, {
+          ...OWNER_TERMS,
+          name: `Owner ${key}`,
+          email: `owner-${key}-12h@royalvibe.test`,
+          password: PASSWORD,
+          organizationName: org,
+        });
+        expect(reg.status).toBe(202);
+        const orgId = reg.owner!.organization._id;
         const res = await login(`owner-${key}-12h@royalvibe.test`, orgId);
         if (key === 'a') {
           orgAId = orgId;

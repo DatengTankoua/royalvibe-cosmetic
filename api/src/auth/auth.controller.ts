@@ -13,7 +13,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { SkipThrottle } from '@nestjs/throttler';
-import { AuthService } from './auth.service';
+import { AuthService, REGISTRATION_ACCEPTED_MESSAGE } from './auth.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import type { ResolvedOrganizationContext } from '../organizations/organizations.service';
 import { effectivePermissions } from '../organizations/permissions';
@@ -120,6 +120,10 @@ export class AuthController {
 
   // Rate limiting (0B.6) : MÊME garde/fenêtres que /auth/login, sans
   // stockage séparé — clé générée par handler, donc compteur distinct.
+  // 1-18E : 202 et corps neutre identiques, que l'adresse ait déjà un compte
+  // ou non (aucun identifiant ni jeton) ; `no-store`.
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
   @UseGuards(AuthThrottlerGuard)
   @Public()
   @Post('register')
@@ -143,7 +147,8 @@ export class AuthController {
    */
   private async verifiedRegistration(dto: RegisterDto) {
     await this.turnstile.verify(dto.turnstileToken, TURNSTILE_REGISTER_ACTION);
-    return this.authService.register(dto);
+    await this.authService.register(dto);
+    return { message: REGISTRATION_ACCEPTED_MESSAGE };
   }
 
   // Garde de rate limiting (0B.6) : applicée UNIQUEMENT à /auth/login

@@ -35,6 +35,7 @@ import {
   createE2eEmailSender,
 } from './e2e/email-verification-fixtures';
 import { OWNER_TERMS } from './e2e/legal-acceptance-fixtures';
+import { postRegister } from './e2e/registration-fixtures';
 
 // 1-13A : expéditeur simulé, liens confirmés via le service réel.
 const emailSender = createE2eEmailSender();
@@ -132,17 +133,15 @@ describe('Rate limiting invitations (e2e 1-10B) — POST /organizations/invitati
         getModelToken(OrganizationInvitation.name),
       );
 
-      const reg = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({
-          ...OWNER_TERMS,
-          name: 'Owner A RL110B',
-          email: OWNER_A_EMAIL,
-          password: PASSWORD,
-          organizationName: 'Org A RL110B',
-        });
-      expect(reg.status).toBe(201);
-      orgAId = reg.body.organization._id as string;
+      const reg = await postRegister(app, {
+        ...OWNER_TERMS,
+        name: 'Owner A RL110B',
+        email: OWNER_A_EMAIL,
+        password: PASSWORD,
+        organizationName: 'Org A RL110B',
+      });
+      expect(reg.status).toBe(202);
+      orgAId = reg.owner!.organization._id;
 
       const loginOwnerA = await login({
         email: OWNER_A_EMAIL,

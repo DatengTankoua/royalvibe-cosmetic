@@ -33,6 +33,10 @@ jest.mock('bcryptjs', () => {
     compare: jest.fn((plain: string, hash: string) =>
       actual.compare(plain, hash),
     ),
+    // 1-18E : `hash` observable (adresse existante : aucun hachage).
+    hash: jest.fn((plain: string, rounds: number) =>
+      actual.hash(plain, rounds),
+    ),
   };
 });
 
@@ -239,7 +243,7 @@ describe('AuthService', () => {
       );
     });
 
-    it('crée le User avec le rôle legacy admin (jamais exposé dans la réponse)', async () => {
+    it('crée le User avec le rôle legacy admin (jamais exposé : résultat interne sans rôle)', async () => {
       service = await build();
       mockHappyPath();
       const result = await service.register(VALID_DTO);
@@ -247,7 +251,6 @@ describe('AuthService', () => {
         role: 'admin',
       });
       expect(JSON.stringify(result)).not.toContain('admin');
-      expect('role' in result.user).toBe(false);
     });
 
     it('startSession()/endSession() : session ouverte puis TOUJOURS fermée', async () => {
@@ -283,43 +286,79 @@ describe('AuthService', () => {
       );
     });
 
-    it('réponse exacte : user{_id,name,email} + organization{_id,name,slug,currency,status} + emailVerification — rien de plus', async () => {
+    it('1-18E — résultat INTERNE minimal (identifiants), aucun JWT', async () => {
       service = await build();
       mockHappyPath();
       const result = await service.register(VALID_DTO);
-      expect(Object.keys(result).sort()).toEqual([
-        'emailVerification',
-        'organization',
-        'user',
-      ]);
-      expect(result.emailVerification).toEqual({ status: 'sent' });
-      expect(Object.keys(result.user).sort()).toEqual(['_id', 'email', 'name']);
-      expect(Object.keys(result.organization).sort()).toEqual([
-        '_id',
-        'currency',
-        'name',
-        'slug',
-        'status',
-      ]);
-      const flat = JSON.stringify(result);
-      expect(flat).not.toContain('password');
-      expect(flat).not.toContain('access_token');
-      expect(flat).not.toContain('membershipId');
-      expect(flat).not.toContain('permissions');
+      expect(result).toEqual({
+        created: true,
+        userId: USER_OBJECT_ID,
+        organizationId: ORG_A_ID,
+      });
       expect(jwt.sign).not.toHaveBeenCalled();
     });
 
-    it('email dupliqué (E11000) → conflit stable existant, Organization JAMAIS créée', async () => {
+    it('1-18E — adresse déjà utilisée (casse et espaces ignorés) : aucun hachage, aucune écriture, aucun envoi', async () => {
+      service = await build();
+      usersService.findByEmail.mockResolvedValue(makeCreatedUser());
+      const compare = bcrypt.hash as unknown as jest.Mock;
+      compare.mockClear();
+      const result = await service.register({
+        ...VALID_DTO,
+        email: '  Ada@Example.COM ',
+      });
+      expect(result).toEqual({ created: false });
+      expect(usersService.findByEmail).toHaveBeenCalledWith('ada@example.com');
+      expect(compare).not.toHaveBeenCalled();
+      expect(connectionFixture.connection.startSession).not.toHaveBeenCalled();
+      expect(usersService.create).not.toHaveBeenCalled();
+      expect(organizations.createOwnerOrganization).not.toHaveBeenCalled();
+      await service.settleVerificationDispatches();
+      expect(emailVerification.issueForUser).not.toHaveBeenCalled();
+    });
+
+    it('1-18E — conditions légales vérifiées AVANT la recherche du compte (mêmes refus pour toute adresse)', async () => {
+      service = await build();
+      const error = new BadRequestException({
+        code: 'LEGAL_ACCEPTANCE_REQUIRED',
+      });
+      (
+        service as unknown as {
+          legalAcceptance: { resolveSubmission: jest.Mock };
+        }
+      ).legalAcceptance.resolveSubmission = jest.fn(() => {
+        throw error;
+      });
+      await expect(service.register(VALID_DTO)).rejects.toBe(error);
+      expect(usersService.findByEmail).not.toHaveBeenCalled();
+    });
+
+    it('1-18E — doublon concurrent sur l’index de l’adresse : transaction annulée, issue « adresse existante », aucun envoi', async () => {
       service = await build();
       const duplicateError = Object.assign(new Error('E11000 duplicate key'), {
         code: 11000,
+        keyPattern: { email: 1 },
       });
       usersService.create.mockRejectedValue(duplicateError);
-      await expect(service.register(VALID_DTO)).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(service.register(VALID_DTO)).resolves.toEqual({
+        created: false,
+      });
       expect(organizations.createOwnerOrganization).not.toHaveBeenCalled();
       expect(connectionFixture.endSession).toHaveBeenCalledTimes(1);
+      await service.settleVerificationDispatches();
+      expect(emailVerification.issueForUser).not.toHaveBeenCalled();
+    });
+
+    it('1-18E — doublon sur un AUTRE index (slug) : erreur propagée, jamais masquée', async () => {
+      service = await build();
+      usersService.create.mockResolvedValue(makeCreatedUser());
+      organizations.createOwnerOrganization.mockRejectedValue(
+        Object.assign(new Error('E11000 duplicate key index: slug_1'), {
+          code: 11000,
+          keyPattern: { slug: 1 },
+        }),
+      );
+      await expect(service.register(VALID_DTO)).rejects.toThrow('slug_1');
     });
 
     it("échec de création de l'Organization → rollback (session fermée, propagation de l'erreur d'origine)", async () => {
@@ -362,7 +401,7 @@ describe('AuthService', () => {
       });
     }
 
-    it('envoi APRÈS le commit (session fermée) pour le User créé', async () => {
+    it('envoi APRÈS le commit (session fermée) et APRÈS la réponse (1-18E) pour le User créé', async () => {
       service = await build();
       mockCreation();
       let sessionEndedBeforeSend = false;
@@ -372,6 +411,9 @@ describe('AuthService', () => {
         return Promise.resolve('sent');
       });
       await service.register(VALID_DTO);
+      // Réponse rendue avant l'envoi : rien n'est encore parti.
+      expect(emailVerification.issueForUser).not.toHaveBeenCalled();
+      await service.settleVerificationDispatches();
       expect(sessionEndedBeforeSend).toBe(true);
       expect(emailVerification.issueForUser).toHaveBeenCalledTimes(1);
       expect(emailVerification.issueForUser).toHaveBeenCalledWith(
@@ -379,13 +421,17 @@ describe('AuthService', () => {
       );
     });
 
-    it('échec d’envoi → compte créé, statut `failed`, aucune exception', async () => {
+    it('échec d’envoi (même rejeté) → compte créé, aucune exception ni effet sur la réponse', async () => {
       service = await build();
       mockCreation();
-      emailVerification.issueForUser.mockResolvedValue('failed');
+      emailVerification.issueForUser.mockRejectedValue(
+        new Error('provider down'),
+      );
       const result = await service.register(VALID_DTO);
-      expect(result.user._id).toBe(USER_OBJECT_ID);
-      expect(result.emailVerification).toEqual({ status: 'failed' });
+      expect(result).toMatchObject({ created: true, userId: USER_OBJECT_ID });
+      await expect(
+        service.settleVerificationDispatches(),
+      ).resolves.toBeUndefined();
     });
 
     it('transaction en échec → aucun envoi', async () => {
