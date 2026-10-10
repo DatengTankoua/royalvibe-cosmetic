@@ -1,0 +1,381 @@
+{
+  "stop": {
+    "unexpectedErrorRate": 0.01,
+    "routeP95Ms": 1500,
+    "routeP99Ms": 3000,
+    "minRouteSamples": 20,
+    "achievedOfferedRatio": 0.9,
+    "heapRatio": 0.8,
+    "hostFreeMbMin": 250,
+    "eldP99MedianMs": 250,
+    "dbAvgLatencyMs": 50,
+    "poolWaitP99Ms": 200,
+    "generatorCores": 4
+  },
+  "limits": {
+    "apiHeapMb": 1024,
+    "wiredTigerCacheGb": 0.5
+  },
+  "results": [
+    {
+      "label": "ramp-notifications",
+      "scenario": "notifications",
+      "target": "multi",
+      "vus": 5,
+      "durationS": 45,
+      "paceS": 1,
+      "think": false,
+      "windowS": 45,
+      "k6": {
+        "requests": 641,
+        "reqPerS": 14.2,
+        "iterations": 225,
+        "offeredIterPerS": 5,
+        "obtainedIterPerS": 5,
+        "lateIterationsRate": 0,
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "notifications_read": {
+            "n": 191,
+            "p50": 29.8,
+            "p95": 43.2,
+            "p99": 46.7,
+            "max": 49.6
+          },
+          "notifications_unread": {
+            "n": 225,
+            "p50": 25,
+            "p95": 38.7,
+            "p99": 48.7,
+            "max": 51.8
+          },
+          "notifications_list": {
+            "n": 225,
+            "p50": 20.1,
+            "p95": 32.5,
+            "p99": 39.2,
+            "max": 41.7
+          }
+        }
+      },
+      "api": {
+        "cpuPctAvg": 17.89,
+        "cpuPctMax": 50.1,
+        "rssMbMax": 188,
+        "heapUsedMbMax": 96,
+        "eldP99MsMedian": 16.4,
+        "eldMaxMs": 26.1,
+        "socketsMax": 0,
+        "poolMaxInUse": 21,
+        "poolWaitP99MsMax": 0.1,
+        "poolFailed": 0
+      },
+      "db": {
+        "connectionsMax": 90,
+        "reads": {
+          "ops": 7969,
+          "avgMs": 0.4
+        },
+        "writes": {
+          "ops": 2368,
+          "avgMs": 2.84
+        },
+        "txCommitted": 0,
+        "txAborted": 0,
+        "cacheMbMax": 98,
+        "pendingJobsMax": 12076,
+        "oldestPendingJobAgeSMax": 296,
+        "dueDeliveriesMax": 1,
+        "oldestDueDeliveryLateSMax": 236
+      },
+      "proc": {
+        "apiCoresAvg": 0.25,
+        "apiCoresMax": 0.99,
+        "mongodCoresAvg": 0.22,
+        "mongodCoresMax": 0.8,
+        "mongodWsMbMax": 238,
+        "k6CoresAvg": 0.02,
+        "k6CoresMax": 0.07,
+        "k6WsMbMax": 86,
+        "hostFreeMbMin": 394
+      },
+      "verdict": {
+        "reasons": [],
+        "warnings": []
+      }
+    },
+    {
+      "label": "ramp-notifications",
+      "scenario": "notifications",
+      "target": "multi",
+      "vus": 10,
+      "durationS": 45,
+      "paceS": 1,
+      "think": false,
+      "windowS": 45,
+      "k6": {
+        "requests": 1272,
+        "reqPerS": 28.3,
+        "iterations": 450,
+        "offeredIterPerS": 10,
+        "obtainedIterPerS": 10,
+        "lateIterationsRate": 0,
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "notifications_list": {
+            "n": 450,
+            "p50": 48.2,
+            "p95": 87.8,
+            "p99": 111.7,
+            "max": 120.6
+          },
+          "notifications_read": {
+            "n": 372,
+            "p50": 63.5,
+            "p95": 103.2,
+            "p99": 160.1,
+            "max": 175.7
+          },
+          "notifications_unread": {
+            "n": 450,
+            "p50": 60.2,
+            "p95": 112.7,
+            "p99": 128.9,
+            "max": 142.3
+          }
+        }
+      },
+      "api": {
+        "cpuPctAvg": 29.51,
+        "cpuPctMax": 65.5,
+        "rssMbMax": 187,
+        "heapUsedMbMax": 84,
+        "eldP99MsMedian": 18.3,
+        "eldMaxMs": 34.9,
+        "socketsMax": 0,
+        "poolMaxInUse": 11,
+        "poolWaitP99MsMax": 0.1,
+        "poolFailed": 0
+      },
+      "db": {
+        "connectionsMax": 90,
+        "reads": {
+          "ops": 11109,
+          "avgMs": 0.48
+        },
+        "writes": {
+          "ops": 2155,
+          "avgMs": 2.78
+        },
+        "txCommitted": 0,
+        "txAborted": 0,
+        "cacheMbMax": 99,
+        "pendingJobsMax": 11697,
+        "oldestPendingJobAgeSMax": 340,
+        "dueDeliveriesMax": 0,
+        "oldestDueDeliveryLateSMax": 0
+      },
+      "proc": {
+        "apiCoresAvg": 0.28,
+        "apiCoresMax": 0.55,
+        "mongodCoresAvg": 0.23,
+        "mongodCoresMax": 0.45,
+        "mongodWsMbMax": 238,
+        "k6CoresAvg": 0.03,
+        "k6CoresMax": 0.08,
+        "k6WsMbMax": 42,
+        "hostFreeMbMin": 357
+      },
+      "verdict": {
+        "reasons": [],
+        "warnings": []
+      }
+    },
+    {
+      "label": "ramp-notifications",
+      "scenario": "notifications",
+      "target": "multi",
+      "vus": 25,
+      "durationS": 45,
+      "paceS": 1,
+      "think": false,
+      "windowS": 45,
+      "k6": {
+        "requests": 3157,
+        "reqPerS": 70.2,
+        "iterations": 1125,
+        "offeredIterPerS": 25,
+        "obtainedIterPerS": 25,
+        "lateIterationsRate": 0,
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "notifications_list": {
+            "n": 1125,
+            "p50": 105.6,
+            "p95": 157.8,
+            "p99": 220.2,
+            "max": 235.1
+          },
+          "notifications_read": {
+            "n": 907,
+            "p50": 123.9,
+            "p95": 189.2,
+            "p99": 311.9,
+            "max": 317.5
+          },
+          "notifications_unread": {
+            "n": 1125,
+            "p50": 121.9,
+            "p95": 147,
+            "p99": 276.3,
+            "max": 291.9
+          }
+        }
+      },
+      "api": {
+        "cpuPctAvg": 46.86,
+        "cpuPctMax": 107.8,
+        "rssMbMax": 188,
+        "heapUsedMbMax": 97,
+        "eldP99MsMedian": 26.2,
+        "eldMaxMs": 79.8,
+        "socketsMax": 0,
+        "poolMaxInUse": 26,
+        "poolWaitP99MsMax": 0.1,
+        "poolFailed": 0
+      },
+      "db": {
+        "connectionsMax": 90,
+        "reads": {
+          "ops": 22928,
+          "avgMs": 0.4
+        },
+        "writes": {
+          "ops": 2646,
+          "avgMs": 2.57
+        },
+        "txCommitted": 0,
+        "txAborted": 0,
+        "cacheMbMax": 102,
+        "pendingJobsMax": 11329,
+        "oldestPendingJobAgeSMax": 385,
+        "dueDeliveriesMax": 0,
+        "oldestDueDeliveryLateSMax": 0
+      },
+      "proc": {
+        "apiCoresAvg": 0.46,
+        "apiCoresMax": 0.81,
+        "mongodCoresAvg": 0.32,
+        "mongodCoresMax": 0.56,
+        "mongodWsMbMax": 219,
+        "k6CoresAvg": 0.05,
+        "k6CoresMax": 0.11,
+        "k6WsMbMax": 58,
+        "hostFreeMbMin": 974
+      },
+      "verdict": {
+        "reasons": [],
+        "warnings": []
+      }
+    },
+    {
+      "label": "ramp-notifications",
+      "scenario": "notifications",
+      "target": "multi",
+      "vus": 50,
+      "durationS": 45,
+      "paceS": 1,
+      "think": false,
+      "windowS": 45,
+      "k6": {
+        "requests": 6092,
+        "reqPerS": 135.4,
+        "iterations": 2250,
+        "offeredIterPerS": 50,
+        "obtainedIterPerS": 50,
+        "lateIterationsRate": 1.7,
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "notifications_list": {
+            "n": 2250,
+            "p50": 215.2,
+            "p95": 282.9,
+            "p99": 409.5,
+            "max": 434.5
+          },
+          "notifications_read": {
+            "n": 1592,
+            "p50": 226.2,
+            "p95": 305.9,
+            "p99": 341.9,
+            "max": 390.1
+          },
+          "notifications_unread": {
+            "n": 2250,
+            "p50": 232.2,
+            "p95": 294.2,
+            "p99": 382.7,
+            "max": 390.9
+          }
+        }
+      },
+      "api": {
+        "cpuPctAvg": 82.3,
+        "cpuPctMax": 134.3,
+        "rssMbMax": 189,
+        "heapUsedMbMax": 96,
+        "eldP99MsMedian": 56,
+        "eldMaxMs": 84.4,
+        "socketsMax": 0,
+        "poolMaxInUse": 51,
+        "poolWaitP99MsMax": 0,
+        "poolFailed": 0
+      },
+      "db": {
+        "connectionsMax": 90,
+        "reads": {
+          "ops": 40872,
+          "avgMs": 0.4
+        },
+        "writes": {
+          "ops": 2870,
+          "avgMs": 2.24
+        },
+        "txCommitted": 0,
+        "txAborted": 0,
+        "cacheMbMax": 95,
+        "pendingJobsMax": 10997,
+        "oldestPendingJobAgeSMax": 430,
+        "dueDeliveriesMax": 0,
+        "oldestDueDeliveryLateSMax": 0
+      },
+      "proc": {
+        "apiCoresAvg": 0.8,
+        "apiCoresMax": 1.17,
+        "mongodCoresAvg": 0.55,
+        "mongodCoresMax": 0.73,
+        "mongodWsMbMax": 219,
+        "k6CoresAvg": 0.06,
+        "k6CoresMax": 0.11,
+        "k6WsMbMax": 82,
+        "hostFreeMbMin": 1287
+      },
+      "verdict": {
+        "reasons": [],
+        "warnings": []
+      }
+    }
+  ]
+}

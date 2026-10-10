@@ -1270,6 +1270,9 @@ describe('Notifications Web Push métier (e2e 1-16A)', () => {
         retried: 0,
         skipped: 0,
         failed: 0,
+        // 1-20B : runtime inactif, aucun tour.
+        rounds: 0,
+        backlog: false,
       });
       expect(cliDispatcher.started).toBe(false);
     } finally {

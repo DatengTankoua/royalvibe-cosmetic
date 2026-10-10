@@ -1,0 +1,86 @@
+{
+  "at": "2026-10-10T02:08:55.283Z",
+  "A_sameProduct": {
+    "stockBefore": 20,
+    "requests": 36,
+    "statuses": {
+      "201": 20,
+      "400 INSUFFICIENT_STOCK": 16
+    },
+    "created": 20,
+    "stockAfter": 0,
+    "ok": true,
+    "quantity2": {
+      "stockBefore": 5,
+      "statuses": {
+        "201": 2,
+        "400 INSUFFICIENT_STOCK": 8
+      },
+      "stockAfter": 1,
+      "ok": true
+    }
+  },
+  "B_cancellation": {
+    "stockBefore": 30,
+    "salesCreated": 10,
+    "stockAfterSales": 0,
+    "cancelRequests": 20,
+    "statuses": {
+      "204": 10,
+      "404": 10
+    },
+    "stockAfterCancel": 30,
+    "ok": true
+  },
+  "C_replay": {
+    "stockBefore": 10,
+    "sameKeyParallel": {
+      "requests": 10,
+      "statuses": {
+        "201": 10
+      },
+      "distinctSaleIds": 1,
+      "stockAfter": 9
+    },
+    "sameKeyOtherPayload": {
+      "409 IDEMPOTENCY_KEY_REUSED": 1
+    },
+    "sameKeyOtherSeller": {
+      "409 IDEMPOTENCY_KEY_CONFLICT": 1
+    },
+    "stockAfterConflicts": 9,
+    "withoutKey": {
+      "statuses": {
+        "201": 2
+      },
+      "stockAfter": 7,
+      "note": "sans clientOperationId : aucune déduplication (comportement documenté 1-11C.1)"
+    },
+    "ok": true
+  },
+  "D_membership": {
+    "targetOrg": "std1",
+    "invitations": 3,
+    "acceptRequests": 6,
+    "statuses": {
+      "200": 3,
+      "400 INVITATION_INVALID_OR_EXPIRED": 3
+    },
+    "joiners": [
+      "6ac99cba570fdbf8b54ff7fe",
+      "6ac99cbb570fdbf8b5500758",
+      "6ac99cbc570fdbf8b55016b2"
+    ],
+    "ok": true
+  },
+  "E_expected429": {
+    "requests": 15,
+    "statuses": {
+      "201": 10,
+      "429 AUTH_RATE_LIMITED": 5
+    },
+    "note": "POST /auth/login : 10 par minute et par IP (0B.6) ; 429 attendus",
+    "ok": true
+  },
+  "ok": true
+}

@@ -1,0 +1,125 @@
+{
+  "stop": {
+    "unexpectedErrorRate": 0.01,
+    "routeP95Ms": 1500,
+    "routeP99Ms": 3000,
+    "minRouteSamples": 20,
+    "achievedOfferedRatio": 0.9,
+    "heapRatio": 0.8,
+    "hostFreeMbMin": 250,
+    "eldP99MedianMs": 250,
+    "dbAvgLatencyMs": 50,
+    "poolWaitP99Ms": 200,
+    "generatorCores": 4,
+    "queueOldestAgeS": 120
+  },
+  "limits": {
+    "apiHeapMb": 1024,
+    "wiredTigerCacheGb": 0.5
+  },
+  "results": [
+    {
+      "label": "cold",
+      "scenario": "catalog",
+      "target": "multi",
+      "vus": 1,
+      "durationS": 15,
+      "paceS": 1,
+      "think": false,
+      "windowS": 17,
+      "from": "2026-10-10T18:43:16.103Z",
+      "to": "2026-10-10T18:43:32.668Z",
+      "k6": {
+        "requests": 60,
+        "reqPerS": 4,
+        "iterations": 15,
+        "offeredIterPerS": 1,
+        "obtainedIterPerS": 1,
+        "lateIterationsRate": 0,
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "products_by_section": {
+            "n": 15,
+            "p50": 35.3,
+            "p95": 55.6,
+            "p99": 58.4,
+            "max": 59.1
+          },
+          "sections_list": {
+            "n": 15,
+            "p50": 8.6,
+            "p95": 12.7,
+            "p99": 12.8,
+            "max": 12.8
+          },
+          "products_list": {
+            "n": 15,
+            "p50": 298.4,
+            "p95": 480,
+            "p99": 531.4,
+            "max": 544.2
+          },
+          "product_detail": {
+            "n": 15,
+            "p50": 105.4,
+            "p95": 131.5,
+            "p99": 134.5,
+            "max": 135.2
+          }
+        },
+        "unexpectedLogged": 0
+      },
+      "api": {
+        "cpuPctAvg": 58.58,
+        "cpuPctMax": 131.2,
+        "rssMbMax": 178,
+        "heapUsedMbMax": 77,
+        "eldP99MsMedian": 286.3,
+        "eldMaxMs": 528,
+        "socketsMax": 0,
+        "poolMaxInUse": 1,
+        "poolWaitP99MsMax": 0.1,
+        "poolFailed": 0,
+        "signatures": 9666
+      },
+      "db": {
+        "connectionsMax": 14,
+        "reads": {
+          "ops": 384,
+          "avgMs": 3.69
+        },
+        "writes": {
+          "ops": 0,
+          "avgMs": 0
+        },
+        "txCommitted": 0,
+        "txAborted": 0,
+        "cacheMbMax": 115,
+        "pendingJobsMax": 0,
+        "oldestPendingJobAgeSMax": 0,
+        "dueDeliveriesMax": 0,
+        "oldestDueDeliveryLateSMax": 0
+      },
+      "proc": {
+        "apiCoresAvg": 0.57,
+        "apiCoresMax": 0.96,
+        "mongodCoresAvg": 0.1,
+        "mongodCoresMax": 0.15,
+        "mongodWsMbMax": 308,
+        "k6CoresAvg": 0.01,
+        "k6CoresMax": 0.02,
+        "k6WsMbMax": 40,
+        "hostFreeMbMin": 765
+      },
+      "verdict": {
+        "reasons": [
+          "retard de boucle p99 médian 286.3 ms"
+        ],
+        "warnings": []
+      }
+    }
+  ]
+}

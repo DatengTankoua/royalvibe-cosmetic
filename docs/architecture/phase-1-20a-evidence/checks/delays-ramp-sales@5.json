@@ -1,0 +1,108 @@
+{
+  "from": "2026-10-10T01:14:37.811Z",
+  "to": "2026-10-10T01:15:20.243Z",
+  "categories": {
+    "sale-created": {
+      "jobs": 215,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 215,
+        "p50S": 8.4,
+        "p95S": 13.1,
+        "p99S": 14.7,
+        "maxS": 14.7
+      },
+      "center": {
+        "n": 196,
+        "p50S": 8.3,
+        "p95S": 13,
+        "p99S": 14.7,
+        "maxS": 14.7
+      },
+      "grouping": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "pushLate": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "deliveries": 0,
+      "deliveriesSent": 0
+    },
+    "sale-digest": {
+      "jobs": 10,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "center": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "grouping": {
+        "n": 20,
+        "p50S": 0,
+        "p95S": 0,
+        "p99S": 0,
+        "maxS": 0
+      },
+      "pushLate": {
+        "n": 20,
+        "p50S": 6.9,
+        "p95S": 8.5,
+        "p99S": 8.5,
+        "maxS": 8.5
+      },
+      "deliveries": 20,
+      "deliveriesSent": 20
+    },
+    "member-activity": {
+      "jobs": 26,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 19,
+        "p50S": 8.4,
+        "p95S": 13.8,
+        "p99S": 13.8,
+        "maxS": 13.8
+      },
+      "center": {
+        "n": 7,
+        "p50S": -15.5,
+        "p95S": 3.2,
+        "p99S": 3.2,
+        "maxS": 3.2
+      },
+      "grouping": {
+        "n": 7,
+        "p50S": 0,
+        "p95S": 0,
+        "p99S": 0,
+        "maxS": 0
+      },
+      "pushLate": {
+        "n": 7,
+        "p50S": 8.6,
+        "p95S": 8.8,
+        "p99S": 8.8,
+        "maxS": 8.8
+      },
+      "deliveries": 7,
+      "deliveriesSent": 7
+    }
+  }
+}

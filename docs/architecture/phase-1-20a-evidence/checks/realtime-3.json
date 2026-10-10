@@ -1,0 +1,73 @@
+{
+  "at": "2026-10-10T01:32:04.640Z",
+  "options": {
+    "socketsPerUser": 3,
+    "target": "multi",
+    "salesPerS": 2,
+    "duration": 30,
+    "refetch": true,
+    "reconnect": false,
+    "out": "<résultats>/realtime-3.json"
+  },
+  "connections": {
+    "sessions": 40,
+    "requested": 120,
+    "opened": 120,
+    "failures": 0,
+    "connectMs": {
+      "n": 120,
+      "p50": 490.2,
+      "p95": 517.5,
+      "p99": 526.6,
+      "max": 536.1
+    },
+    "openAllMs": 562
+  },
+  "sales": {
+    "offeredPerS": 2,
+    "created": 59,
+    "httpErrors": 0,
+    "httpStatuses": [],
+    "httpMs": {
+      "n": 59,
+      "p50": 2579.9,
+      "p95": 8612.5,
+      "p99": 9277.1,
+      "max": 9277.1
+    }
+  },
+  "saleCreated": {
+    "expectedDeliveries": 1605,
+    "received": 1605,
+    "completeness": 100,
+    "crossOrganizationDeliveries": 0,
+    "propagationMs": {
+      "n": 1605,
+      "p50": 3032,
+      "p95": 8744.7,
+      "p99": 9275.5,
+      "max": 9276.3
+    }
+  },
+  "notificationsChanged": {
+    "note": "inclut l’intervalle volontaire du traitement de fond (5 s)",
+    "firstSignalAfterSaleMs": {
+      "n": 177,
+      "p50": 247.8,
+      "p95": 9756.9,
+      "p99": 9765.6,
+      "max": 9765.7
+    }
+  },
+  "refetch": {
+    "requests": 420,
+    "errors": 0,
+    "productsListMs": {
+      "n": 420,
+      "p50": 2948.3,
+      "p95": 8154.8,
+      "p99": 8996,
+      "max": 9328.2
+    }
+  }
+}

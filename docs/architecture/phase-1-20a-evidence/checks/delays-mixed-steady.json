@@ -1,0 +1,210 @@
+{
+  "from": "2026-10-10T02:07:55.105Z",
+  "to": "2026-10-10T02:10:59.125Z",
+  "categories": {
+    "member-activity": {
+      "jobs": 413,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 349,
+        "p50S": 10.6,
+        "p95S": 42.6,
+        "p99S": 43.7,
+        "maxS": 44.2
+      },
+      "center": {
+        "n": 64,
+        "p50S": 6.2,
+        "p95S": 57.6,
+        "p99S": 65.9,
+        "maxS": 65.9
+      },
+      "grouping": {
+        "n": 64,
+        "p50S": 0,
+        "p95S": 0,
+        "p99S": 0,
+        "maxS": 0
+      },
+      "pushLate": {
+        "n": 64,
+        "p50S": 6.6,
+        "p95S": 59.1,
+        "p99S": 66.6,
+        "maxS": 66.6
+      },
+      "deliveries": 64,
+      "deliveriesSent": 64
+    },
+    "sale-digest": {
+      "jobs": 8,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "center": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "grouping": {
+        "n": 19,
+        "p50S": 0,
+        "p95S": 0,
+        "p99S": 0,
+        "maxS": 0
+      },
+      "pushLate": {
+        "n": 19,
+        "p50S": 6.8,
+        "p95S": 15.6,
+        "p99S": 15.6,
+        "maxS": 15.6
+      },
+      "deliveries": 19,
+      "deliveriesSent": 19
+    },
+    "sale-created": {
+      "jobs": 35,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 35,
+        "p50S": 14.1,
+        "p95S": 16.6,
+        "p99S": 16.6,
+        "maxS": 16.6
+      },
+      "center": {
+        "n": 25,
+        "p50S": 14.1,
+        "p95S": 16.1,
+        "p99S": 16.1,
+        "maxS": 16.1
+      },
+      "grouping": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "pushLate": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "deliveries": 0,
+      "deliveriesSent": 0
+    },
+    "stock-low": {
+      "jobs": 2,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 2,
+        "p50S": 13.9,
+        "p95S": 13.9,
+        "p99S": 13.9,
+        "maxS": 13.9
+      },
+      "center": {
+        "n": 1,
+        "p50S": 13.9,
+        "p95S": 13.9,
+        "p99S": 13.9,
+        "maxS": 13.9
+      },
+      "grouping": {
+        "n": 3,
+        "p50S": 13.9,
+        "p95S": 13.9,
+        "p99S": 13.9,
+        "maxS": 13.9
+      },
+      "pushLate": {
+        "n": 3,
+        "p50S": 0.4,
+        "p95S": 0.4,
+        "p99S": 0.4,
+        "maxS": 0.4
+      },
+      "deliveries": 3,
+      "deliveriesSent": 3
+    },
+    "stock-depleted": {
+      "jobs": 2,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 2,
+        "p50S": 16.6,
+        "p95S": 16.6,
+        "p99S": 16.6,
+        "maxS": 16.6
+      },
+      "center": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "grouping": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "pushLate": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "deliveries": 0,
+      "deliveriesSent": 0
+    },
+    "member-joined": {
+      "jobs": 3,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 3,
+        "p50S": 16.7,
+        "p95S": 16.7,
+        "p99S": 16.7,
+        "maxS": 16.7
+      },
+      "center": {
+        "n": 3,
+        "p50S": 16.5,
+        "p95S": 16.7,
+        "p99S": 16.7,
+        "maxS": 16.7
+      },
+      "grouping": {
+        "n": 6,
+        "p50S": 16.5,
+        "p95S": 16.7,
+        "p99S": 16.7,
+        "maxS": 16.7
+      },
+      "pushLate": {
+        "n": 6,
+        "p50S": 2.7,
+        "p95S": 2.7,
+        "p99S": 2.7,
+        "maxS": 2.7
+      },
+      "deliveries": 6,
+      "deliveriesSent": 6
+    }
+  }
+}
