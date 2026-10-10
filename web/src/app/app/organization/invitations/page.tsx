@@ -108,10 +108,10 @@ export default function OrganizationInvitationsPage() {
     if (!revoking) return;
     setRevokeBusy(true);
     try {
-      const updated = await revokeInvitation(revoking._id);
-      setInvitations((prev) =>
-        prev.map((i) => (i._id === updated._id ? updated : i)),
-      );
+      // 1-19A : une invitation révoquée est supprimée côté serveur ; elle
+      // disparaît donc aussi de la liste.
+      const revoked = await revokeInvitation(revoking._id);
+      setInvitations((prev) => prev.filter((i) => i._id !== revoked._id));
       toast.success(t("invitations.revoked"));
       setRevoking(null);
     } catch (err) {

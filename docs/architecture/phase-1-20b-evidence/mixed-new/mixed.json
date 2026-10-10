@@ -1,0 +1,208 @@
+{
+  "stop": {
+    "unexpectedErrorRate": 0.01,
+    "routeP95Ms": 1500,
+    "routeP99Ms": 3000,
+    "minRouteSamples": 20,
+    "achievedOfferedRatio": 0.9,
+    "heapRatio": 0.8,
+    "hostFreeMbMin": 250,
+    "eldP99MedianMs": 250,
+    "dbAvgLatencyMs": 50,
+    "poolWaitP99Ms": 200,
+    "generatorCores": 4,
+    "queueOldestAgeS": 120
+  },
+  "limits": {
+    "apiHeapMb": 1024,
+    "wiredTigerCacheGb": 0.5
+  },
+  "results": [
+    {
+      "label": "mixed",
+      "scenario": "mixed",
+      "target": "multi",
+      "vus": 25,
+      "durationS": 120,
+      "paceS": null,
+      "think": true,
+      "windowS": 126,
+      "from": "2026-10-10T12:42:14.639Z",
+      "to": "2026-10-10T12:44:21.124Z",
+      "k6": {
+        "requests": 3605,
+        "reqPerS": 30,
+        "iterations": 600,
+        "offeredIterPerS": null,
+        "obtainedIterPerS": 5,
+        "lateIterationsRate": 100,
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "sales_create": {
+            "n": 314,
+            "p50": 250.7,
+            "p95": 753.4,
+            "p99": 1037.6,
+            "max": 1233.9
+          },
+          "product_detail": {
+            "n": 375,
+            "p50": 161.6,
+            "p95": 618.7,
+            "p99": 897.8,
+            "max": 1039.5
+          },
+          "notifications_read": {
+            "n": 284,
+            "p50": 122.5,
+            "p95": 426.6,
+            "p99": 722.8,
+            "max": 1040.9
+          },
+          "products_by_section": {
+            "n": 375,
+            "p50": 85.9,
+            "p95": 627,
+            "p99": 1023.2,
+            "max": 1847.5
+          },
+          "products_list": {
+            "n": 375,
+            "p50": 163.6,
+            "p95": 762,
+            "p99": 1605,
+            "max": 2384.4
+          },
+          "product_trash": {
+            "n": 78,
+            "p50": 152,
+            "p95": 686.6,
+            "p99": 1026.3,
+            "max": 1076.3
+          },
+          "sections_list": {
+            "n": 375,
+            "p50": 88.3,
+            "p95": 460.7,
+            "p99": 580.1,
+            "max": 804.1
+          },
+          "sales_cancel": {
+            "n": 24,
+            "p50": 94.7,
+            "p95": 444.7,
+            "p99": 492.6,
+            "max": 500.2
+          },
+          "notifications_unread": {
+            "n": 286,
+            "p50": 69.3,
+            "p95": 389.2,
+            "p99": 585.6,
+            "max": 737.1
+          },
+          "product_update": {
+            "n": 77,
+            "p50": 258.2,
+            "p95": 900.8,
+            "p99": 2082.4,
+            "max": 2082.8
+          },
+          "analytics_insights": {
+            "n": 148,
+            "p50": 173.4,
+            "p95": 635.1,
+            "p99": 1147.6,
+            "max": 1523.3
+          },
+          "analytics_monthly": {
+            "n": 148,
+            "p50": 112,
+            "p95": 596.5,
+            "p99": 1597.8,
+            "max": 1875.3
+          },
+          "notifications_list": {
+            "n": 286,
+            "p50": 113.3,
+            "p95": 518.9,
+            "p99": 798.5,
+            "max": 935.5
+          },
+          "analytics_overview": {
+            "n": 148,
+            "p50": 161.4,
+            "p95": 524.1,
+            "p99": 730,
+            "max": 869.7
+          },
+          "sales_history": {
+            "n": 234,
+            "p50": 358.5,
+            "p95": 874.8,
+            "p99": 1252.2,
+            "max": 1615.5
+          },
+          "product_restore": {
+            "n": 78,
+            "p50": 140.1,
+            "p95": 376.7,
+            "p99": 1071,
+            "max": 1071
+          }
+        },
+        "unexpectedLogged": 0
+      },
+      "api": {
+        "cpuPctAvg": 127.4,
+        "cpuPctMax": 212.1,
+        "rssMbMax": 277,
+        "heapUsedMbMax": 147,
+        "eldP99MsMedian": 155.5,
+        "eldMaxMs": 520.4,
+        "socketsMax": 0,
+        "poolMaxInUse": 22,
+        "poolWaitP99MsMax": 890.3,
+        "poolFailed": 0
+      },
+      "db": {
+        "connectionsMax": 30,
+        "reads": {
+          "ops": 29731,
+          "avgMs": 1.98
+        },
+        "writes": {
+          "ops": 5715,
+          "avgMs": 8.1
+        },
+        "txCommitted": 338,
+        "txAborted": 0,
+        "cacheMbMax": 34,
+        "pendingJobsMax": 75,
+        "oldestPendingJobAgeSMax": 16,
+        "dueDeliveriesMax": 33,
+        "oldestDueDeliveryLateSMax": 13
+      },
+      "proc": {
+        "apiCoresAvg": 1.3,
+        "apiCoresMax": 1.75,
+        "mongodCoresAvg": 0.57,
+        "mongodCoresMax": 0.8,
+        "mongodWsMbMax": 225,
+        "k6CoresAvg": 0.04,
+        "k6CoresMax": 0.12,
+        "k6WsMbMax": 109,
+        "hostFreeMbMin": 297
+      },
+      "verdict": {
+        "reasons": [
+          "attente pool 890.3 ms"
+        ],
+        "warnings": []
+      }
+    }
+  ]
+}

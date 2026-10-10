@@ -25,7 +25,14 @@ export enum OrganizationStatus {
   SUSPENDED = 'suspended',
 }
 
-/** Cycle de vie d'une invitation (1-6B.1) — jamais de suppression physique. */
+/**
+ * Cycle de vie d'une invitation (1-6B.1).
+ *
+ * 1-19A : une invitation acceptée ou révoquée est SUPPRIMÉE de la collection
+ * (aucune corbeille) ; seules `pending` et `expired` y restent. `accepted` et
+ * `revoked` ne désignent plus que d'anciens documents, purgés par
+ * `migrate:purge-terminated-invitations`.
+ */
 export enum InvitationStatus {
   PENDING = 'pending',
   ACCEPTED = 'accepted',
@@ -68,9 +75,57 @@ export const DELEGABLE_PERMISSIONS = Object.freeze([
   // jamais au vendeur sans ajout explicite. Aucune migration : les
   // permissions déjà enregistrées ne sont pas modifiées.
   'support.contact',
+  // 1-19A : RECEVOIR les notifications de nouvelles ventes (centre et push).
+  // Distincte de `sales.record` (créer) et de `sales.view_all` (consulter) :
+  // montant et quantité restent réservés à `sales.view_all`. Accordée par
+  // défaut au propriétaire et à l'administrateur, jamais au vendeur sans
+  // ajout explicite. Aucune migration.
+  'sales.notifications',
 ] as const);
 
 export type DelegablePermission = (typeof DELEGABLE_PERMISSIONS)[number];
+
+/**
+ * 1-19A — Catalogues de permissions CONNUS d'un client (formulaire de
+ * modification d'un membre). Un formulaire envoie la liste COMPLÈTE des
+ * permissions supplémentaires qu'il affiche : une permission qu'il ne
+ * connaît pas en serait retirée silencieusement. Le client déclare donc le
+ * catalogue qu'il connaît (`?permissionsCatalog=<n>`, paramètre ignoré par
+ * une API antérieure) ; sans déclaration, c'est le catalogue 1 (web
+ * antérieur à 1-19A) et les permissions hors catalogue sont conservées.
+ */
+export const PERMISSION_CATALOGS: Readonly<
+  Record<number, readonly DelegablePermission[]>
+> = Object.freeze({
+  1: Object.freeze(
+    DELEGABLE_PERMISSIONS.filter((p) => p !== 'sales.notifications'),
+  ),
+  2: DELEGABLE_PERMISSIONS,
+});
+
+export const CURRENT_PERMISSION_CATALOG = 2;
+
+/** Version déclarée valide, sinon catalogue 1 (client le plus ancien). */
+export function parsePermissionCatalog(value: unknown): number {
+  const n = typeof value === 'string' ? Number(value) : NaN;
+  return Number.isInteger(n) && PERMISSION_CATALOGS[n] ? n : 1;
+}
+
+/**
+ * Permissions demandées par un client de catalogue `catalog`, complétées des
+ * permissions déjà accordées qu'il ne connaît pas (jamais retirées à son
+ * insu). Aucun ajout possible : seules des permissions DÉJÀ présentes sont
+ * conservées.
+ */
+export function mergeUnknownPermissions(
+  requested: readonly DelegablePermission[],
+  stored: readonly DelegablePermission[],
+  catalog: number,
+): DelegablePermission[] {
+  const known = new Set(PERMISSION_CATALOGS[catalog] ?? PERMISSION_CATALOGS[1]);
+  const kept = stored.filter((p) => !known.has(p) && !requested.includes(p));
+  return [...requested, ...kept];
+}
 
 /**
  * Référence identique à `DELEGABLE_PERMISSIONS` (pas de copie divergente) :

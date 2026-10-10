@@ -24,8 +24,10 @@ import {
   OrganizationInvitationDocument,
 } from './schemas/invitation.schema';
 import {
+  CURRENT_PERMISSION_CATALOG,
   DelegablePermission,
   effectivePermissions,
+  mergeUnknownPermissions,
   InvitationStatus,
   isPermissionSubset,
   MembershipStatus,
@@ -553,21 +555,21 @@ export class OrganizationsService {
    * Révocation : filtre `{ _id, organizationId, status: pending }` — une
    * invitation étrangère, absente, ou déjà acceptée/révoquée/expirée reçoit
    * le MÊME 404 (n'en révèle jamais l'existence/statut).
+   *
+   * 1-19A : l'invitation révoquée est SUPPRIMÉE (aucune corbeille) ; ses
+   * deux liens ne désignent plus rien. La réponse garde le contrat existant
+   * (vue de l'invitation, statut `revoked`).
    */
   async revokeInvitation(
     organizationId: string,
     id: string,
   ): Promise<InvitationView> {
     const invitation = await this.invitationModel
-      .findOneAndUpdate(
-        {
-          _id: new Types.ObjectId(id),
-          organizationId: new Types.ObjectId(organizationId),
-          status: InvitationStatus.PENDING,
-        },
-        { status: InvitationStatus.REVOKED },
-        { new: true },
-      )
+      .findOneAndDelete({
+        _id: new Types.ObjectId(id),
+        organizationId: new Types.ObjectId(organizationId),
+        status: InvitationStatus.PENDING,
+      })
       .exec();
     if (!invitation) {
       throw new NotFoundException();
@@ -576,7 +578,10 @@ export class OrganizationsService {
       organizationId,
       'invitations:changed',
     );
-    return this.toInvitationView(invitation);
+    return {
+      ...this.toInvitationView(invitation),
+      status: InvitationStatus.REVOKED,
+    };
   }
 
   /** Membres de l'organisation courante uniquement, jamais `password`/`User.role`. */
@@ -605,6 +610,8 @@ export class OrganizationsService {
     actorUserId: string,
     targetMembershipId: string,
     dto: UpdateMembershipDto,
+    // 1-19A : catalogue de permissions connu du client (formulaire).
+    permissionsCatalog: number = CURRENT_PERMISSION_CATALOG,
   ): Promise<MemberView> {
     if (
       dto.role === undefined &&
@@ -665,6 +672,17 @@ export class OrganizationsService {
           throw this.accessDenied();
         }
 
+        // 1-19A : un formulaire antérieur ne retire jamais une permission
+        // qu'il ne connaît pas (conservée telle quelle).
+        const requestedPermissions =
+          dto.permissions === undefined
+            ? undefined
+            : mergeUnknownPermissions(
+                dto.permissions,
+                target.permissions,
+                permissionsCatalog,
+              );
+
         if (actor.role !== OrganizationRole.OWNER) {
           const actorEffective = effectivePermissions(
             actor.role,
@@ -676,7 +694,7 @@ export class OrganizationsService {
           );
           const prospectiveEffective = effectivePermissions(
             dto.role ?? target.role,
-            dto.permissions ?? target.permissions,
+            requestedPermissions ?? target.permissions,
           );
           if (
             !isPermissionSubset(targetCurrentEffective, actorEffective) ||
@@ -687,7 +705,9 @@ export class OrganizationsService {
         }
 
         if (dto.role !== undefined) target.role = dto.role;
-        if (dto.permissions !== undefined) target.permissions = dto.permissions;
+        if (requestedPermissions !== undefined) {
+          target.permissions = requestedPermissions;
+        }
         // Aucune réactivation implicite : `status` n'est touché QUE si
         // explicitement demandé (jamais un effet de bord de role/permissions).
         if (dto.status !== undefined) target.status = dto.status;

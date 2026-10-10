@@ -1,0 +1,18 @@
+{
+  "at": "2026-10-10T11:59:23.571Z",
+  "options": {
+    "org": "std2",
+    "everyS": 5,
+    "duration": 200,
+    "timeoutS": 240,
+    "out": "fichier"
+  },
+  "sales": 40,
+  "received": 0,
+  "notReceivedInTime": 40,
+  "delayS": {
+    "p50": null,
+    "p95": null,
+    "max": null
+  }
+}

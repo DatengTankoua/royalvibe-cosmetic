@@ -357,6 +357,95 @@ describe('S3Service (R2 privé)', () => {
     });
   });
 
+  describe('signedReadUrl — réutilisation bornée (1-20C)', () => {
+    const REF_A = { key: `${PRODUCTS_A}/k.jpg`, storage: STORAGE };
+    let clock: jest.SpyInstance<number, []>;
+    let t = 0;
+    beforeEach(() => {
+      t = Date.UTC(2026, 9, 10, 12);
+      clock = jest.spyOn(Date, 'now').mockImplementation(() => t);
+    });
+    afterEach(() => clock.mockRestore());
+
+    it('même objet : une seule signature pendant le tiers de la validité, puis une nouvelle', async () => {
+      const service = createService();
+      const first = await service.signedReadUrl(REF_A, PRODUCTS_A);
+      t += 299_999;
+      expect(await service.signedReadUrl(REF_A, PRODUCTS_A)).toBe(first);
+      expect(mockGetSignedUrl).toHaveBeenCalledTimes(1);
+      t += 1; // 300 s = 900 s / 3
+      await service.signedReadUrl(REF_A, PRODUCTS_A);
+      expect(mockGetSignedUrl).toHaveBeenCalledTimes(2);
+    });
+
+    it('fenêtre proportionnelle à la durée configurée (600 s → 200 s)', async () => {
+      const service = createService({ S3_SIGNED_URL_TTL_SECONDS: '600' });
+      await service.signedReadUrl(REF_A, PRODUCTS_A);
+      t += 199_999;
+      await service.signedReadUrl(REF_A, PRODUCTS_A);
+      expect(mockGetSignedUrl).toHaveBeenCalledTimes(1);
+      t += 1;
+      await service.signedReadUrl(REF_A, PRODUCTS_A);
+      expect(mockGetSignedUrl).toHaveBeenCalledTimes(2);
+    });
+
+    it('nouvelle photo (nouvelle clé) : nouvelle URL ; objets distincts jamais confondus', async () => {
+      const service = createService();
+      const before = await service.signedReadUrl(REF_A, PRODUCTS_A);
+      const replaced = await service.signedReadUrl(
+        { key: `${PRODUCTS_A}/k2.jpg`, storage: STORAGE },
+        PRODUCTS_A,
+      );
+      expect(replaced).not.toBe(before);
+      expect(replaced).toContain(`${PRODUCTS_A}/k2.jpg`);
+      expect(mockGetSignedUrl).toHaveBeenCalledTimes(2);
+    });
+
+    it('cache chaud : contrôles de stockage et de périmètre toujours appliqués', async () => {
+      const service = createService();
+      expect(await service.signedReadUrl(REF_A, PRODUCTS_A)).not.toBeNull();
+      // Même clé, mais demandée dans le périmètre d'une autre organisation.
+      expect(await service.signedReadUrl(REF_A, PRODUCTS_B)).toBeNull();
+      // Même clé, autre stockage déclaré.
+      expect(
+        await service.signedReadUrl(
+          { ...REF_A, storage: 'proj.supabase.co/old' },
+          PRODUCTS_A,
+        ),
+      ).toBeNull();
+      expect(mockGetSignedUrl).toHaveBeenCalledTimes(1);
+    });
+
+    it('échec puis nouvel essai : rien en cache après un échec', async () => {
+      const service = createService();
+      mockGetSignedUrl.mockRejectedValueOnce(new Error('boom'));
+      expect(await service.signedReadUrl(REF_A, PRODUCTS_A)).toBeNull();
+      expect(await service.signedReadUrl(REF_A, PRODUCTS_A)).toBe(
+        `https://signed.example/${PRODUCTS_A}/k.jpg?X-Amz-Expires=900`,
+      );
+      expect(mockGetSignedUrl).toHaveBeenCalledTimes(2);
+    });
+
+    it('appels simultanés : une seule signature', async () => {
+      const service = createService();
+      const urls = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          service.signedReadUrl(REF_A, PRODUCTS_A),
+        ),
+      );
+      expect(new Set(urls).size).toBe(1);
+      expect(mockGetSignedUrl).toHaveBeenCalledTimes(1);
+    });
+
+    it('instances (configurations) distinctes : aucun partage', async () => {
+      await createService().signedReadUrl(REF_A, PRODUCTS_A);
+      await createService({
+        S3_SIGNING_ENDPOINT: 'https://s3.example.com',
+      }).signedReadUrl(REF_A, PRODUCTS_A);
+      expect(mockGetSignedUrl).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('deleteStoredObject — après l’écriture MongoDB', () => {
     it('supprime la clé exacte du stockage courant → deleted', async () => {
       const outcome = await createService().deleteStoredObject(

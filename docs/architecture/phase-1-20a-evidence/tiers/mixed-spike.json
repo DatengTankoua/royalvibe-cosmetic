@@ -1,0 +1,215 @@
+{
+  "stop": {
+    "unexpectedErrorRate": 0.01,
+    "routeP95Ms": 1500,
+    "routeP99Ms": 3000,
+    "minRouteSamples": 20,
+    "achievedOfferedRatio": 0.9,
+    "heapRatio": 0.8,
+    "hostFreeMbMin": 250,
+    "eldP99MedianMs": 250,
+    "dbAvgLatencyMs": 50,
+    "poolWaitP99Ms": 200,
+    "generatorCores": 4
+  },
+  "limits": {
+    "apiHeapMb": 1024,
+    "wiredTigerCacheGb": 0.5
+  },
+  "results": [
+    {
+      "label": "mixed-spike",
+      "scenario": "mixed",
+      "target": "multi",
+      "vus": 75,
+      "durationS": 30,
+      "paceS": null,
+      "think": true,
+      "windowS": 38,
+      "from": "2026-10-10T05:51:24.042Z",
+      "to": "2026-10-10T05:52:01.770Z",
+      "k6": {
+        "requests": 1582,
+        "reqPerS": 52.7,
+        "iterations": 271,
+        "offeredIterPerS": null,
+        "obtainedIterPerS": 9.03,
+        "lateIterationsRate": 100,
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "analytics_insights": {
+            "n": 46,
+            "p50": 938.7,
+            "p95": 2496.3,
+            "p99": 3120.1,
+            "max": 3230.1
+          },
+          "analytics_overview": {
+            "n": 46,
+            "p50": 577.1,
+            "p95": 1240.9,
+            "p99": 1302.2,
+            "max": 1327.7
+          },
+          "notifications_list": {
+            "n": 108,
+            "p50": 649.2,
+            "p95": 1243,
+            "p99": 1975.2,
+            "max": 2081.3
+          },
+          "products_list": {
+            "n": 189,
+            "p50": 960.2,
+            "p95": 2984.4,
+            "p99": 3781.2,
+            "max": 3913.3
+          },
+          "sales_history": {
+            "n": 89,
+            "p50": 950.3,
+            "p95": 2136.3,
+            "p99": 2681.1,
+            "max": 2835.8
+          },
+          "product_detail": {
+            "n": 189,
+            "p50": 989.2,
+            "p95": 1647.5,
+            "p99": 2377.5,
+            "max": 2671.4
+          },
+          "sales_cancel": {
+            "n": 16,
+            "p50": 990.4,
+            "p95": 1663.2,
+            "p99": 1746.5,
+            "max": 1767.3
+          },
+          "sales_create": {
+            "n": 163,
+            "p50": 1134.6,
+            "p95": 2008.3,
+            "p99": 2320.7,
+            "max": 2448.6
+          },
+          "product_update": {
+            "n": 36,
+            "p50": 1239.1,
+            "p95": 1970.1,
+            "p99": 2266,
+            "max": 2390
+          },
+          "product_trash": {
+            "n": 30,
+            "p50": 940.7,
+            "p95": 3351.5,
+            "p99": 3413.8,
+            "max": 3426.4
+          },
+          "notifications_read": {
+            "n": 108,
+            "p50": 748.2,
+            "p95": 1431.1,
+            "p99": 1526.2,
+            "max": 1637
+          },
+          "notifications_unread": {
+            "n": 108,
+            "p50": 652.2,
+            "p95": 1291.2,
+            "p99": 1470.5,
+            "max": 1743.8
+          },
+          "products_by_section": {
+            "n": 189,
+            "p50": 838.5,
+            "p95": 2826.3,
+            "p99": 3107.1,
+            "max": 3768.7
+          },
+          "product_restore": {
+            "n": 30,
+            "p50": 639.3,
+            "p95": 1432.5,
+            "p99": 1433,
+            "max": 1433.3
+          },
+          "sections_list": {
+            "n": 189,
+            "p50": 433,
+            "p95": 1122.3,
+            "p99": 1225.2,
+            "max": 1286.1
+          },
+          "analytics_monthly": {
+            "n": 46,
+            "p50": 754.2,
+            "p95": 2658.6,
+            "p99": 3538.7,
+            "max": 3899.9
+          }
+        }
+      },
+      "api": {
+        "cpuPctAvg": 127.98,
+        "cpuPctMax": 176.9,
+        "rssMbMax": 277,
+        "heapUsedMbMax": 169,
+        "eldP99MsMedian": 223.9,
+        "eldMaxMs": 961.5,
+        "socketsMax": 0,
+        "poolMaxInUse": 71,
+        "poolWaitP99MsMax": 432.2,
+        "poolFailed": 0
+      },
+      "db": {
+        "connectionsMax": 79,
+        "reads": {
+          "ops": 10732,
+          "avgMs": 1.53
+        },
+        "writes": {
+          "ops": 1559,
+          "avgMs": 2.94
+        },
+        "txCommitted": 179,
+        "txAborted": 0,
+        "cacheMbMax": 48,
+        "pendingJobsMax": 240,
+        "oldestPendingJobAgeSMax": 38,
+        "dueDeliveriesMax": 24,
+        "oldestDueDeliveryLateSMax": 2
+      },
+      "proc": {
+        "apiCoresAvg": 1.23,
+        "apiCoresMax": 1.73,
+        "mongodCoresAvg": 0.48,
+        "mongodCoresMax": 0.87,
+        "mongodWsMbMax": 184,
+        "k6CoresAvg": 0.07,
+        "k6CoresMax": 0.17,
+        "k6WsMbMax": 162,
+        "hostFreeMbMin": 513
+      },
+      "verdict": {
+        "reasons": [
+          "p95 analytics_insights = 2496.3 ms",
+          "p95 products_list = 2984.4 ms",
+          "p95 sales_history = 2136.3 ms",
+          "p95 product_detail = 1647.5 ms",
+          "p95 sales_create = 2008.3 ms",
+          "p95 product_update = 1970.1 ms",
+          "p95 product_trash = 3351.5 ms",
+          "p95 products_by_section = 2826.3 ms",
+          "p95 analytics_monthly = 2658.6 ms",
+          "attente pool 432.2 ms"
+        ],
+        "warnings": []
+      }
+    }
+  ]
+}

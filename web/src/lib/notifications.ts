@@ -72,6 +72,7 @@ export type NotificationDetails =
       kind: "sale";
       cancelled: boolean;
       productName?: string | null;
+      // 1-19A : absents sans `sales.view_all` (droit de consulter les chiffres).
       quantity?: number;
       salePrice?: number;
       total?: number;
@@ -85,7 +86,49 @@ export type NotificationDetails =
     }
   | { kind: "payment"; term: string | null; confirmedAt: string | null }
   | MonthlyReportDetails
-  | { kind: "monthly-report"; missing: true };
+  | { kind: "monthly-report"; missing: true }
+  | MemberJoinedDetails
+  | MemberActivityDetails;
+
+// 1-19A — Nouveau membre : nom figé, rôle ACTUEL s'il est encore actif.
+export interface MemberJoinedDetails {
+  kind: "member-joined";
+  memberName: string | null;
+  role: "owner" | "admin" | "seller" | null;
+  active: boolean;
+  occurredAt: string;
+}
+
+export type MemberActivityEntity =
+  "product" | "section" | "sale" | "invitation" | "member" | "branding";
+
+export type MemberActivityAction =
+  | "created"
+  | "updated"
+  | "trashed"
+  | "restored"
+  | "purged"
+  | "cancelled"
+  | "revoked";
+
+// 1-19A — Activité d'un membre (propriétaire seul). Noms figés ; `link`
+// seulement si la cible existe encore (jamais de lien cassé).
+export interface MemberActivityDetails {
+  kind: "member-activity";
+  actorName: string | null;
+  entity: MemberActivityEntity | null;
+  action: MemberActivityAction | null;
+  count: number;
+  occurredAt: string;
+  totalTargets: number;
+  targets: Array<{
+    name: string | null;
+    link: string | null;
+    inTrash: boolean;
+    removed: boolean;
+  }>;
+  link: string | null;
+}
 
 export interface CenterPreferences {
   categories: PushPreferences;
@@ -173,4 +216,6 @@ export const CATEGORY_KEYS: Record<PushCategory, keyof PushPreferences> = {
   "subscription-ending": "subscriptionEnding",
   "payment-succeeded": "paymentSucceeded",
   "monthly-report": "monthlyReport",
+  "member-joined": "memberJoined",
+  "member-activity": "memberActivity",
 };

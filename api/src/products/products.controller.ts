@@ -35,6 +35,11 @@ import { productVisibility } from './product-projection';
 import { validateProductImage } from './product-image-validation';
 // 1-12D : limites multipart durcies (GHSA-535w) ; 413 stable (R2).
 import { ProductImageUploadInterceptor } from './product-image-upload.interceptor';
+import { PushOutboxService } from '../push/push-outbox.service';
+import {
+  MemberActivityAction,
+  MemberActivityEntity,
+} from '../notifications/member-activity';
 
 // Matrice audit 1A §3 : stock+prix ⇒ `stock.adjust`, catalogue/images ⇒
 // `products.manage`. Un PATCH ne portant AUCUN champ reconnu retombe sur
@@ -59,13 +64,33 @@ function requiredPermissionsForUpdate(
  * Tenant = `organizationContext.organizationId` (branché par la garde,
  * jamais fourni par la requête) : c'est la source unique passée au service
  * en PREMIER argument de chaque méthode du catalogue (§§3-4 de 1-4B).
+ *
+ * 1-19A : chaque écriture RÉUSSIE d'un membre autre que le propriétaire est
+ * annoncée au propriétaire (`PushOutboxService.memberActivity`, best effort,
+ * APRÈS le service : jamais sur un refus ni un échec). Nom du produit figé.
  */
 @Controller('products')
 export class ProductsController {
   constructor(
     private readonly productsService: ProductsService,
     private readonly storageQuota: StorageQuotaService,
+    private readonly pushOutbox: PushOutboxService,
   ) {}
+
+  private activity(
+    context: ResolvedOrganizationContext,
+    action: MemberActivityAction,
+    product: { _id: unknown; name?: string | null },
+    uniqueKey?: string,
+  ): Promise<void> {
+    return this.pushOutbox.memberActivity(context, {
+      entity: MemberActivityEntity.PRODUCT,
+      action,
+      targetId: String(product._id),
+      targetName: product.name ?? null,
+      uniqueKey,
+    });
+  }
 
   /**
    * Photo contrôlée (format, décodage, dimensions) PUIS envoyée au stockage
@@ -104,8 +129,9 @@ export class ProductsController {
     const organizationId = organizationContext.organizationId;
     // Si l'upload échoue, aucun objet n'existe encore : rien à nettoyer.
     const image = await this.storeProductImage(file, organizationId);
+    let created: Awaited<ReturnType<ProductsService['create']>>;
     try {
-      return await this.productsService.create(
+      created = await this.productsService.create(
         organizationId,
         dto,
         image,
@@ -118,6 +144,12 @@ export class ProductsController {
       await this.storageQuota.discard(image);
       throw err;
     }
+    await this.activity(
+      organizationContext,
+      MemberActivityAction.CREATED,
+      created,
+    );
+    return created;
   }
 
   @Get()
@@ -179,8 +211,9 @@ export class ProductsController {
     const newImage = file
       ? await this.storeProductImage(file, organizationId)
       : undefined;
+    let updated: Awaited<ReturnType<ProductsService['update']>>;
     try {
-      return await this.productsService.update(
+      updated = await this.productsService.update(
         organizationId,
         id,
         dto,
@@ -193,46 +226,73 @@ export class ProductsController {
       if (newImage) await this.storageQuota.discard(newImage);
       throw err;
     }
+    await this.activity(
+      organizationContext,
+      MemberActivityAction.UPDATED,
+      updated.product,
+    );
+    return updated;
   }
 
   @Patch(':id/restore')
   @RequirePermissions('trash.manage')
-  restore(
+  async restore(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.productsService.restore(
+    const restored = await this.productsService.restore(
       organizationContext.organizationId,
       id,
       productVisibility(organizationContext),
     );
+    await this.activity(
+      organizationContext,
+      MemberActivityAction.RESTORED,
+      restored,
+    );
+    return restored;
   }
 
   @Delete(':id')
   @RequirePermissions('products.manage')
-  remove(
+  async remove(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentUser() user: User,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.productsService.remove(
+    const trashed = await this.productsService.remove(
       organizationContext.organizationId,
       id,
       user._id.toString(),
       productVisibility(organizationContext),
     );
+    await this.activity(
+      organizationContext,
+      MemberActivityAction.TRASHED,
+      trashed,
+    );
+    return trashed;
   }
 
   @Delete(':id/permanent')
   @RequirePermissions('trash.manage')
-  permanentDelete(
+  async permanentDelete(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.productsService.permanentDelete(
+    const purged = await this.productsService.permanentDelete(
       organizationContext.organizationId,
       id,
       productVisibility(organizationContext),
     );
+    // Une suppression définitive n'a lieu qu'une fois : clé stable (deux
+    // requêtes concurrentes ne comptent qu'une suppression).
+    await this.activity(
+      organizationContext,
+      MemberActivityAction.PURGED,
+      purged,
+      id,
+    );
+    return purged;
   }
 }

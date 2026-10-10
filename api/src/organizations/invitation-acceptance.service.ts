@@ -57,6 +57,7 @@ import type {
   AcceptInvitationDto,
   CreateInvitationAccountDto,
 } from '../auth/dto/accept-invitation.dto';
+import { PushOutboxService } from '../push/push-outbox.service';
 
 /** Invitation valide, mais destinée à une autre adresse que la session. */
 export const INVITATION_ACCOUNT_MISMATCH = 'INVITATION_ACCOUNT_MISMATCH';
@@ -128,6 +129,13 @@ interface AccountLinkClaim {
  * Aucune réponse sans session ne dépend de l'existence d'un compte.
  * Expiration, révocation, usage unique, transaction et isolation sont
  * conservés (filtres conditionnels `pending` + `expiresAt`).
+ *
+ * 1-19A — L'acceptation SUPPRIME l'invitation (`findOneAndDelete`
+ * conditionnel) dans la transaction qui crée la membership : les deux liens
+ * (créateur et création de compte) ne désignent plus rien ensuite, et tout
+ * refus ou échec annule la suppression (invitation intacte). L'événement
+ * `member-joined` est enregistré dans la même transaction ; il ne dépend
+ * pas de l'invitation supprimée (membership et utilisateur seulement).
  */
 @Injectable()
 export class InvitationAcceptanceService {
@@ -147,6 +155,7 @@ export class InvitationAcceptanceService {
     private readonly socketRegistry: SocketRegistryService,
     private readonly config: ConfigService,
     private readonly rateLimiter: PersistentRateLimiter,
+    private readonly pushOutbox: PushOutboxService,
   ) {}
 
   // ─── Compte existant (session requise) ────────────────────────────────
@@ -198,14 +207,11 @@ export class InvitationAcceptanceService {
     let result: ExistingAccountAcceptance | undefined;
     try {
       await session.withTransaction(async () => {
+        // 1-19A : réclamation = suppression conditionnelle (usage unique).
         const invitation = await this.invitationModel
-          .findOneAndUpdate(
+          .findOneAndDelete(
             { ...usableFilter(now), tokenHash, email },
-            {
-              $set: { status: InvitationStatus.ACCEPTED, acceptedAt: now },
-              $unset: ACCOUNT_LINK_UNSET,
-            },
-            { session, new: true },
+            { session },
           )
           .exec();
         if (!invitation) {
@@ -228,6 +234,7 @@ export class InvitationAcceptanceService {
           userId,
           session,
         );
+        await this.recordJoined(invitation, userId, membership, session);
         result = {
           organization: {
             _id: organization._id.toString(),
@@ -318,15 +325,9 @@ export class InvitationAcceptanceService {
     let organizationId: string | undefined;
     try {
       await session.withTransaction(async () => {
+        // 1-19A : réclamation = suppression conditionnelle (usage unique).
         const invitation = await this.invitationModel
-          .findOneAndUpdate(
-            { ...linkFilter, _id: candidate._id },
-            {
-              $set: { status: InvitationStatus.ACCEPTED, acceptedAt: now },
-              $unset: ACCOUNT_LINK_UNSET,
-            },
-            { session, new: true },
-          )
+          .findOneAndDelete({ ...linkFilter, _id: candidate._id }, { session })
           .exec();
         if (!invitation) throw this.invalidOrExpired();
         const organization = await this.activeOrganization(
@@ -356,7 +357,12 @@ export class InvitationAcceptanceService {
           if (isDuplicateKeyError(err)) throw this.accountExists();
           throw err;
         }
-        await this.createMembership(invitation, user._id, session);
+        const membership = await this.createMembership(
+          invitation,
+          user._id,
+          session,
+        );
+        await this.recordJoined(invitation, user._id, membership, session);
         await this.legalAcceptance.record(session, {
           userId: user._id.toString(),
           organizationId: invitation.organizationId.toString(),
@@ -440,6 +446,20 @@ export class InvitationAcceptanceService {
       );
     }
     return membership;
+  }
+
+  /** 1-19A : adhésion annoncée, dans la transaction d'acceptation. */
+  private async recordJoined(
+    invitation: OrganizationInvitationDocument,
+    userId: Types.ObjectId,
+    membership: OrganizationMembershipDocument,
+    session: MongooseSession,
+  ): Promise<void> {
+    await this.pushOutbox.memberJoinedInSession(session, {
+      organizationId: invitation.organizationId,
+      userId,
+      membershipId: membership._id,
+    });
   }
 
   /**
@@ -596,12 +616,6 @@ export class InvitationAcceptanceService {
 function usableFilter(now: Date) {
   return { status: InvitationStatus.PENDING, expiresAt: { $gt: now } };
 }
-
-/** Le lien de création disparaît avec l'invitation consommée. */
-const ACCOUNT_LINK_UNSET = {
-  accountTokenHash: 1,
-  accountTokenExpiresAt: 1,
-} as const;
 
 function normalizedEmail(email: string): string {
   return email.trim().toLowerCase();

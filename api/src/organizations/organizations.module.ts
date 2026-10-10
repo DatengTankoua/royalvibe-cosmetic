@@ -26,6 +26,7 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { EmailVerificationModule } from '../email-verification/email-verification.module';
 import { InvitationAcceptanceService } from './invitation-acceptance.service';
 import { RateLimitModule } from '../common/rate-limit/rate-limit.module';
+import { PushModule } from '../push/push.module';
 
 @Module({
   imports: [
@@ -40,6 +41,9 @@ import { RateLimitModule } from '../common/rate-limit/rate-limit.module';
     EmailVerificationModule,
     // 1-18C : plafond persistant par destinataire d'invitation.
     RateLimitModule,
+    // 1-19A : événements « nouveau membre » et activité des membres (outbox
+    // des notifications, module feuille).
+    PushModule,
     MongooseModule.forFeature([
       { name: Organization.name, schema: OrganizationSchema },
       {

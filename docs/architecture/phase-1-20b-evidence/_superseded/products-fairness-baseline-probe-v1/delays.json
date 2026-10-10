@@ -1,0 +1,116 @@
+{
+  "from": "2026-10-10T11:52:02.704Z",
+  "to": "2026-10-10T11:59:23.706Z",
+  "categories": {
+    "sale-created": {
+      "jobs": 40,
+      "pendingAtRead": 8,
+      "dispatch": {
+        "n": 32,
+        "p50S": 130,
+        "p95S": 497.1,
+        "p99S": 553.7,
+        "maxS": 553.7
+      },
+      "center": {
+        "n": 32,
+        "p50S": 129.9,
+        "p95S": 497,
+        "p99S": 553.7,
+        "maxS": 553.7
+      },
+      "grouping": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "pushLate": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "deliveries": 0,
+      "deliveriesSent": 0
+    },
+    "member-activity": {
+      "jobs": 10535,
+      "pendingAtRead": 4875,
+      "dispatch": {
+        "n": 5642,
+        "p50S": 281.8,
+        "p95S": 553.7,
+        "p99S": 576.9,
+        "maxS": 582.6
+      },
+      "center": {
+        "n": 18,
+        "p50S": -13.3,
+        "p95S": 222.4,
+        "p99S": 222.4,
+        "maxS": 222.4
+      },
+      "grouping": {
+        "n": 18,
+        "p50S": 0,
+        "p95S": 0,
+        "p99S": 0,
+        "maxS": 0
+      },
+      "pushLate": {
+        "n": 18,
+        "p50S": 2.9,
+        "p95S": 222.5,
+        "p99S": 222.5,
+        "maxS": 222.5
+      },
+      "deliveries": 18,
+      "deliveriesSent": 18
+    },
+    "sale-digest": {
+      "jobs": 3,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "center": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "grouping": {
+        "n": 6,
+        "p50S": 0,
+        "p95S": 0,
+        "p99S": 0,
+        "maxS": 0
+      },
+      "pushLate": {
+        "n": 6,
+        "p50S": 2.8,
+        "p95S": 246.8,
+        "p99S": 246.8,
+        "maxS": 246.8
+      },
+      "deliveries": 6,
+      "deliveriesSent": 6
+    }
+  },
+  "flow": {
+    "windowS": 441,
+    "createdPerS": 23.94,
+    "processedPerS": 7.2,
+    "created": 10557,
+    "processed": 3174,
+    "pendingAtRead": 4883
+  }
+}

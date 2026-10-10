@@ -8,6 +8,7 @@ import type { ResolvedOrganizationContext } from './organizations.service';
 import { StorageQuotaService } from '../storage-quota/storage-quota.service';
 import { OrganizationRole, OrganizationStatus } from './permissions';
 import { PERMISSIONS_KEY } from '../auth/decorators/permissions.decorator';
+import { PushOutboxService } from '../push/push-outbox.service';
 
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const PREFIX_A = `organizations/${ORG_A}/branding`;
@@ -132,6 +133,10 @@ describe('OrganizationBrandingController (1-8A)', () => {
       providers: [
         { provide: OrganizationsService, useValue: serviceStub },
         { provide: StorageQuotaService, useValue: quotaStub },
+        {
+          provide: PushOutboxService,
+          useValue: { memberActivity: jest.fn().mockResolvedValue(undefined) },
+        },
       ],
     }).compile();
     controller = module.get(OrganizationBrandingController);

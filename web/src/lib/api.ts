@@ -6,6 +6,7 @@ import type {
   DelegablePermission,
   OrganizationRole,
 } from "./organization-permissions";
+import { PERMISSION_CATALOG } from "./organization-permissions";
 import type { LegalAcceptancePayload } from "./legal/acceptance";
 import { clientT, currentLocale } from "@/i18n/client-t";
 
@@ -804,6 +805,10 @@ export async function updateMember(
   const { data } = await apiClient.patch<ApiMember>(
     `/organizations/members/${membershipId}`,
     payload,
+    // 1-19A : catalogue de permissions connu de ce formulaire. Paramètre de
+    // requête (jamais un champ du corps ni un en-tête) : une API antérieure
+    // l'ignore, et une permission inconnue de ce web n'est jamais retirée.
+    { params: { permissionsCatalog: PERMISSION_CATALOG } },
   );
   return data;
 }

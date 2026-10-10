@@ -2,6 +2,10 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { PushCategory } from './push-category';
 import { SubscriptionPeriodKind } from '../../subscriptions/subscription-terms';
+import {
+  MemberActivityAction,
+  MemberActivityEntity,
+} from '../../notifications/member-activity';
 
 export type PushJobDocument = HydratedDocument<PushJob>;
 
@@ -32,7 +36,14 @@ export enum PushJobStatus {
  * - `monthly-report:<organisation>:<AAAA-MM>` (génération du bilan) ;
  * - `sale-digest:<organisation>:<début de fenêtre ms>` (push seul, regroupe
  *   les ventes d'une fenêtre fixe d'une minute).
- * Aucune donnée personnelle ni financière : identifiants seuls.
+ * 1-19A :
+ * - `member-joined:<membership>` (transaction d'acceptation) ;
+ * - `member-activity:<identifiant d'action>` (après succès de l'action) et
+ *   `member-activity:<org>:<auteur>:<cible>:<action>:<fenêtre ms>` (push
+ *   seul, regroupement d'une minute).
+ * Aucune donnée personnelle ni financière : identifiants seuls, plus, pour
+ * une activité, le NOM de la cible figé à l'action (une cible supprimée
+ * définitivement reste compréhensible).
  */
 @Schema({
   collection: PUSH_JOBS_COLLECTION,
@@ -66,6 +77,32 @@ export class PushJob {
   /** 1-16A.1 : bilan mensuel (`monthly-report`). */
   @Prop({ type: MongooseSchema.Types.ObjectId, default: null })
   reportId: Types.ObjectId | null;
+
+  /**
+   * 1-19A : auteur de l'événement (vendeur, nouveau membre, collaborateur),
+   * jamais destinataire. `null` pour les événements sans auteur et les
+   * anciens travaux.
+   */
+  @Prop({ type: MongooseSchema.Types.ObjectId, default: null })
+  actorId: Types.ObjectId | null;
+
+  /** 1-19A : activité d'un membre (`member-activity`). */
+  @Prop({
+    type: {
+      entity: { type: String, enum: MemberActivityEntity, required: true },
+      action: { type: String, enum: MemberActivityAction, required: true },
+      targetId: { type: MongooseSchema.Types.ObjectId, default: null },
+      targetName: { type: String, default: null, maxlength: 120 },
+    },
+    _id: false,
+    default: null,
+  })
+  activity: {
+    entity: MemberActivityEntity;
+    action: MemberActivityAction;
+    targetId: Types.ObjectId | null;
+    targetName: string | null;
+  } | null;
 
   /** Échéance effective visée par le rappel. */
   @Prop({ type: Date, default: null })

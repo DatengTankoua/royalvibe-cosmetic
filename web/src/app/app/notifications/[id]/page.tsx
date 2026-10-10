@@ -9,6 +9,8 @@ import { useFormat } from "@/i18n/use-format";
 import { getToken } from "@/lib/auth";
 import {
   AppNotification,
+  MemberActivityDetails,
+  MemberJoinedDetails,
   MonthlyReportDetails,
   NotificationDetails,
   UnsoldPage,
@@ -141,10 +143,18 @@ function Details({
         <dl className="grid grid-cols-2 gap-2 text-sm">
           <dt className="text-muted-foreground">{t("detail.product")}</dt>
           <dd>{details.productName ?? "—"}</dd>
-          <dt className="text-muted-foreground">{t("detail.quantity")}</dt>
-          <dd>{details.quantity}</dd>
-          <dt className="text-muted-foreground">{t("detail.amount")}</dt>
-          <dd>{f.fcfa(details.total ?? 0)}</dd>
+          {details.total !== undefined ? (
+            <>
+              <dt className="text-muted-foreground">{t("detail.quantity")}</dt>
+              <dd>{details.quantity}</dd>
+              <dt className="text-muted-foreground">{t("detail.amount")}</dt>
+              <dd>{f.fcfa(details.total)}</dd>
+            </>
+          ) : (
+            <dd className="col-span-2 text-xs text-muted-foreground">
+              {t("detail.amountHidden")}
+            </dd>
+          )}
           <dt className="text-muted-foreground">{t("detail.seller")}</dt>
           <dd>{details.sellerName ?? "—"}</dd>
           {details.occurredAt && (
@@ -183,7 +193,100 @@ function Details({
       ) : (
         <MonthlyReport id={id} report={details as MonthlyReportDetails} />
       );
+    case "member-joined":
+      return <MemberJoined details={details} />;
+    case "member-activity":
+      return <MemberActivity details={details} />;
   }
+}
+
+// 1-19A — Nouveau membre : nom figé, rôle actuel (relu avec les droits du
+// lecteur) ou mention du départ.
+function MemberJoined({ details }: { details: MemberJoinedDetails }) {
+  const { t } = useT("notifications");
+  const f = useDetailFormat();
+  return (
+    <dl className="grid grid-cols-2 gap-2 text-sm">
+      <dt className="text-muted-foreground">{t("detail.member")}</dt>
+      <dd className="break-words">{details.memberName ?? "—"}</dd>
+      {details.active && details.role ? (
+        <>
+          <dt className="text-muted-foreground">{t("detail.role")}</dt>
+          <dd>{t(`detail.roles.${details.role}`)}</dd>
+        </>
+      ) : (
+        <dd className="col-span-2 text-xs text-muted-foreground">
+          {t("detail.memberInactive")}
+        </dd>
+      )}
+      <dt className="text-muted-foreground">{t("detail.date")}</dt>
+      <dd>{f.dateTime(details.occurredAt)}</dd>
+    </dl>
+  );
+}
+
+// 1-19A — Activité d'un membre : auteur, date, nombre d'actions et cibles
+// (noms figés). Une cible supprimée reste lisible, sans lien.
+function MemberActivity({ details }: { details: MemberActivityDetails }) {
+  const { t } = useT("notifications");
+  const f = useDetailFormat();
+  const hidden = details.totalTargets - details.targets.length;
+  const named = details.entity !== "branding" && details.targets.length > 0;
+  return (
+    <div className="space-y-4 text-sm">
+      <dl className="grid grid-cols-2 gap-2">
+        <dt className="text-muted-foreground">{t("detail.author")}</dt>
+        <dd className="break-words">
+          {details.actorName ?? t("detail.unknownAuthor")}
+        </dd>
+        <dt className="text-muted-foreground">{t("detail.date")}</dt>
+        <dd>{f.dateTime(details.occurredAt)}</dd>
+      </dl>
+      {details.count > 1 && (
+        <p className="text-muted-foreground">
+          {t("detail.actionsCount", { count: details.count })}
+        </p>
+      )}
+      {named && (
+        <section>
+          <h2 className="font-semibold">{t("detail.targets")}</h2>
+          <ul className="mt-1 space-y-1">
+            {details.targets.map((target, index) => (
+              <li key={index} className="break-words">
+                {target.link ? (
+                  <Link
+                    prefetch={false}
+                    href={target.link}
+                    className="underline underline-offset-2"
+                  >
+                    {target.name ?? t("detail.unnamed")}
+                  </Link>
+                ) : (
+                  (target.name ?? t("detail.unnamed"))
+                )}
+                {target.inTrash ? ` ${t("detail.inTrash")}` : ""}
+                {target.removed ? ` ${t("detail.removed")}` : ""}
+              </li>
+            ))}
+          </ul>
+          {hidden > 0 && (
+            <p className="mt-1 text-muted-foreground">
+              {t("detail.moreTargets", { count: hidden })}
+            </p>
+          )}
+        </section>
+      )}
+      {details.link && (
+        <Button
+          variant="outline"
+          nativeButton={false}
+          render={<Link prefetch={false} href={details.link} />}
+        >
+          {t("detail.open")}
+        </Button>
+      )}
+    </div>
+  );
 }
 
 function MonthlyReport({

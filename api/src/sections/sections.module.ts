@@ -5,6 +5,7 @@ import { SectionsService } from './sections.service';
 import { SectionsController } from './sections.controller';
 import { Product, ProductSchema } from '../products/schemas/product.schema';
 import { EventsModule } from '../events/events.module';
+import { PushModule } from '../push/push.module';
 
 @Module({
   imports: [
@@ -14,6 +15,8 @@ import { EventsModule } from '../events/events.module';
     ]),
     // 1-15B : diffusion des signaux de section à la room de l'organisation.
     EventsModule,
+    // 1-19A : activité des membres annoncée au propriétaire.
+    PushModule,
   ],
   providers: [SectionsService],
   controllers: [SectionsController],

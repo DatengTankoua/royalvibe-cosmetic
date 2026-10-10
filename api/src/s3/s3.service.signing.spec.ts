@@ -144,4 +144,52 @@ describe('S3Service — endpoint de signature distinct (Docker Compose/MinIO)', 
       'S3_SIGNING_ENDPOINT',
     );
   });
+
+  it('1-20C : URL réutilisée en fin de fenêtre encore valable au moins 600 s (signature réelle)', async () => {
+    const s = service({ S3_FORCE_PATH_STYLE: 'true' });
+    const signedAt = Date.UTC(2026, 9, 10, 12, 0, 0);
+    let t = signedAt;
+    // Horloge complète (`Date` et `Date.now`) : le SDK date la signature.
+    jest.useFakeTimers({
+      doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'],
+    });
+    jest.setSystemTime(t);
+    try {
+      const first = (await s.signedReadUrl(
+        { key: KEY, storage: s.storage },
+        PREFIX,
+      ))!;
+      t = signedAt + 299_000; // dernière seconde de la fenêtre de 300 s
+      jest.setSystemTime(t);
+      const reused = (await s.signedReadUrl(
+        { key: KEY, storage: s.storage },
+        PREFIX,
+      ))!;
+      expect(reused).toBe(first);
+      const url = new URL(reused);
+      const date = url.searchParams.get('X-Amz-Date')!;
+      const issued = Date.UTC(
+        Number(date.slice(0, 4)),
+        Number(date.slice(4, 6)) - 1,
+        Number(date.slice(6, 8)),
+        Number(date.slice(9, 11)),
+        Number(date.slice(11, 13)),
+        Number(date.slice(13, 15)),
+      );
+      const expiresAt =
+        issued + Number(url.searchParams.get('X-Amz-Expires')) * 1000;
+      expect(issued).toBe(signedAt);
+      expect(expiresAt - t).toBeGreaterThanOrEqual(600_000);
+      // Après la fenêtre : nouvelle signature, nouvelle date.
+      t = signedAt + 300_000;
+      jest.setSystemTime(t);
+      const renewed = (await s.signedReadUrl(
+        { key: KEY, storage: s.storage },
+        PREFIX,
+      ))!;
+      expect(renewed).not.toBe(first);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

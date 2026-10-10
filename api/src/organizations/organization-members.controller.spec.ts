@@ -8,6 +8,7 @@ import {
   PERMISSIONS_KEY,
   OWNER_ONLY_KEY,
 } from '../auth/decorators/permissions.decorator';
+import { PushOutboxService } from '../push/push-outbox.service';
 
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const ACTOR_USER_ID = '111111111111111111111111';
@@ -51,11 +52,21 @@ describe('OrganizationMembersController (1-7C)', () => {
   beforeEach(async () => {
     for (const key of Object.keys(serviceStub)) {
       serviceStub[key].mockReset();
-      serviceStub[key].mockResolvedValue(undefined);
+      // 1-19A : vue du membre modifié (activité du membre).
+      serviceStub[key].mockResolvedValue({
+        membershipId: 'membership-1',
+        user: { name: 'Bob' },
+      });
     }
     const module: TestingModule = await Test.createTestingModule({
       controllers: [OrganizationMembersController],
-      providers: [{ provide: OrganizationsService, useValue: serviceStub }],
+      providers: [
+        { provide: OrganizationsService, useValue: serviceStub },
+        {
+          provide: PushOutboxService,
+          useValue: { memberActivity: jest.fn().mockResolvedValue(undefined) },
+        },
+      ],
     }).compile();
     controller = module.get(OrganizationMembersController);
   });
@@ -99,12 +110,25 @@ describe('OrganizationMembersController (1-7C)', () => {
   it('update : transmet org + userId de l’ACTEUR (contexte) + id du paramètre + dto, jamais falsifiables', async () => {
     const dto = { role: OrganizationRole.ADMIN };
     await controller.update(TARGET_MEMBERSHIP_ID, dto, ctx);
+    // 1-19A : sans déclaration, catalogue 1 (formulaire antérieur).
     expect(serviceStub.updateMembership).toHaveBeenCalledWith(
       ORG_A,
       ACTOR_USER_ID,
       TARGET_MEMBERSHIP_ID,
       dto,
+      1,
     );
+    await controller.update(TARGET_MEMBERSHIP_ID, dto, ctx, '2');
+    expect(serviceStub.updateMembership).toHaveBeenLastCalledWith(
+      ORG_A,
+      ACTOR_USER_ID,
+      TARGET_MEMBERSHIP_ID,
+      dto,
+      2,
+    );
+    // Valeur inconnue ou falsifiée : jamais au-delà du catalogue 1.
+    await controller.update(TARGET_MEMBERSHIP_ID, dto, ctx, '99');
+    expect(serviceStub.updateMembership.mock.lastCall?.[4]).toBe(1);
   });
 
   it('transferOwnership : transmet org + userId de l’acteur (contexte) + id de la cible', async () => {

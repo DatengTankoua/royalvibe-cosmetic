@@ -18,7 +18,10 @@ export type PushCategory =
   | "sale-created"
   | "subscription-ending"
   | "payment-succeeded"
-  | "monthly-report";
+  | "monthly-report"
+  // 1-19A.
+  | "member-joined"
+  | "member-activity";
 
 export interface PushPreferences {
   stockDepleted: boolean;
@@ -27,6 +30,8 @@ export interface PushPreferences {
   subscriptionEnding: boolean;
   paymentSucceeded: boolean;
   monthlyReport: boolean;
+  memberJoined: boolean;
+  memberActivity: boolean;
 }
 
 export interface PushConfig {

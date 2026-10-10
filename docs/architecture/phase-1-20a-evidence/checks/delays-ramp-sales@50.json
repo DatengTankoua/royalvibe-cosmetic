@@ -1,0 +1,74 @@
+{
+  "from": "2026-10-10T01:17:09.354Z",
+  "to": "2026-10-10T01:17:51.956Z",
+  "categories": {
+    "sale-created": {
+      "jobs": 2150,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 2150,
+        "p50S": 353.6,
+        "p95S": 518.7,
+        "p99S": 532.4,
+        "maxS": 532.9
+      },
+      "center": {
+        "n": 1927,
+        "p50S": 354.1,
+        "p95S": 518.7,
+        "p99S": 532.3,
+        "maxS": 532.9
+      },
+      "grouping": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "pushLate": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "deliveries": 0,
+      "deliveriesSent": 0
+    },
+    "member-activity": {
+      "jobs": 229,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 223,
+        "p50S": 340.8,
+        "p95S": 519.2,
+        "p99S": 532.9,
+        "maxS": 532.9
+      },
+      "center": {
+        "n": 6,
+        "p50S": 41.2,
+        "p95S": 49.6,
+        "p99S": 49.6,
+        "maxS": 49.6
+      },
+      "grouping": {
+        "n": 6,
+        "p50S": 0,
+        "p95S": 0,
+        "p99S": 0,
+        "maxS": 0
+      },
+      "pushLate": {
+        "n": 6,
+        "p50S": 43.1,
+        "p95S": 51.1,
+        "p99S": 51.1,
+        "maxS": 51.1
+      },
+      "deliveries": 6,
+      "deliveriesSent": 6
+    }
+  }
+}

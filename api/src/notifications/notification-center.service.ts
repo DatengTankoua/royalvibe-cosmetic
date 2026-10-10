@@ -19,6 +19,13 @@ import {
   MonthlyReportDocument,
 } from './schemas/monthly-report.schema';
 import { NotificationSignalsService } from './notification-signals.service';
+import {
+  MemberActivityAction,
+  MemberActivityEntity,
+  memberActivityGroupKey,
+  memberActivitySentence,
+  memberJoinedSentence,
+} from './member-activity';
 import { expiresAfterRead } from './notification-retention';
 import {
   CategoryAccessContext,
@@ -29,6 +36,16 @@ import {
   accessibleCategories,
   canAccessCategory,
 } from '../push/schemas/push-category';
+import {
+  MembershipStatus,
+  OrganizationRole,
+  hasPermission,
+} from '../organizations/permissions';
+import {
+  OrganizationMembership,
+  OrganizationMembershipDocument,
+} from '../organizations/schemas/membership.schema';
+import { Section, SectionDocument } from '../sections/schemas/section.schema';
 import { PUSH_CLOCK } from '../push/push-runtime';
 import type { PushClock } from '../push/push-runtime';
 import { NOTIFICATION_TITLE, notificationBody } from '../push/push-messages';
@@ -69,6 +86,8 @@ export interface NotificationPage {
 }
 
 export const NOTIFICATION_PAGE_MAX = 50;
+/** 1-19A : cibles listées dans le détail d'une activité groupée. */
+export const ACTIVITY_TARGETS_DETAIL_MAX = 50;
 export const REPORT_UNSOLD_PAGE_MAX = 100;
 export const NOTIFICATION_NOT_FOUND = 'NOTIFICATION_NOT_FOUND';
 
@@ -88,8 +107,19 @@ function completeCategories(
   return result;
 }
 
+function isDuplicateKeyError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code?: unknown }).code === 11000
+  );
+}
+
 function link(n: NotificationRecord): string {
   switch (n.category) {
+    case PushCategory.MEMBER_JOINED:
+      return '/app/organization/members';
     case PushCategory.STOCK_DEPLETED:
     case PushCategory.STOCK_LOW:
       return n.productId
@@ -105,6 +135,34 @@ function link(n: NotificationRecord): string {
   }
 }
 
+/**
+ * 1-19A : texte des catégories `member-*` construit depuis les noms FIGÉS
+ * (lisible après suppression de la cible ou de l'invitation) ; textes
+ * génériques inchangés pour les autres catégories.
+ */
+function body(n: NotificationRecord, locale: AppLocale): string {
+  if (n.category === PushCategory.MEMBER_JOINED) {
+    return memberJoinedSentence(n.actorName ?? null, locale);
+  }
+  if (
+    n.category === PushCategory.MEMBER_ACTIVITY &&
+    n.activityEntity &&
+    n.activityAction
+  ) {
+    return memberActivitySentence(
+      {
+        actorName: n.actorName ?? null,
+        entity: n.activityEntity,
+        action: n.activityAction,
+        count: n.activityCount ?? 1,
+        targets: n.activityTargets ?? [],
+      },
+      locale,
+    );
+  }
+  return notificationBody(n.category, n.periodKind, locale);
+}
+
 function toView(
   n: NotificationRecord,
   locale: AppLocale = 'fr',
@@ -113,7 +171,7 @@ function toView(
     id: n._id.toHexString(),
     category: n.category,
     title: NOTIFICATION_TITLE,
-    body: notificationBody(n.category, n.periodKind, locale),
+    body: body(n, locale),
     link: link(n),
     createdAt: n.eventAt,
     readAt: n.readAt,
@@ -148,6 +206,10 @@ export class NotificationCenterService {
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @InjectModel(SubscriptionPayment.name)
     private readonly paymentModel: Model<SubscriptionPaymentDocument>,
+    @InjectModel(OrganizationMembership.name)
+    private readonly membershipModel: Model<OrganizationMembershipDocument>,
+    @InjectModel(Section.name)
+    private readonly sectionModel: Model<SectionDocument>,
     private readonly signals: NotificationSignalsService,
     @Inject(PUSH_CLOCK) private readonly clock: PushClock,
   ) {}
@@ -186,6 +248,7 @@ export class NotificationCenterService {
   async createFromJob(
     job: PushJob & { _id: Types.ObjectId },
     userIds: readonly Types.ObjectId[],
+    actorName: string | null = null,
   ): Promise<number> {
     let created = 0;
     for (const userId of userIds) {
@@ -202,6 +265,8 @@ export class NotificationCenterService {
               reportId: job.reportId ?? null,
               coverageEndsAt: job.coverageEndsAt ?? null,
               periodKind: job.periodKind ?? null,
+              actorId: job.actorId ?? null,
+              actorName,
               eventAt: job.eventAt,
               readAt: null,
               expiresAt: null,
@@ -212,6 +277,80 @@ export class NotificationCenterService {
         .exec();
       if (result.upsertedCount > 0) {
         created += 1;
+        this.signals.changed(
+          job.organizationId.toHexString(),
+          userId.toHexString(),
+        );
+      }
+    }
+    return created;
+  }
+
+  /**
+   * 1-19A — Activité d'un membre : UNE notification par destinataire et
+   * regroupement (même auteur, action, type de cible, fenêtre d'une minute).
+   * Chaque action n'est comptée qu'une fois (`activityEventIds`) : une
+   * reprise après crash bute sur l'index unique `{eventKey, userId}` et ne
+   * compte rien de plus. Une action ajoutée à un regroupement déjà lu le
+   * repasse non lu. Renvoie le nombre de notifications créées.
+   */
+  async createActivityFromJob(
+    job: PushJob & { _id: Types.ObjectId },
+    userIds: readonly Types.ObjectId[],
+    actorName: string | null,
+  ): Promise<number> {
+    if (!job.activity || !job.actorId) return 0;
+    const eventKey = memberActivityGroupKey({
+      organizationId: job.organizationId.toHexString(),
+      actorId: job.actorId.toHexString(),
+      entity: job.activity.entity,
+      action: job.activity.action,
+      eventAt: job.eventAt,
+    });
+    const target = {
+      id: job.activity.targetId?.toHexString() ?? null,
+      name: job.activity.targetName ?? null,
+    };
+    let created = 0;
+    for (const userId of userIds) {
+      let result: { upsertedCount: number; modifiedCount: number };
+      try {
+        result = await this.notificationModel
+          .updateOne(
+            { eventKey, userId, activityEventIds: { $ne: job._id } },
+            {
+              $setOnInsert: {
+                organizationId: job.organizationId,
+                category: PushCategory.MEMBER_ACTIVITY,
+                productId: null,
+                saleId: null,
+                paymentId: null,
+                reportId: null,
+                coverageEndsAt: null,
+                periodKind: null,
+                actorId: job.actorId,
+                actorName,
+                activityEntity: job.activity.entity,
+                activityAction: job.activity.action,
+              },
+              $max: { eventAt: job.eventAt },
+              $set: { readAt: null, expiresAt: null },
+              $inc: { activityCount: 1 },
+              $addToSet: {
+                activityEventIds: job._id,
+                activityTargets: target,
+              },
+            },
+            { upsert: true },
+          )
+          .exec();
+      } catch (err) {
+        // Action déjà comptée dans ce regroupement (reprise) : rien à faire.
+        if (isDuplicateKeyError(err)) continue;
+        throw err;
+      }
+      if (result.upsertedCount > 0) created += 1;
+      if (result.upsertedCount > 0 || result.modifiedCount > 0) {
         this.signals.changed(
           job.organizationId.toHexString(),
           userId.toHexString(),
@@ -422,6 +561,16 @@ export class NotificationCenterService {
             .lean<{ name: string }>()
             .exec(),
         ]);
+        // 1-19A : recevoir la notification (`sales.notifications`) ne donne
+        // pas accès aux chiffres : quantité et montants exigent
+        // `sales.view_all`, comme la liste des ventes.
+        const figures = hasPermission(context, 'sales.view_all')
+          ? {
+              quantity: sale.quantity,
+              salePrice: sale.salePrice,
+              total: sale.salePrice * sale.quantity,
+            }
+          : {};
         return {
           kind: 'sale',
           cancelled: false,
@@ -430,13 +579,15 @@ export class NotificationCenterService {
             sale.lastKnownProductName ??
             sale.productName ??
             null,
-          quantity: sale.quantity,
-          salePrice: sale.salePrice,
-          total: sale.salePrice * sale.quantity,
+          ...figures,
           sellerName: seller?.name ?? null,
           occurredAt: sale.occurredAt ?? sale.createdAt,
         };
       }
+      case PushCategory.MEMBER_JOINED:
+        return this.memberJoinedDetails(n, organizationId);
+      case PushCategory.MEMBER_ACTIVITY:
+        return this.activityDetails(n, organizationId);
       case PushCategory.SUBSCRIPTION_ENDING:
         return {
           kind: 'subscription-ending',
@@ -464,6 +615,129 @@ export class NotificationCenterService {
       default:
         throw this.notFound();
     }
+  }
+
+  /** 1-19A : nouveau membre (nom figé ; rôle ACTUEL s'il est encore actif). */
+  private async memberJoinedDetails(
+    n: NotificationRecord,
+    organizationId: Types.ObjectId,
+  ) {
+    const membership = n.actorId
+      ? await this.membershipModel
+          .findOne({
+            organizationId,
+            userId: n.actorId,
+            status: MembershipStatus.ACTIVE,
+          })
+          .select({ role: 1 })
+          .lean<{ role: OrganizationRole }>()
+          .exec()
+      : null;
+    return {
+      kind: 'member-joined',
+      memberName: n.actorName ?? null,
+      role: membership?.role ?? null,
+      active: Boolean(membership),
+      occurredAt: n.eventAt,
+    };
+  }
+
+  /**
+   * 1-19A : activité d'un membre (propriétaire seul). Noms FIGÉS ; un lien
+   * n'est proposé que si la cible existe encore dans CETTE organisation
+   * (jamais de lien cassé après suppression définitive). La page cible
+   * applique ensuite ses propres contrôles d'accès.
+   */
+  private async activityDetails(
+    n: NotificationRecord,
+    organizationId: Types.ObjectId,
+  ) {
+    const entity = n.activityEntity ?? null;
+    const action = n.activityAction ?? null;
+    const all = n.activityTargets ?? [];
+    const targets = all.slice(0, ACTIVITY_TARGETS_DETAIL_MAX);
+    const live = await this.liveTargets(entity, targets, organizationId);
+    const targetLink = (id: string | null): string | null => {
+      const state = id ? live.get(id) : undefined;
+      if (!id || !state || action === MemberActivityAction.PURGED) return null;
+      switch (entity) {
+        case MemberActivityEntity.PRODUCT:
+          return state.inTrash ? '/app/trash' : `/app/catalog/products/${id}`;
+        case MemberActivityEntity.SECTION:
+          return state.inTrash ? '/app/trash' : `/app/catalog/${id}`;
+        case MemberActivityEntity.SALE:
+          return '/app/sales';
+        default:
+          return null;
+      }
+    };
+    const tracked =
+      entity === MemberActivityEntity.PRODUCT ||
+      entity === MemberActivityEntity.SECTION ||
+      entity === MemberActivityEntity.SALE;
+    return {
+      kind: 'member-activity',
+      actorName: n.actorName ?? null,
+      entity,
+      action,
+      count: n.activityCount ?? 1,
+      occurredAt: n.eventAt,
+      totalTargets: all.length,
+      targets: targets.map((t) => ({
+        name: t.name,
+        link: targetLink(t.id),
+        inTrash: t.id ? (live.get(t.id)?.inTrash ?? false) : false,
+        removed: tracked && (!t.id || !live.has(t.id)),
+      })),
+      link:
+        entity === MemberActivityEntity.INVITATION
+          ? '/app/organization/invitations'
+          : entity === MemberActivityEntity.MEMBER
+            ? '/app/organization/members'
+            : entity === MemberActivityEntity.BRANDING
+              ? '/app/organization/branding'
+              : null,
+    };
+  }
+
+  /** Cibles encore présentes dans l'organisation (corbeille comprise). */
+  private async liveTargets(
+    entity: MemberActivityEntity | null,
+    targets: ReadonlyArray<{ id: string | null }>,
+    organizationId: Types.ObjectId,
+  ): Promise<Map<string, { inTrash: boolean }>> {
+    const live = new Map<string, { inTrash: boolean }>();
+    const ids = targets
+      .map((t) => t.id)
+      .filter((id): id is string => !!id && Types.ObjectId.isValid(id))
+      .map((id) => new Types.ObjectId(id));
+    if (ids.length === 0) return live;
+    type Row = { _id: Types.ObjectId; deletedAt?: Date | null };
+    const filter = { _id: { $in: ids }, organizationId };
+    let rows: Row[] = [];
+    if (entity === MemberActivityEntity.PRODUCT) {
+      rows = await this.productModel
+        .find(filter)
+        .select({ deletedAt: 1 })
+        .lean<Row[]>()
+        .exec();
+    } else if (entity === MemberActivityEntity.SECTION) {
+      rows = await this.sectionModel
+        .find(filter)
+        .select({ deletedAt: 1 })
+        .lean<Row[]>()
+        .exec();
+    } else if (entity === MemberActivityEntity.SALE) {
+      rows = await this.saleModel
+        .find(filter)
+        .select({ _id: 1 })
+        .lean<Row[]>()
+        .exec();
+    }
+    for (const row of rows) {
+      live.set(row._id.toHexString(), { inTrash: Boolean(row.deletedAt) });
+    }
+    return live;
   }
 
   private async reportDetails(

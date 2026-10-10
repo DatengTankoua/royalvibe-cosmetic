@@ -38,6 +38,9 @@ export class NotificationPreference {
       subscriptionEnding: { type: Boolean, required: true },
       paymentSucceeded: { type: Boolean, required: true },
       monthlyReport: { type: Boolean, required: true },
+      // 1-19A : absentes des documents existants → actives (lecture).
+      memberJoined: { type: Boolean, required: true, default: true },
+      memberActivity: { type: Boolean, required: true, default: true },
     },
     _id: false,
     required: true,

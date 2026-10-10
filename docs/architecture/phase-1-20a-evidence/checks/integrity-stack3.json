@@ -1,0 +1,59 @@
+{
+  "at": "2026-10-10T05:40:52.372Z",
+  "since": "2026-10-10T02:14:45.178Z",
+  "checks": {
+    "drain": {
+      "ok": true,
+      "jobs": 0,
+      "deliveriesDue": 0,
+      "deliveriesWaitingForGroupingWindow": 0,
+      "waitedS": 0
+    },
+    "stock": {
+      "ok": true,
+      "products": 7533,
+      "negative": 0,
+      "mismatched": 0,
+      "sample": []
+    },
+    "salesAudit": {
+      "ok": true,
+      "salesSince": 1629,
+      "soldAudits": 1800,
+      "cancelledAudits": 171,
+      "salesWithoutAudit": 0,
+      "orphanSold": 0,
+      "cancelledStillPresent": 0,
+      "crossOrganizationSales": 0
+    },
+    "notifications": {
+      "ok": true,
+      "notificationsSince": 3395,
+      "duplicateEventRecipient": 0,
+      "foreignRecipients": 0,
+      "saleJobs": 1800,
+      "saleJobsDispatched": 1629,
+      "saleJobsCancelled": 171,
+      "salesChecked": 1629,
+      "authorNotified": 0,
+      "wrongOrganization": 0,
+      "missingRecipients": 0,
+      "unexpectedRecipients": 0
+    },
+    "pushDeliveries": {
+      "ok": true,
+      "deliveries": 131,
+      "byStatus": {
+        "sent": 131
+      },
+      "duplicates": 0,
+      "foreignDevices": 0
+    }
+  },
+  "memberActivity": {
+    "jobs": 226,
+    "notifications": 55,
+    "note": "best effort après l’action (1-19A §3) : un arrêt du processus entre action et enregistrement perd la notification ; non vérifiable exactement par comptage."
+  },
+  "ok": true
+}

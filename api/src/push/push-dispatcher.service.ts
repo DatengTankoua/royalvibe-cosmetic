@@ -71,6 +71,12 @@ import {
   MonthlyReport,
   MonthlyReportDocument,
 } from '../notifications/schemas/monthly-report.schema';
+import {
+  MEMBER_ACTIVITY_ACTOR_NAME_MAX,
+  MEMBER_ACTIVITY_WINDOW_MS,
+  memberActivityGroupKey,
+  snapshotName,
+} from '../notifications/member-activity';
 
 /** Rappel d'échéance : à partir de 24 h avant l'échéance effective (UTC). */
 export const SUBSCRIPTION_REMINDER_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -93,6 +99,8 @@ export const PUSH_EVENT_MAX_AGE_MS: Readonly<
   [PushCategory.SALE_DIGEST]: 60 * 60 * 1000,
   [PushCategory.PAYMENT_SUCCEEDED]: 60 * 60 * 1000,
   [PushCategory.MONTHLY_REPORT]: 12 * 60 * 60 * 1000,
+  [PushCategory.MEMBER_JOINED]: 60 * 60 * 1000,
+  [PushCategory.MEMBER_ACTIVITY]: 60 * 60 * 1000,
   // Pertinent jusqu'à l'échéance visée elle-même.
   [PushCategory.SUBSCRIPTION_ENDING]: null,
 });
@@ -107,9 +115,31 @@ export const PUSH_RETRY_DELAYS_MS: readonly number[] = Object.freeze([
 ]);
 /** Verrou d'un envoi en cours (repris après expiration : crash). */
 export const PUSH_SEND_LOCK_MS = 60_000;
-/** Intervalle du traitement de fond (mono-instance). */
+/** Intervalle du traitement de fond quand rien n'est immédiatement traitable. */
 export const PUSH_POLL_INTERVAL_MS = 5_000;
+/**
+ * 1-20B — Pause entre deux passes quand du travail immédiatement traitable
+ * reste après une passe (lot plein) : la vidange continue sans l'attente de
+ * 5 s, en laissant respirer les requêtes HTTP.
+ */
+export const PUSH_BUSY_INTERVAL_MS = 100;
+/** 1-20B — Budget d'une passe : tours (lot de travaux + lot d'envois)… */
+export const PUSH_PASS_MAX_ROUNDS = 10;
+/** … et durée réelle, vérifiée entre deux tours. */
+export const PUSH_PASS_TIME_BUDGET_MS = 1_000;
+/** 1-20B — Part maximale d'une organisation dans un lot de travaux. */
+export const PUSH_JOBS_PER_ORGANIZATION = 10;
+/**
+ * 1-20B — Organisations réparties en parallèle dans un lot (borne fixe ;
+ * séquentiel au sein d'une organisation).
+ */
+export const PUSH_DISPATCH_LANES = 3;
+/** 1-20B — Main rendue à la boucle événementielle tous les N éléments. */
+const YIELD_EVERY = 10;
 const BATCH = 50;
+
+const yieldToEventLoop = (): Promise<void> =>
+  new Promise((resolve) => setImmediate(resolve));
 
 type JobRecord = PushJob & { _id: Types.ObjectId };
 type SubscriptionRecord = PushSubscriptionRecord & { _id: Types.ObjectId };
@@ -125,6 +155,10 @@ export interface PushRunSummary {
   retried: number;
   skipped: number;
   failed: number;
+  /** 1-20B : tours exécutés (lot de travaux + lot d'envois). */
+  rounds: number;
+  /** 1-20B : travail immédiatement traitable restant après la passe. */
+  backlog: boolean;
 }
 
 /**
@@ -140,6 +174,16 @@ export interface PushRunSummary {
  * 3. rattrapage des rappels encore pertinents (appareil ou préférence
  *    activés après le rappel) ;
  * 4. envois push.
+ * 1-20B : les étapes 2 et 4 forment un TOUR, répété dans la même passe tant
+ * qu'un lot est plein (budget borné) ; la passe suivante part après 100 ms
+ * s'il reste du travail immédiatement traitable, sinon après 5 s. Lots
+ * répartis entre organisations (`selectJobs`).
+ *
+ * MONO-INSTANCE : les travaux ne sont pas réservés (seule la clôture est
+ * conditionnelle) ; deux processus exécutant ce traitement pourraient
+ * répartir le même travail en parallèle. Les clés uniques (notification,
+ * livraison) empêchent les doublons, mais ce lot ne coordonne pas plusieurs
+ * instances.
  * `start()` n'est appelé QUE par le démarrage HTTP (`startNotifications`) :
  * charger `AppModule` ne démarre aucune boucle, aucun minuteur, aucun envoi.
  *
@@ -159,7 +203,15 @@ export class PushDispatcherService implements OnApplicationShutdown {
   private timer: NodeJS.Timeout | null = null;
   private running: Promise<unknown> | null = null;
   private stopped = true;
+  /** 1-20B : arrêt demandé, vérifié entre deux éléments d'une passe. */
+  private halting = false;
+  /** 1-20B : passes sérialisées (jamais deux passes superposées). */
+  private passChain: Promise<unknown> = Promise.resolve();
   private lastReminderScanAt: number | null = null;
+  /** 1-20B : budget de durée d'une passe (réglable par les tests). */
+  passTimeBudgetMs = PUSH_PASS_TIME_BUDGET_MS;
+  /** 1-20B : voies parallèles (organisations distinctes) d'un lot. */
+  dispatchLanes = PUSH_DISPATCH_LANES;
 
   constructor(
     @InjectModel(PushJob.name)
@@ -190,17 +242,30 @@ export class PushDispatcherService implements OnApplicationShutdown {
 
   // ─── Boucle (démarrage HTTP uniquement) ────────────────────────────────────
 
-  start(intervalMs: number = PUSH_POLL_INTERVAL_MS): void {
+  /**
+   * 1-20B : la passe suivante part après `busyIntervalMs` si du travail
+   * immédiatement traitable reste (lot plein), sinon après `intervalMs`.
+   * Une seule passe à la fois (`runOnce` sérialisé).
+   */
+  start(
+    intervalMs: number = PUSH_POLL_INTERVAL_MS,
+    busyIntervalMs: number = PUSH_BUSY_INTERVAL_MS,
+  ): void {
     if (!this.runtime.active || !this.stopped) return;
     this.stopped = false;
+    this.halting = false;
     const tick = () => {
       if (this.stopped) return;
+      let backlog = false;
       this.running = this.runOnce()
+        .then((summary) => {
+          backlog = summary.backlog;
+        })
         .catch(() => this.logger.warn('Passe de notifications interrompue.'))
         .finally(() => {
           this.running = null;
           if (this.stopped) return;
-          this.timer = setTimeout(tick, intervalMs);
+          this.timer = setTimeout(tick, backlog ? busyIntervalMs : intervalMs);
           this.timer.unref();
         });
     };
@@ -210,9 +275,12 @@ export class PushDispatcherService implements OnApplicationShutdown {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.halting = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     await this.running;
+    await this.passChain;
+    this.halting = false;
   }
 
   get started(): boolean {
@@ -225,7 +293,25 @@ export class PushDispatcherService implements OnApplicationShutdown {
 
   // ─── Passe ─────────────────────────────────────────────────────────────────
 
-  async runOnce(): Promise<PushRunSummary> {
+  /**
+   * Une passe. 1-20B : appels sérialisés (une passe démarrée pendant une
+   * autre attend sa fin : jamais deux passes superposées dans ce processus).
+   */
+  runOnce(): Promise<PushRunSummary> {
+    const pass = this.passChain.then(() => this.pass());
+    this.passChain = pass.catch(() => undefined);
+    return pass;
+  }
+
+  /**
+   * 1-20B — Tours enchaînés tant qu'un lot (travaux ou envois) est plein,
+   * dans un budget borné (`PUSH_PASS_MAX_ROUNDS`, `PUSH_PASS_TIME_BUDGET_MS`).
+   * Chaque tour répartit UN lot de travaux puis envoie UN lot de livraisons
+   * échues : la vidange des événements n'affame jamais les envois. Les
+   * livraisons différées (fenêtre de regroupement, reprises) ne sont jamais
+   * avancées : seules celles dont `nextAttemptAt` est échu sont envoyées.
+   */
+  private async pass(): Promise<PushRunSummary> {
     const summary: PushRunSummary = {
       reminders: 0,
       reports: 0,
@@ -236,6 +322,8 @@ export class PushDispatcherService implements OnApplicationShutdown {
       retried: 0,
       skipped: 0,
       failed: 0,
+      rounds: 0,
+      backlog: false,
     };
     if (!this.runtime.active) return summary;
     const now = this.clock().getTime();
@@ -248,9 +336,23 @@ export class PushDispatcherService implements OnApplicationShutdown {
       summary.reports = await this.scanMonthlyReports();
       this.lastReminderScanAt = now;
     }
-    await this.dispatchJobs(summary);
-    await this.catchUpReminders(summary);
-    await this.sendDeliveries(summary);
+    const startedAt = Date.now();
+    for (;;) {
+      const moreJobs = await this.dispatchJobs(summary);
+      if (summary.rounds === 0) await this.catchUpReminders(summary);
+      const moreDeliveries = await this.sendDeliveries(summary);
+      summary.rounds += 1;
+      summary.backlog = moreJobs || moreDeliveries;
+      if (
+        !summary.backlog ||
+        this.halting ||
+        summary.rounds >= PUSH_PASS_MAX_ROUNDS ||
+        Date.now() - startedAt >= this.passTimeBudgetMs
+      ) {
+        break;
+      }
+      await yieldToEventLoop();
+    }
     return summary;
   }
 
@@ -328,6 +430,7 @@ export class PushDispatcherService implements OnApplicationShutdown {
     coverageEndsAt?: Date;
     periodKind?: SubscriptionPeriodKind;
     reportId?: Types.ObjectId;
+    actorId?: Types.ObjectId;
     status?: PushJobStatus;
   }): Promise<number> {
     const result = await this.jobModel
@@ -340,6 +443,8 @@ export class PushDispatcherService implements OnApplicationShutdown {
             productId: null,
             paymentId: null,
             saleId: null,
+            actorId: job.actorId ?? null,
+            activity: null,
             reportId: job.reportId ?? null,
             coverageEndsAt: job.coverageEndsAt ?? null,
             periodKind: job.periodKind ?? null,
@@ -379,48 +484,145 @@ export class PushDispatcherService implements OnApplicationShutdown {
 
   // ─── Répartition ───────────────────────────────────────────────────────────
 
-  private async dispatchJobs(summary: PushRunSummary): Promise<void> {
-    const jobs = await this.jobModel
+  /**
+   * 1-20B — Lot de travaux en attente, réparti entre organisations : au plus
+   * `PUSH_JOBS_PER_ORGANIZATION` par organisation, complété par les plus
+   * anciens travaux des AUTRES organisations, puis (s'il reste de la place)
+   * par l'excédent des organisations plafonnées. Une organisation très
+   * active ne bloque donc plus une organisation peu active derrière son
+   * flux, sans réduire le débit quand elle est seule. Ordre `eventAt`
+   * conservé dans chaque organisation (regroupements inchangés).
+   */
+  private async selectJobs(): Promise<{ jobs: JobRecord[]; more: boolean }> {
+    const head = await this.jobModel
       .find({ status: PushJobStatus.PENDING })
       .sort({ eventAt: 1 })
       .limit(BATCH)
       .lean<JobRecord[]>()
       .exec();
-    for (const job of jobs) {
-      const now = this.clock();
-      const irrelevance = await this.irrelevance(job, now);
-      if (irrelevance) {
-        await this.closeJob(job._id, PushJobStatus.CANCELLED, irrelevance, 0);
-        summary.jobsCancelled += 1;
-        continue;
+    const perOrganization = new Map<string, number>();
+    const selected: JobRecord[] = [];
+    const overflow: JobRecord[] = [];
+    const share = (job: JobRecord) => {
+      const key = job.organizationId.toHexString();
+      const taken = perOrganization.get(key) ?? 0;
+      if (taken >= PUSH_JOBS_PER_ORGANIZATION) return false;
+      perOrganization.set(key, taken + 1);
+      selected.push(job);
+      return true;
+    };
+    for (const job of head) if (!share(job)) overflow.push(job);
+    if (overflow.length > 0) {
+      const capped = [
+        ...new Set(overflow.map((j) => j.organizationId.toHexString())),
+      ].map((id) => new Types.ObjectId(id));
+      const others = await this.jobModel
+        .find({
+          status: PushJobStatus.PENDING,
+          organizationId: { $nin: capped },
+          _id: { $nin: selected.map((j) => j._id) },
+        })
+        .sort({ eventAt: 1 })
+        .limit(BATCH - selected.length)
+        .lean<JobRecord[]>()
+        .exec();
+      for (const job of others) share(job);
+      for (const job of overflow) {
+        if (selected.length >= BATCH) break;
+        selected.push(job);
       }
-      const members = await this.eligibleMembers(job);
-      // Centre : indépendant du push et de ses délais.
-      summary.notifications += await this.center.createFromJob(
-        job,
-        await this.center.inAppEnabled(
-          job.organizationId,
-          members,
-          job.category,
-        ),
-      );
-      let deliveries = 0;
-      let outcome: string | null = null;
-      if (!this.runtime.pushActive) {
-        outcome = 'push-disabled';
-      } else if (this.pushExpired(job, now)) {
-        outcome = 'push-expired';
-      } else {
-        deliveries = await this.planDeliveries(job, members, now);
-      }
-      await this.closeJob(
-        job._id,
-        PushJobStatus.DISPATCHED,
-        outcome,
-        deliveries,
-      );
-      summary.jobsDispatched += 1;
     }
+    selected.sort((a, b) => a.eventAt.getTime() - b.eventAt.getTime());
+    return { jobs: selected, more: head.length === BATCH };
+  }
+
+  /**
+   * Un lot réparti ; `true` s'il reste des travaux en attente.
+   *
+   * 1-20B : les travaux d'une MÊME organisation sont traités l'un après
+   * l'autre, dans l'ordre `eventAt` (regroupements, récapitulatifs et clés
+   * d'unicité sont propres à l'organisation) ; au plus `dispatchLanes`
+   * organisations sont traitées en parallèle. La passe ne se termine
+   * qu'une fois toutes les voies arrêtées (jamais de travail en arrière-plan
+   * pendant la passe suivante) ; la première erreur est relancée ensuite.
+   */
+  private async dispatchJobs(summary: PushRunSummary): Promise<boolean> {
+    const { jobs, more } = await this.selectJobs();
+    const groups = new Map<string, JobRecord[]>();
+    for (const job of jobs) {
+      const key = job.organizationId.toHexString();
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(job);
+    }
+    const queue = [...groups.values()];
+    const lane = async () => {
+      let handled = 0;
+      for (let group = queue.shift(); group; group = queue.shift()) {
+        for (const job of group) {
+          if (this.halting) return;
+          if (handled > 0 && handled % YIELD_EVERY === 0) {
+            await yieldToEventLoop();
+          }
+          handled += 1;
+          await this.dispatchOne(job, summary);
+        }
+      }
+    };
+    const lanes = Math.max(1, Math.min(this.dispatchLanes, queue.length));
+    const settled = await Promise.allSettled(
+      Array.from({ length: lanes }, () => lane()),
+    );
+    const failure = settled.find(
+      (r): r is PromiseRejectedResult => r.status === 'rejected',
+    );
+    if (failure) throw failure.reason;
+    return more || this.halting;
+  }
+
+  /** Répartition d'UN travail : centre, livraisons, clôture conditionnelle. */
+  private async dispatchOne(
+    job: JobRecord,
+    summary: PushRunSummary,
+  ): Promise<void> {
+    const now = this.clock();
+    const irrelevance = await this.irrelevance(job, now);
+    if (irrelevance) {
+      await this.closeJob(job._id, PushJobStatus.CANCELLED, irrelevance, 0);
+      summary.jobsCancelled += 1;
+      return;
+    }
+    const members = await this.eligibleMembers(job);
+    // Centre : indépendant du push et de ses délais.
+    const recipients = await this.center.inAppEnabled(
+      job.organizationId,
+      members,
+      job.category,
+    );
+    summary.notifications +=
+      job.category === PushCategory.MEMBER_ACTIVITY
+        ? await this.center.createActivityFromJob(
+            job,
+            recipients,
+            await this.actorName(job),
+          )
+        : await this.center.createFromJob(
+            job,
+            recipients,
+            job.category === PushCategory.MEMBER_JOINED
+              ? await this.actorName(job)
+              : null,
+          );
+    let deliveries = 0;
+    let outcome: string | null = null;
+    if (!this.runtime.pushActive) {
+      outcome = 'push-disabled';
+    } else if (this.pushExpired(job, now)) {
+      outcome = 'push-expired';
+    } else {
+      deliveries = await this.planDeliveries(job, members, now);
+    }
+    await this.closeJob(job._id, PushJobStatus.DISPATCHED, outcome, deliveries);
+    summary.jobsDispatched += 1;
   }
 
   /** Livraisons d'un événement (regroupées pour les ventes). */
@@ -435,6 +637,9 @@ export class PushDispatcherService implements OnApplicationShutdown {
     let nextAttemptAt = now;
     if (job.category === PushCategory.SALE_CREATED) {
       target = await this.saleDigest(job);
+      nextAttemptAt = new Date(target.eventAt.getTime());
+    } else if (job.category === PushCategory.MEMBER_ACTIVITY) {
+      target = await this.activityGroup(job);
       nextAttemptAt = new Date(target.eventAt.getTime());
     }
     for (const subscription of devices) {
@@ -468,6 +673,51 @@ export class PushDispatcherService implements OnApplicationShutdown {
       .exec();
     if (!digest) throw new Error('Sale digest vanished');
     return digest;
+  }
+
+  /**
+   * 1-19A — Événement push de regroupement des activités : même auteur,
+   * action et type de cible sur une fenêtre FIXE d'une minute ; une seule
+   * livraison par appareil, envoyée en fin de fenêtre (une action groupée
+   * de la corbeille ne produit pas un push par produit).
+   */
+  private async activityGroup(job: JobRecord): Promise<JobRecord> {
+    if (!job.activity || !job.actorId) return job;
+    const eventKey = memberActivityGroupKey({
+      organizationId: job.organizationId.toHexString(),
+      actorId: job.actorId.toHexString(),
+      entity: job.activity.entity,
+      action: job.activity.action,
+      eventAt: job.eventAt,
+    });
+    const windowEnd =
+      Number(eventKey.slice(eventKey.lastIndexOf(':') + 1)) +
+      MEMBER_ACTIVITY_WINDOW_MS;
+    await this.recordJob({
+      eventKey,
+      category: PushCategory.MEMBER_ACTIVITY,
+      organizationId: job.organizationId,
+      actorId: job.actorId,
+      eventAt: new Date(windowEnd),
+      status: PushJobStatus.DISPATCHED,
+    });
+    const group = await this.jobModel
+      .findOne({ eventKey })
+      .lean<JobRecord>()
+      .exec();
+    if (!group) throw new Error('Activity group vanished');
+    return group;
+  }
+
+  /** 1-19A : nom de l'auteur, figé dans la notification du centre. */
+  private async actorName(job: JobRecord): Promise<string | null> {
+    if (!job.actorId) return null;
+    const user = await this.userModel
+      .findById(job.actorId)
+      .select({ name: 1 })
+      .lean<{ name?: string }>()
+      .exec();
+    return snapshotName(user?.name, MEMBER_ACTIVITY_ACTOR_NAME_MAX);
   }
 
   private async upsertDelivery(
@@ -516,8 +766,28 @@ export class PushDispatcherService implements OnApplicationShutdown {
     return maxAge !== null && now.getTime() - job.eventAt.getTime() > maxAge;
   }
 
-  /** Membres actifs autorisés à cet instant (règle unique). */
+  /**
+   * 1-19A : auteur de l'événement, jamais destinataire. Ancien travail de
+   * vente sans `actorId` : vendeur relu sur la vente.
+   */
+  private async eventActor(job: JobRecord): Promise<Types.ObjectId | null> {
+    if (job.actorId) return job.actorId;
+    if (job.category !== PushCategory.SALE_CREATED || !job.saleId) return null;
+    const sale = await this.saleModel
+      .findOne({ _id: job.saleId, organizationId: job.organizationId })
+      .select({ sellerId: 1 })
+      .lean<{ sellerId: Types.ObjectId }>()
+      .exec();
+    return sale?.sellerId ?? null;
+  }
+
+  /**
+   * Membres actifs autorisés à cet instant (règle unique), hors auteur de
+   * l'événement (1-19A), sans doublon (une membership par utilisateur et
+   * organisation, index unique).
+   */
   private async eligibleMembers(job: JobRecord): Promise<Types.ObjectId[]> {
+    const actor = await this.eventActor(job);
     const memberships = await this.membershipModel
       .find({
         organizationId: job.organizationId,
@@ -532,11 +802,13 @@ export class PushDispatcherService implements OnApplicationShutdown {
         }>
       >()
       .exec();
-    const allowed = memberships.filter((m) =>
-      canAccessCategory(job.category, {
-        role: m.role,
-        permissions: m.permissions ?? [],
-      }),
+    const allowed = memberships.filter(
+      (m) =>
+        !(actor && m.userId.equals(actor)) &&
+        canAccessCategory(job.category, {
+          role: m.role,
+          permissions: m.permissions ?? [],
+        }),
     );
     if (allowed.length === 0) return [];
     const existing = await this.userModel
@@ -608,8 +880,9 @@ export class PushDispatcherService implements OnApplicationShutdown {
 
   // ─── Envois ────────────────────────────────────────────────────────────────
 
-  private async sendDeliveries(summary: PushRunSummary): Promise<void> {
-    if (!this.runtime.pushActive) return;
+  /** Un lot de livraisons échues ; `true` si le lot était plein. */
+  private async sendDeliveries(summary: PushRunSummary): Promise<boolean> {
+    if (!this.runtime.pushActive) return false;
     const now = this.clock();
     const due = await this.deliveryModel
       .find({
@@ -624,9 +897,12 @@ export class PushDispatcherService implements OnApplicationShutdown {
       .select({ _id: 1 })
       .lean<Array<{ _id: Types.ObjectId }>>()
       .exec();
-    for (const { _id } of due) {
+    for (const [index, { _id }] of due.entries()) {
+      if (this.halting) return true;
+      if (index > 0 && index % YIELD_EVERY === 0) await yieldToEventLoop();
       await this.sendOne(_id, summary);
     }
+    return due.length === BATCH;
   }
 
   private async sendOne(
@@ -700,6 +976,7 @@ export class PushDispatcherService implements OnApplicationShutdown {
         saleId: job.saleId?.toHexString() ?? null,
         reportId: job.reportId?.toHexString() ?? null,
         periodKind: job.periodKind,
+        eventKey: job.eventKey,
       },
       {
         userId: subscription.userId.toHexString(),
@@ -881,7 +1158,10 @@ export class PushDispatcherService implements OnApplicationShutdown {
           .exec();
         return sale ? null : 'sale-cancelled';
       }
+      // 1-19A : adhésion validée et action réussie sont des faits accomplis.
       case PushCategory.SALE_DIGEST:
+      case PushCategory.MEMBER_JOINED:
+      case PushCategory.MEMBER_ACTIVITY:
         return null;
       case PushCategory.PAYMENT_SUCCEEDED: {
         const payment = await this.paymentModel

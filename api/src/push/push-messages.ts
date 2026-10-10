@@ -69,6 +69,10 @@ export function notificationBody(
       return 'Votre paiement a été confirmé.';
     case PushCategory.MONTHLY_REPORT:
       return 'Votre bilan mensuel est disponible.';
+    case PushCategory.MEMBER_JOINED:
+      return 'Un nouveau membre a rejoint votre entreprise.';
+    case PushCategory.MEMBER_ACTIVITY:
+      return 'Un collaborateur a modifié les données de votre entreprise.';
   }
 }
 
@@ -93,6 +97,10 @@ function notificationBodyEn(
       return 'Your payment has been confirmed.';
     case PushCategory.MONTHLY_REPORT:
       return 'Your monthly summary is available.';
+    case PushCategory.MEMBER_JOINED:
+      return 'A new member joined your business.';
+    case PushCategory.MEMBER_ACTIVITY:
+      return 'A team member changed your business data.';
   }
 }
 
@@ -109,7 +117,10 @@ export function pushUrl(subject: PushMessageSubject): string {
     case PushCategory.PAYMENT_SUCCEEDED:
       return '/app/organization/subscription';
     case PushCategory.MONTHLY_REPORT:
+    case PushCategory.MEMBER_ACTIVITY:
       return '/app/notifications';
+    case PushCategory.MEMBER_JOINED:
+      return '/app/organization/members';
   }
 }
 
@@ -131,6 +142,10 @@ function pushTag(subject: PushMessageSubject): string {
       return `payment-succeeded:${subject.paymentId}`;
     case PushCategory.MONTHLY_REPORT:
       return `monthly-report:${subject.reportId}`;
+    // 1-19A : clé de l'événement (adhésion) ou du regroupement (activité).
+    case PushCategory.MEMBER_JOINED:
+    case PushCategory.MEMBER_ACTIVITY:
+      return subject.eventKey ?? subject.category;
   }
 }
 

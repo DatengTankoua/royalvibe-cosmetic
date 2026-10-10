@@ -706,8 +706,10 @@ describe('Centre de notifications (e2e 1-16A.1)', () => {
   it('6. droits revalidés à la lecture : permission retirée, transfert de propriété, préférences du centre', async () => {
     const a = await registerOwner('rights');
     const admin = await seedMember(a.orgId, OrganizationRole.ADMIN);
+    // 1-19A : l'auteur d'une vente n'est jamais notifié ; un vendeur vend.
+    const seller = await seedMember(a.orgId, OrganizationRole.SELLER);
     const productId = await seedProduct(a.orgId, 100);
-    expect((await sell(a.token, productId, 80)).status).toBe(201);
+    expect((await sell(seller.token, productId, 80)).status).toBe(201);
     await dispatcher.runOnce();
     const adminItems = (await list(admin.token)).items;
     expect(adminItems.map((n) => n.category).sort()).toEqual(
@@ -751,7 +753,7 @@ describe('Centre de notifications (e2e 1-16A.1)', () => {
     expect(prefs.status).toBe(200);
     expect(prefs.body.categories.saleCreated).toBe(false);
     expect(await ofCategory(a.token, PushCategory.SALE_CREATED)).toEqual([]);
-    expect((await sell(a.token, productId, 1)).status).toBe(201);
+    expect((await sell(seller.token, productId, 1)).status).toBe(201);
     await dispatcher.runOnce();
     expect(
       await notificationModel.countDocuments({
@@ -781,6 +783,8 @@ describe('Centre de notifications (e2e 1-16A.1)', () => {
   it('7. push actif : chaque vente dans le centre, push regroupés par fenêtre fixe d’une minute', async () => {
     runtime.activate(config, transport);
     const a = await registerOwner('digest');
+    // 1-19A : ventes d'un vendeur (l'auteur n'est jamais destinataire).
+    const seller = await seedMember(a.orgId, OrganizationRole.SELLER);
     const device = {
       endpoint: `https://fcm.googleapis.com/fcm/send/digest-${randomUUID()}`,
       keys: browserKeys(),
@@ -798,7 +802,7 @@ describe('Centre de notifications (e2e 1-16A.1)', () => {
     setNow(new Date(windowStart + 5_000));
     const productId = await seedProduct(a.orgId, 1000);
     for (let i = 0; i < 3; i += 1) {
-      expect((await sell(a.token, productId, 1)).status).toBe(201);
+      expect((await sell(seller.token, productId, 1)).status).toBe(201);
       advance(1_000);
     }
     await dispatcher.runOnce();
@@ -817,7 +821,7 @@ describe('Centre de notifications (e2e 1-16A.1)', () => {
     });
     // Fenêtre suivante : un nouveau regroupement.
     advance(5_000);
-    expect((await sell(a.token, productId, 1)).status).toBe(201);
+    expect((await sell(seller.token, productId, 1)).status).toBe(201);
     await dispatcher.runOnce();
     advance(SALE_DIGEST_WINDOW_MS);
     await dispatcher.runOnce();

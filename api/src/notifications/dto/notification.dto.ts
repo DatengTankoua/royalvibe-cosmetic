@@ -67,4 +67,12 @@ export class NotificationPreferencesDto {
   @IsOptional()
   @IsBoolean()
   monthlyReport?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  memberJoined?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  memberActivity?: boolean;
 }

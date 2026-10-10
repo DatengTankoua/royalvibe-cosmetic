@@ -60,6 +60,14 @@ export class PushPreferencesDto {
   @IsOptional()
   @IsBoolean()
   monthlyReport?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  memberJoined?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  memberActivity?: boolean;
 }
 
 export class RegisterPushSubscriptionDto {

@@ -19,9 +19,16 @@ export const DELEGABLE_PERMISSIONS = [
   "members.manage",
   // 1-16C.1 : accordée par défaut au propriétaire et à l'administrateur.
   "support.contact",
+  // 1-19A : recevoir les notifications de ventes (distincte de les consulter).
+  "sales.notifications",
 ] as const;
 
 export type DelegablePermission = (typeof DELEGABLE_PERMISSIONS)[number];
+
+// 1-19A — version du catalogue ci-dessus (miroir de
+// CURRENT_PERMISSION_CATALOG côté API), déclarée à chaque modification de
+// membre : le serveur conserve les permissions que ce web ne connaît pas.
+export const PERMISSION_CATALOG = 2;
 
 // 1-12H — miroir de STANDARD_MEMBER_PERMISSIONS (backend) : droits de tout
 // membre actif, ajoutés par le calcul serveur, jamais proposés ni retirables

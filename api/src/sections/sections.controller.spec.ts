@@ -3,6 +3,7 @@ import { SectionsController } from './sections.controller';
 import { SectionsService } from './sections.service';
 import { ResolvedOrganizationContext } from '../organizations/organizations.service';
 import { OrganizationRole } from '../organizations/permissions';
+import { PushOutboxService } from '../push/push-outbox.service';
 
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const SECTION_ID = '112233445566778899001122';
@@ -45,11 +46,18 @@ describe('SectionsController — transmission du tenant (1-4A)', () => {
   beforeEach(async () => {
     for (const key of Object.keys(serviceStub)) {
       serviceStub[key].mockReset();
-      serviceStub[key].mockResolvedValue(undefined);
+      // 1-19A : section renvoyée (nom figé pour l'activité du membre).
+      serviceStub[key].mockResolvedValue({ _id: 'section-1', name: 'Rayon' });
     }
     const module: TestingModule = await Test.createTestingModule({
       controllers: [SectionsController],
-      providers: [{ provide: SectionsService, useValue: serviceStub }],
+      providers: [
+        { provide: SectionsService, useValue: serviceStub },
+        {
+          provide: PushOutboxService,
+          useValue: { memberActivity: jest.fn().mockResolvedValue(undefined) },
+        },
+      ],
     }).compile();
     controller = module.get(SectionsController);
   });

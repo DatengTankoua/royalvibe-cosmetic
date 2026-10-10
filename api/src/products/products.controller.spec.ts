@@ -8,6 +8,7 @@ import { StorageQuotaService } from '../storage-quota/storage-quota.service';
 import { ResolvedOrganizationContext } from '../organizations/organizations.service';
 import { OrganizationRole } from '../organizations/permissions';
 import type { User } from '../users/schemas/user.schema';
+import { PushOutboxService } from '../push/push-outbox.service';
 
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const PRODUCT_ID = '223344556677889900112233';
@@ -85,6 +86,9 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
   // 1-17B : la réservation et la comptabilisation sont couvertes par
   // `storage-quota.service.spec` ; ici, `store` envoie via le stockage
   // simulé (même préfixe) et `discard` est observé.
+  // 1-19A : activité des membres (outbox), espionnée.
+  const outboxStub = { memberActivity: jest.fn() };
+
   const quotaStub = {
     store: jest.fn(
       (input: {
@@ -104,7 +108,12 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
   beforeEach(async () => {
     for (const key of Object.keys(serviceStub)) {
       serviceStub[key].mockReset();
-      serviceStub[key].mockResolvedValue(undefined);
+      // 1-19A : vue produit (et vue métriques) renvoyées par le service.
+      serviceStub[key].mockResolvedValue({
+        _id: 'product-1',
+        name: 'Savon',
+        product: { _id: 'product-1', name: 'Savon' },
+      });
     }
     // `findOne` retourne toujours un `ProductDetail` réaliste (1-7B : le
     // contrôleur lit `result.auditLogs` pour appliquer le gate `audit.read`).
@@ -116,12 +125,14 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     s3Stub.uploadValidatedImage.mockReset().mockResolvedValue(STORED);
     s3Stub.deleteStoredObject.mockReset().mockResolvedValue('deleted');
     quotaStub.store.mockClear();
+    outboxStub.memberActivity.mockReset().mockResolvedValue(undefined);
     quotaStub.discard.mockClear();
     const module: TestingModule = await Test.createTestingModule({
       controllers: [ProductsController],
       providers: [
         { provide: ProductsService, useValue: serviceStub },
         { provide: StorageQuotaService, useValue: quotaStub },
+        { provide: PushOutboxService, useValue: outboxStub },
       ],
     }).compile();
     controller = module.get(ProductsController);
@@ -157,6 +168,17 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       FULL,
     );
     expect(s3Stub.deleteStoredObject).not.toHaveBeenCalled();
+    // 1-19A : création réussie annoncée APRÈS le service (nom figé).
+    expect(outboxStub.memberActivity).toHaveBeenCalledWith(ctxA, {
+      entity: 'product',
+      action: 'created',
+      targetId: 'product-1',
+      targetName: 'Savon',
+      uniqueKey: undefined,
+    });
+    expect(
+      outboxStub.memberActivity.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(serviceStub.create.mock.invocationCallOrder[0]);
   });
 
   it('create : photo invalide (texte déguisé en PNG) → 400 avant tout envoi ni écriture', async () => {
@@ -196,6 +218,8 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
     // Vérification de référence, suppression et libération : `discard`.
     expect(quotaStub.discard).toHaveBeenCalledTimes(1);
     expect(quotaStub.discard).toHaveBeenCalledWith(STORED);
+    // 1-19A : aucune activité annoncée pour une création échouée.
+    expect(outboxStub.memberActivity).not.toHaveBeenCalled();
   });
 
   it('1-17B create : réservation refusée (quota) → aucune écriture, erreur repropagée', async () => {

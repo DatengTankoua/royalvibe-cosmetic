@@ -13,6 +13,7 @@ import { S3Module } from '../s3/s3.module';
 import { StorageQuotaModule } from '../storage-quota/storage-quota.module';
 import { EventsModule } from '../events/events.module';
 import { AuditModule } from '../audit/audit.module';
+import { PushModule } from '../push/push.module';
 import { Section, SectionSchema } from '../sections/schemas/section.schema';
 
 @Module({
@@ -31,6 +32,8 @@ import { Section, SectionSchema } from '../sections/schemas/section.schema';
     StorageQuotaModule,
     EventsModule,
     AuditModule,
+    // 1-19A : activité des membres annoncée au propriétaire.
+    PushModule,
   ],
   providers: [ProductsService],
   controllers: [ProductsController],
