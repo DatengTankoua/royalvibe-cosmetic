@@ -1,0 +1,56 @@
+{
+  "at": "2026-10-10T20:18:37.660Z",
+  "indexes": [
+    "_id_",
+    "organizationId_1_productId_1_createdAt_-1"
+  ],
+  "cases": {
+    "legacyAll": {
+      "index": "organizationId_1_productId_1_createdAt_-1",
+      "inMemorySort": true,
+      "docsExamined": 8000,
+      "keysExamined": 8000,
+      "returned": 8000,
+      "ms": 37
+    },
+    "legacyOwn": {
+      "index": "organizationId_1_productId_1_createdAt_-1",
+      "inMemorySort": true,
+      "docsExamined": 8000,
+      "keysExamined": 8000,
+      "returned": 572,
+      "ms": 19
+    },
+    "pagedFirst": {
+      "index": "organizationId_1_productId_1_createdAt_-1",
+      "inMemorySort": true,
+      "docsExamined": 8000,
+      "keysExamined": 8000,
+      "returned": 21,
+      "ms": 25
+    },
+    "pagedOwnFirst": {
+      "index": "organizationId_1_productId_1_createdAt_-1",
+      "inMemorySort": true,
+      "docsExamined": 8000,
+      "keysExamined": 8000,
+      "returned": 21,
+      "ms": 17
+    },
+    "pagedFar": {
+      "index": "organizationId_1_productId_1_createdAt_-1",
+      "inMemorySort": true,
+      "docsExamined": 7000,
+      "keysExamined": 7872,
+      "returned": 21,
+      "ms": 74
+    },
+    "count": {
+      "ms": 5.5
+    }
+  },
+  "organization": {
+    "key": "conc1",
+    "sales": 8000
+  }
+}

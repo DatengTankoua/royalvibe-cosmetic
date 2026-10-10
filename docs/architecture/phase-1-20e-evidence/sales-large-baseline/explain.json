@@ -1,0 +1,56 @@
+{
+  "at": "2026-10-10T20:34:33.782Z",
+  "indexes": [
+    "_id_",
+    "organizationId_1_productId_1_createdAt_-1"
+  ],
+  "cases": {
+    "legacyAll": {
+      "index": "organizationId_1_productId_1_createdAt_-1",
+      "inMemorySort": true,
+      "docsExamined": 30000,
+      "keysExamined": 30000,
+      "returned": 30000,
+      "ms": 247
+    },
+    "legacyOwn": {
+      "index": "organizationId_1_productId_1_createdAt_-1",
+      "inMemorySort": true,
+      "docsExamined": 30000,
+      "keysExamined": 30000,
+      "returned": 1364,
+      "ms": 134
+    },
+    "pagedFirst": {
+      "index": "organizationId_1_productId_1_createdAt_-1",
+      "inMemorySort": true,
+      "docsExamined": 30000,
+      "keysExamined": 30000,
+      "returned": 21,
+      "ms": 137
+    },
+    "pagedOwnFirst": {
+      "index": "organizationId_1_productId_1_createdAt_-1",
+      "inMemorySort": true,
+      "docsExamined": 30000,
+      "keysExamined": 30000,
+      "returned": 21,
+      "ms": 85
+    },
+    "pagedFar": {
+      "index": "organizationId_1_productId_1_createdAt_-1",
+      "inMemorySort": true,
+      "docsExamined": 29000,
+      "keysExamined": 29746,
+      "returned": 21,
+      "ms": 277
+    },
+    "count": {
+      "ms": 15.4
+    }
+  },
+  "organization": {
+    "key": "conc1",
+    "sales": 30000
+  }
+}

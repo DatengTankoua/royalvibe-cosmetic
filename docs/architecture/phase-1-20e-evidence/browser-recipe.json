@@ -1,0 +1,116 @@
+{
+  "at": "2026-10-10T20:14:01.842Z",
+  "passed": 13,
+  "total": 13,
+  "results": [
+    {
+      "id": "E1",
+      "label": "propriétaire : total serveur et page 1 (20 ventes)",
+      "ok": true,
+      "detail": {
+        "s1": "47 ventes · page 1",
+        "ownerTotal": 47
+      }
+    },
+    {
+      "id": "E1b",
+      "label": "chargement : une seule requête paginée, jamais `GET /sales`",
+      "ok": true,
+      "detail": [
+        {
+          "p": "/sales/history",
+          "bytes": 8292,
+          "n": 20
+        }
+      ]
+    },
+    {
+      "id": "E2",
+      "label": "page 2 : 20 autres ventes (aucune de la page 1), même total",
+      "ok": true,
+      "detail": {
+        "s2": "47 ventes · page 2",
+        "page1": 20,
+        "page2": 20,
+        "overlap": 0
+      }
+    },
+    {
+      "id": "E3",
+      "label": "vente d’une autre session : total à jour sans rechargement, page 2 stable, avis",
+      "ok": true,
+      "detail": {
+        "s2b": "48 ventes · page 2",
+        "notice": true
+      }
+    },
+    {
+      "id": "E4",
+      "label": "retour au début : la nouvelle vente est en tête",
+      "ok": true,
+      "detail": {
+        "s3": "48 ventes · page 1",
+        "sellerName": "Vendeur Actif"
+      }
+    },
+    {
+      "id": "E5",
+      "label": "dernière page : nombre de pages et reste exacts, « Plus anciennes » désactivé",
+      "ok": true,
+      "detail": {
+        "pages": 3,
+        "expectedPages": 3,
+        "lastCount": 8
+      }
+    },
+    {
+      "id": "E6",
+      "label": "page précédente : curseur conservé",
+      "ok": true
+    },
+    {
+      "id": "E7",
+      "label": "bureau : aucun défilement horizontal",
+      "ok": true
+    },
+    {
+      "id": "E8",
+      "label": "vendeur restreint (EN) : total de SES ventes seulement",
+      "ok": true,
+      "detail": {
+        "m1": "23 sales · page 1",
+        "sellerTotal": 23
+      }
+    },
+    {
+      "id": "E9",
+      "label": "vendeur restreint : chaque vente affichée est la sienne",
+      "ok": true,
+      "detail": {
+        "n": 20
+      }
+    },
+    {
+      "id": "E10",
+      "label": "annulation par une autre session : total du vendeur à jour",
+      "ok": true,
+      "detail": {
+        "status": 204,
+        "m2": "22 sales · page 1"
+      }
+    },
+    {
+      "id": "E11",
+      "label": "mobile : navigation (EN « Older »)",
+      "ok": true,
+      "detail": {
+        "m3": "22 sales · page 2"
+      }
+    },
+    {
+      "id": "E12",
+      "label": "mobile 390 px : aucun défilement horizontal",
+      "ok": true
+    }
+  ]
+}

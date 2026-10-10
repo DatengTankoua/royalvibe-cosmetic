@@ -70,6 +70,9 @@ const ROUTES = [
   'notifications_list',
   'notifications_unread',
   'notifications_read',
+  // 1-20E : page Ventes (chargement réel, total compris) et pages éloignées.
+  'sales_page',
+  'sales_page_far',
 ];
 
 const thresholds = {};
@@ -389,7 +392,33 @@ function mixed(session) {
   }
 }
 
+/**
+ * 1-20E — Chargement de la page Ventes, comme le web : `SALES_MODE=legacy`
+ * (web 1-20D : `GET /sales`, tout l'historique) ou `paged` (web 1-20E :
+ * `GET /sales/history`, première page et total). `FAR_PAGES=N` (paged) :
+ * puis N pages suivantes en suivant le curseur (`sales_page_far`).
+ */
+const SALES_MODE = __ENV.SALES_MODE || 'paged';
+const FAR_PAGES = Number(__ENV.FAR_PAGES || 0);
+function salesPage(session) {
+  if (SALES_MODE === 'legacy') {
+    get(session, '/sales', 'sales_page');
+    return;
+  }
+  const first = get(session, '/sales/history', 'sales_page');
+  let cursor = first.status === 200 ? first.json('nextCursor') : null;
+  for (let i = 0; i < FAR_PAGES && cursor; i += 1) {
+    const res = get(
+      session,
+      `/sales/history?cursor=${encodeURIComponent(cursor)}`,
+      'sales_page_far',
+    );
+    cursor = res.status === 200 ? res.json('nextCursor') : null;
+  }
+}
+
 const PLAN = {
+  salespage: { roles: ['owner', 'admin', 'seller'], fn: salesPage },
   catalog: { roles: ['owner', 'admin', 'seller'], fn: catalog },
   dashboard: { roles: ['owner', 'admin'], fn: dashboard },
   sales: { roles: ['seller'], fn: sell },
@@ -398,7 +427,9 @@ const PLAN = {
   mixed: { roles: ['owner', 'admin', 'seller'], fn: mixed },
 };
 if (!PLAN[SCENARIO]) throw new Error(`SCENARIO inconnu : ${SCENARIO}`);
-const POOL = byRole(PLAN[SCENARIO].roles);
+// 1-20E : `ROLES=owner,…` restreint les sessions du scénario.
+const ROLES = __ENV.ROLES ? __ENV.ROLES.split(',') : PLAN[SCENARIO].roles;
+const POOL = byRole(ROLES);
 if (POOL.length === 0) throw new Error('Aucune session pour ce scénario.');
 
 export default function () {

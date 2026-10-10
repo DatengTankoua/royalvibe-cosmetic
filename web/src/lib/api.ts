@@ -1096,6 +1096,45 @@ export async function fetchSales(productId?: string): Promise<ApiSale[]> {
   return data;
 }
 
+/** 1-20E — Taille d'une page de l'historique des ventes. */
+export const SALES_PAGE_SIZE = 20;
+
+/**
+ * 1-20E — Une page de l'historique (`GET /sales/history`) : `total` porte
+ * sur tout le périmètre autorisé (toute l'organisation ou ses propres
+ * ventes), jamais sur la page. `legacy` : API antérieure sans ce contrat
+ * (404) → historique COMPLET de l'ancien contrat, présenté comme tel (aucune
+ * pagination, total exact = nombre de ventes reçues).
+ */
+export interface SalesPage {
+  items: ApiSale[];
+  total: number;
+  nextCursor: string | null;
+  legacy: boolean;
+}
+
+export async function fetchSalesPage(
+  cursor: string | null,
+): Promise<SalesPage> {
+  try {
+    const { data } = await apiClient.get<Omit<SalesPage, "legacy">>(
+      "/sales/history",
+      { params: { limit: SALES_PAGE_SIZE, ...(cursor ? { cursor } : {}) } },
+    );
+    return { ...data, legacy: false };
+  } catch (error) {
+    if (
+      cursor === null &&
+      axios.isAxiosError(error) &&
+      error.response?.status === 404
+    ) {
+      const all = await fetchSales();
+      return { items: all, total: all.length, nextCursor: null, legacy: true };
+    }
+    throw error;
+  }
+}
+
 // 1-11C.3 : plus aucun `POST /sales` direct — toute vente passe par
 // l'outbox (`enqueueOfflineSale`) puis `createSaleIdempotent`.
 

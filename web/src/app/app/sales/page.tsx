@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ClockIcon } from "lucide-react";
 import { useT } from "next-i18next/client";
 import { useFormat } from "@/i18n/use-format";
-import { fetchSales, getApiErrorMessage, type ApiSale } from "@/lib/api";
+import { fetchSalesPage, getApiErrorMessage, type SalesPage } from "@/lib/api";
+import { useAuth } from "@/contexts/auth-context";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
 import {
   useOfflineSales,
@@ -12,16 +13,26 @@ import {
 } from "@/contexts/offline-sales-context";
 import { PendingSalesAnchor } from "@/components/sales/pending-sales-nav";
 import { hasPermission } from "@/lib/organization-permissions";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useLiveRefresh, useSocketSignals } from "@/hooks/use-live-refresh";
 import { SALE_INVALIDATION_EVENTS } from "@/hooks/use-sale-invalidation";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
 
-// /app/sales (1-9D, ex "/sales") : `GET /sales` exige `sales.view_all` OU
+// /app/sales (1-9D, ex "/sales") : l'historique exige `sales.view_all` OU
 // `sales.view_own` côté backend (403 sinon) — jamais d'appel si aucune des
 // deux permissions n'est accordée, même si le lien de nav reste visible
 // pour `sales.record` seul (enregistrement depuis la fiche produit).
-export default function SalesPage() {
+//
+// 1-20E : historique PAGINÉ (`GET /sales/history`, curseur) — plus jamais
+// tout l'historique. Le total vient du serveur (tout le périmètre autorisé).
+// Les relectures temps réel, la confirmation d'une vente locale et le
+// rattrapage après reconnexion relisent la SEULE page affichée. Pages
+// stables : une vente ajoutée n'apparaît qu'en tête ; hors de la première
+// page, un avis propose d'y revenir. Une page devenue vide (annulations)
+// ramène à la page précédente. API antérieure : historique complet de
+// l'ancien contrat, présenté comme complet (aucune pagination).
+export default function SalesListPage() {
   const { t } = useT("sales");
   const format = useFormat();
   const fmt = format.fcfa;
@@ -31,19 +42,47 @@ export default function SalesPage() {
   const canView = canViewAll || canViewOwn;
   const canRecordOnly = !canView && hasPermission(authContext, "sales.record");
 
-  const [sales, setSales] = useState<ApiSale[]>([]);
+  const [page, setPage] = useState<SalesPage | null>(null);
+  const sales = page?.items ?? [];
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
-  // 1-11C.3 : liste rechargée après confirmation d'une vente locale.
+  // 1-20E : curseur de chaque page visitée (page 0 : aucun curseur).
+  const [cursors, setCursors] = useState<Array<string | null>>([null]);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [newerAvailable, setNewerAvailable] = useState(false);
+  // 1-11C.3 : page relue après confirmation d'une vente locale.
   const { unfinalizedCount, syncedVersion } = useOfflineSales();
   const pendingLink = usePendingSalesHref();
+  const { sessionVersion } = useAuth();
   // 1-15A : début de la dernière lecture réussie (rattrapage après
-  // reconnexion) ; une réponse périmée n'écrase jamais une liste plus récente.
+  // reconnexion) ; une réponse périmée n'écrase jamais une page plus récente.
   const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
   const order = useRef(createResponseOrder());
+  // 1-20E : vue demandée (session, organisation, périmètre, page, curseur) ;
+  // une réponse d'une autre vue est ignorée.
+  const scope = `${sessionVersion}:${authContext?.organizationId ?? ""}:${
+    canViewAll ? "all" : canViewOwn ? "own" : "none"
+  }`;
+  const cursor = cursors[pageIndex] ?? null;
+  const viewRef = useRef({ scope, pageIndex, cursor });
+  useEffect(() => {
+    viewRef.current = { scope, pageIndex, cursor };
+  });
+  const totalRef = useRef<number | null>(null);
+
+  // Session, organisation ou permissions changées : retour à la page 1.
+  useEffect(() => {
+    viewRef.current = { scope, pageIndex: 0, cursor: null };
+    setCursors([null]);
+    setPageIndex(0);
+    setPage(null);
+    setNewerAvailable(false);
+    totalRef.current = null;
+  }, [scope]);
 
   const load = useCallback(async (options: { silent?: boolean } = {}) => {
+    const view = { ...viewRef.current };
     if (!options.silent) {
       setIsLoading(true);
       setError(null);
@@ -51,13 +90,37 @@ export default function SalesPage() {
     const requestedAt = Date.now();
     const ticket = order.current.begin();
     try {
-      const data = await fetchSales();
+      const data = await fetchSalesPage(view.cursor);
+      const now = viewRef.current;
+      if (
+        now.scope !== view.scope ||
+        now.pageIndex !== view.pageIndex ||
+        now.cursor !== view.cursor
+      ) {
+        return;
+      }
       if (!order.current.accept(ticket)) return;
-      setSales(data);
+      // Page devenue vide (annulations) : page précédente.
+      if (data.items.length === 0 && view.pageIndex > 0) {
+        setPageIndex(view.pageIndex - 1);
+        return;
+      }
+      if (view.pageIndex === 0) {
+        setNewerAvailable(false);
+      } else if (totalRef.current !== null && data.total > totalRef.current) {
+        setNewerAvailable(true);
+      }
+      totalRef.current = data.total;
+      setPage(data);
+      setCursors((prev) => {
+        const next = prev.slice(0, view.pageIndex + 1);
+        if (data.nextCursor) next.push(data.nextCursor);
+        return next;
+      });
       setError(null);
       setLoadedAt(requestedAt);
     } catch (err) {
-      // Une relecture silencieuse en échec conserve la liste affichée.
+      // Une relecture silencieuse en échec conserve la page affichée.
       if (!options.silent) setError(getApiErrorMessage(err));
     } finally {
       if (!options.silent) setIsLoading(false);
@@ -71,16 +134,32 @@ export default function SalesPage() {
       return;
     }
     void load();
-  }, [authContext, canView, retryKey, syncedVersion, load]);
+  }, [authContext, canView, retryKey, pageIndex, scope, load]);
+
+  // 1-11C.3 : vente locale confirmée → page affichée relue (silencieuse).
+  useEffect(() => {
+    if (syncedVersion > 0 && canView) void load({ silent: true });
+  }, [syncedVersion, canView, load]);
 
   // 1-15A : vente enregistrée, modifiée ou supprimée par n'importe quel
-  // membre → liste relue silencieusement (l'API applique `view_own` /
-  // `view_all` : jamais la vente d'un collègue sans `sales.view_all`).
+  // membre → page affichée relue silencieusement, regroupée (l'API applique
+  // `view_own` / `view_all` : jamais la vente d'un collègue sans
+  // `sales.view_all`). 1-20E : jamais les autres pages.
   const scheduleRefresh = useLiveRefresh(
     () => (canView ? load({ silent: true }) : Promise.resolve()),
     canView ? loadedAt : undefined,
   );
   useSocketSignals(SALE_INVALIDATION_EVENTS, scheduleRefresh);
+
+  const hasNext = Boolean(page && !page.legacy && page.nextCursor);
+  const goTo = (index: number) => {
+    if (index === pageIndex) return;
+    if (index === 0) setNewerAvailable(false);
+    // Même rendu que le changement de page : jamais le numéro d'une page
+    // avec les ventes ou les boutons de la précédente.
+    setIsLoading(true);
+    setPageIndex(index);
+  };
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 sm:py-10">
@@ -103,6 +182,15 @@ export default function SalesPage() {
           )}
         </PendingSalesAnchor>
       </div>
+
+      {canView && newerAvailable && pageIndex > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 text-sm">
+          <span>{t("list.page.newer")}</span>
+          <Button variant="outline" size="sm" onClick={() => goTo(0)}>
+            {t("list.page.showNewer")}
+          </Button>
+        </div>
+      )}
 
       {!authContext || (isLoading && canView) ? (
         <p className="text-sm text-muted-foreground">{t("loading")}</p>
@@ -202,6 +290,50 @@ export default function SalesPage() {
             );
           })}
         </div>
+      )}
+
+      {canView && !isLoading && page && !error && (
+        <nav
+          aria-label={t("list.page.navLabel")}
+          className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <p className="text-sm text-muted-foreground" aria-live="polite">
+            {page.legacy
+              ? t("list.page.complete", { count: page.total })
+              : t("list.page.summary", {
+                  count: page.total,
+                  page: pageIndex + 1,
+                })}
+          </p>
+          {!page.legacy && (pageIndex > 0 || hasNext) && (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pageIndex === 0}
+                onClick={() => goTo(0)}
+              >
+                {t("list.page.first")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pageIndex === 0}
+                onClick={() => goTo(pageIndex - 1)}
+              >
+                {t("list.page.previous")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!hasNext}
+                onClick={() => goTo(pageIndex + 1)}
+              >
+                {t("list.page.next")}
+              </Button>
+            </div>
+          )}
+        </nav>
       )}
     </div>
   );

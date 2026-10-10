@@ -1,0 +1,184 @@
+{
+  "stop": {
+    "unexpectedErrorRate": 0.01,
+    "routeP95Ms": 1500,
+    "routeP99Ms": 3000,
+    "minRouteSamples": 20,
+    "achievedOfferedRatio": 0.9,
+    "heapRatio": 0.8,
+    "hostFreeMbMin": 250,
+    "eldP99MedianMs": 250,
+    "dbAvgLatencyMs": 50,
+    "poolWaitP99Ms": 200,
+    "generatorCores": 4,
+    "queueOldestAgeS": 120
+  },
+  "limits": {
+    "apiHeapMb": 1024,
+    "wiredTigerCacheGb": 0.5
+  },
+  "results": [
+    {
+      "label": "page",
+      "scenario": "salespage",
+      "target": "multi",
+      "vus": 1,
+      "durationS": 45,
+      "paceS": 1,
+      "think": false,
+      "windowS": 47,
+      "from": "2026-10-10T20:16:54.676Z",
+      "to": "2026-10-10T20:17:41.554Z",
+      "k6": {
+        "requests": 45,
+        "reqPerS": 1,
+        "iterations": 45,
+        "offeredIterPerS": 1,
+        "obtainedIterPerS": 1,
+        "lateIterationsRate": 0,
+        "dataReceivedMb": 14.17,
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "sales_page": {
+            "n": 45,
+            "p50": 61.8,
+            "p95": 117.7,
+            "p99": 150.4,
+            "max": 173.5
+          }
+        },
+        "unexpectedLogged": 0
+      },
+      "api": {
+        "cpuPctAvg": 9.78,
+        "cpuPctMax": 34.4,
+        "rssMbMax": 152,
+        "heapUsedMbMax": 74,
+        "eldP99MsMedian": 20.8,
+        "eldMaxMs": 91.8,
+        "socketsMax": 0,
+        "poolMaxInUse": 2,
+        "poolWaitP99MsMax": 0.2,
+        "poolFailed": 0,
+        "signatures": 0
+      },
+      "db": {
+        "connectionsMax": 14,
+        "reads": {
+          "ops": 524,
+          "avgMs": 1.08
+        },
+        "writes": {
+          "ops": 0,
+          "avgMs": 0
+        },
+        "txCommitted": 0,
+        "txAborted": 0,
+        "cacheMbMax": 27,
+        "pendingJobsMax": 0,
+        "oldestPendingJobAgeSMax": 0,
+        "dueDeliveriesMax": 0,
+        "oldestDueDeliveryLateSMax": 0
+      },
+      "proc": {
+        "apiCoresAvg": 0.1,
+        "apiCoresMax": 0.28,
+        "mongodCoresAvg": 0.04,
+        "mongodCoresMax": 0.06,
+        "mongodWsMbMax": 204,
+        "k6CoresAvg": 0.01,
+        "k6CoresMax": 0.03,
+        "k6WsMbMax": 46,
+        "hostFreeMbMin": 426
+      },
+      "verdict": {
+        "reasons": [],
+        "warnings": []
+      }
+    },
+    {
+      "label": "page",
+      "scenario": "salespage",
+      "target": "multi",
+      "vus": 5,
+      "durationS": 45,
+      "paceS": 1,
+      "think": false,
+      "windowS": 45,
+      "from": "2026-10-10T20:17:46.579Z",
+      "to": "2026-10-10T20:18:31.904Z",
+      "k6": {
+        "requests": 225,
+        "reqPerS": 5,
+        "iterations": 225,
+        "offeredIterPerS": 5,
+        "obtainedIterPerS": 5,
+        "lateIterationsRate": 0,
+        "dataReceivedMb": 113.22,
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "sales_page": {
+            "n": 225,
+            "p50": 291.2,
+            "p95": 408.3,
+            "p99": 469.2,
+            "max": 512.5
+          }
+        },
+        "unexpectedLogged": 0
+      },
+      "api": {
+        "cpuPctAvg": 49.86,
+        "cpuPctMax": 69.3,
+        "rssMbMax": 216,
+        "heapUsedMbMax": 112,
+        "eldP99MsMedian": 111.3,
+        "eldMaxMs": 220.7,
+        "socketsMax": 0,
+        "poolMaxInUse": 10,
+        "poolWaitP99MsMax": 79.3,
+        "poolFailed": 0,
+        "signatures": 0
+      },
+      "db": {
+        "connectionsMax": 16,
+        "reads": {
+          "ops": 2144,
+          "avgMs": 1.7
+        },
+        "writes": {
+          "ops": 0,
+          "avgMs": 0
+        },
+        "txCommitted": 0,
+        "txAborted": 0,
+        "cacheMbMax": 27,
+        "pendingJobsMax": 0,
+        "oldestPendingJobAgeSMax": 0,
+        "dueDeliveriesMax": 0,
+        "oldestDueDeliveryLateSMax": 0
+      },
+      "proc": {
+        "apiCoresAvg": 0.48,
+        "apiCoresMax": 0.62,
+        "mongodCoresAvg": 0.12,
+        "mongodCoresMax": 0.18,
+        "mongodWsMbMax": 208,
+        "k6CoresAvg": 0.02,
+        "k6CoresMax": 0.04,
+        "k6WsMbMax": 58,
+        "hostFreeMbMin": 475
+      },
+      "verdict": {
+        "reasons": [],
+        "warnings": []
+      }
+    }
+  ]
+}

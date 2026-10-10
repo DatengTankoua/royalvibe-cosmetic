@@ -32,6 +32,19 @@ const salesEn: Translation<typeof salesFr> = {
     productDeleted: "Product deleted",
     nameNotRecorded: "name not recorded at the time of sale",
     renamedTo: "Now: {{name}}",
+    // 1-20E: paginated history.
+    page: {
+      summary_one: "{{count}} sale · page {{page}}",
+      summary_other: "{{count}} sales · page {{page}}",
+      complete_one: "{{count}} sale",
+      complete_other: "{{count}} sales",
+      first: "Most recent",
+      previous: "Newer",
+      next: "Older",
+      navLabel: "Sales history pages",
+      newer: "New sales have been recorded.",
+      showNewer: "Show most recent",
+    },
   },
   pendingPage: {
     back: "Sales",

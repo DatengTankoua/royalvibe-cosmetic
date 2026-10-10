@@ -1,0 +1,107 @@
+{
+  "stop": {
+    "unexpectedErrorRate": 0.01,
+    "routeP95Ms": 1500,
+    "routeP99Ms": 3000,
+    "minRouteSamples": 20,
+    "achievedOfferedRatio": 0.9,
+    "heapRatio": 0.8,
+    "hostFreeMbMin": 250,
+    "eldP99MedianMs": 250,
+    "dbAvgLatencyMs": 50,
+    "poolWaitP99Ms": 200,
+    "generatorCores": 4,
+    "queueOldestAgeS": 120
+  },
+  "limits": {
+    "apiHeapMb": 1024,
+    "wiredTigerCacheGb": 0.5
+  },
+  "results": [
+    {
+      "label": "page",
+      "scenario": "salespage",
+      "target": "concentrated",
+      "vus": 1,
+      "durationS": 45,
+      "paceS": 1,
+      "think": false,
+      "windowS": 46,
+      "from": "2026-10-10T20:33:41.481Z",
+      "to": "2026-10-10T20:34:27.635Z",
+      "k6": {
+        "requests": 24,
+        "reqPerS": 0.5,
+        "iterations": 24,
+        "offeredIterPerS": 1,
+        "obtainedIterPerS": 0.53,
+        "lateIterationsRate": 100,
+        "dataReceivedMb": 305.31,
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "sales_page": {
+            "n": 24,
+            "p50": 1839,
+            "p95": 2269.8,
+            "p99": 2509.7,
+            "max": 2573.3
+          }
+        },
+        "unexpectedLogged": 0
+      },
+      "api": {
+        "cpuPctAvg": 121.92,
+        "cpuPctMax": 173.4,
+        "rssMbMax": 402,
+        "heapUsedMbMax": 225,
+        "eldP99MsMedian": 816.8,
+        "eldMaxMs": 1204.8,
+        "socketsMax": 0,
+        "poolMaxInUse": 3,
+        "poolWaitP99MsMax": 0.1,
+        "poolFailed": 0,
+        "signatures": 0
+      },
+      "db": {
+        "connectionsMax": 13,
+        "reads": {
+          "ops": 335,
+          "avgMs": 13.96
+        },
+        "writes": {
+          "ops": 0,
+          "avgMs": 0
+        },
+        "txCommitted": 0,
+        "txAborted": 0,
+        "cacheMbMax": 113,
+        "pendingJobsMax": 0,
+        "oldestPendingJobAgeSMax": 0,
+        "dueDeliveriesMax": 0,
+        "oldestDueDeliveryLateSMax": 0
+      },
+      "proc": {
+        "apiCoresAvg": 1.23,
+        "apiCoresMax": 1.44,
+        "mongodCoresAvg": 0.13,
+        "mongodCoresMax": 0.16,
+        "mongodWsMbMax": 333,
+        "k6CoresAvg": 0.01,
+        "k6CoresMax": 0.06,
+        "k6WsMbMax": 162,
+        "hostFreeMbMin": 351
+      },
+      "verdict": {
+        "reasons": [
+          "p95 sales_page = 2269.8 ms",
+          "débit obtenu 0.53/1 it/s",
+          "retard de boucle p99 médian 816.8 ms"
+        ],
+        "warnings": []
+      }
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-# Campagnes de charge locales (1-20A à 1-20D)
+# Campagnes de charge locales (1-20A à 1-20E)
 
 Outils de mesure de charge **strictement locaux** de Stock Master. Rapports :
 [phase-1-20a-load-baseline.md](../../../docs/architecture/phase-1-20a-load-baseline.md)
@@ -8,7 +8,9 @@ Outils de mesure de charge **strictement locaux** de Stock Master. Rapports :
 [phase-1-20c-product-image-signing.md](../../../docs/architecture/phase-1-20c-product-image-signing.md)
 (signatures d'URL des photos, avant/après) et
 [phase-1-20d-realtime-catalog-refresh.md](../../../docs/architecture/phase-1-20d-realtime-catalog-refresh.md)
-(relectures du catalogue après les ventes, avant/après).
+(relectures du catalogue après les ventes, avant/après) et
+[phase-1-20e-sales-pagination.md](../../../docs/architecture/phase-1-20e-sales-pagination.md)
+(pagination de l'historique des ventes, avant/après).
 
 > Aucune cible distante : toute URL non locale (ou port ≠ 4300) et toute base
 > autre que l'instance éphémère `stockmaster_load` sont refusées. Aucun appel
@@ -38,6 +40,8 @@ Outils de mesure de charge **strictement locaux** de Stock Master. Rapports :
 | `compare-1-20c.sh`         | 1-20C : catalogue (`current` : froid puis 1, 5, 10 VU ; `large` : froid puis 1 VU) sur une stack neuve, avant (`baseline`) ou après (`new`)                                    |
 | `catalog-refresh-probe.js` | 1-20D : clients Socket.IO affichant un rayon, ventes, relectures simulées du web 1-20C (`legacy`) ou 1-20D (`targeted`) ; lectures, octets, délai de stock à jour, stock final |
 | `compare-1-20d.sh`         | 1-20D : un scénario (`<clients>`) sur une stack neuve, avant (`baseline`) ou après (`new`)                                                                                     |
+| `compare-1-20e.sh`         | 1-20E : page Ventes (`current` : 1 et 5 VU ; `large` : 1 VU, 30 000 ventes) ; `baseline`, `new` (+ pages éloignées), `legacy-on-new` (ancien contrat sur la nouvelle API)      |
+| `sales-history-explain.js` | 1-20E : plans MongoDB des requêtes de la page Ventes (documents et clés examinés, tri en mémoire)                                                                              |
 
 ## Prérequis
 
@@ -104,7 +108,9 @@ Les signatures d'URL réellement calculées sont comptées par l'entrée de
 test (intergiciel sur le client de signature, `metrics-api.jsonl`,
 champ `signatures`), identiquement pour les deux variantes.
 
-Options de k6 : `TARGET=org:<clé>` concentre la charge sur une entreprise.
+Options de k6 : `TARGET=org:<clé>` concentre la charge sur une entreprise ;
+`ROLES=owner,…` restreint les sessions ; scénario `salespage` :
+`SALES_MODE=legacy|paged`, `FAR_PAGES=<n>`.
 Toute réponse inattendue est journalisée (`UNEXPECTED {json}` : route,
 statut, code, erreur k6, identifiant de corrélation `x-load-correlation-id`)
 et regroupée par le pilote dans `<palier>.unexpected.jsonl`. Critère d'arrêt

@@ -30,6 +30,10 @@ import { AuditAction } from '../audit/schemas/audit-log.schema';
 import { subscriptionInactiveException } from '../subscriptions/subscription-access';
 import { PushOutboxService } from '../push/push-outbox.service';
 import { stockLowCrossed } from '../push/stock-thresholds';
+import {
+  decodeSalesHistoryCursor,
+  encodeSalesHistoryCursor,
+} from './sale-history';
 
 @Injectable()
 export class SalesService {
@@ -369,6 +373,65 @@ export class SalesService {
       .populate('productId', 'name')
       .sort({ createdAt: -1 })
       .exec();
+  }
+
+  /**
+   * 1-20E — Une page de l'historique (`GET /sales/history`). Organisation,
+   * restriction `view_own` et filtre produit appliqués AVANT la pagination ;
+   * total compté sur tout le périmètre filtré autorisé (jamais la page) ;
+   * tri `createdAt` puis `_id` décroissants ; `limit + 1` documents lus au
+   * plus (jamais tout l'historique en mémoire). Une vente annulée est
+   * supprimée : absente des pages comme du total (règle inchangée).
+   */
+  async findHistoryPage(
+    organizationId: string,
+    options: { limit: number; cursor?: string; productId?: string },
+    scopeSellerId?: string,
+  ): Promise<{
+    items: SaleDocument[];
+    total: number;
+    nextCursor: string | null;
+  }> {
+    const filter: Record<string, unknown> = {
+      organizationId: new Types.ObjectId(organizationId),
+    };
+    if (options.productId)
+      filter.productId = new Types.ObjectId(options.productId);
+    if (scopeSellerId) filter.sellerId = new Types.ObjectId(scopeSellerId);
+    const page: Record<string, unknown> = { ...filter };
+    if (options.cursor) {
+      const at = decodeSalesHistoryCursor(options.cursor);
+      // `createdAt <= curseur` : borne d'index (le parcours commence au
+      // curseur, coût indépendant de la profondeur) ; `$or` : départage
+      // exact par `_id` à date égale (équivalent logique).
+      page.createdAt = { $lte: at.createdAt };
+      page.$or = [
+        { createdAt: { $lt: at.createdAt } },
+        { _id: { $lt: at.id } },
+      ];
+    }
+    const [total, rows] = await Promise.all([
+      this.saleModel.countDocuments(filter).exec(),
+      this.saleModel
+        .find(page)
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(options.limit + 1)
+        .populate('sellerId', 'name email')
+        .populate('productId', 'name')
+        .exec(),
+    ]);
+    const items = rows.slice(0, options.limit);
+    // `timestamps.createdAt` : posé par Mongoose, absent du type `Sale`.
+    const last = items[items.length - 1] as unknown as
+      { createdAt: Date; _id: Types.ObjectId } | undefined;
+    return {
+      items,
+      total,
+      nextCursor:
+        rows.length > options.limit && last
+          ? encodeSalesHistoryCursor(last)
+          : null,
+    };
   }
 
   async update(

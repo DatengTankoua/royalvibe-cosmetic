@@ -13,6 +13,8 @@ import {
 import { SalesService } from './sales.service';
 import { CreateSaleDto } from './dto/create-sale.dto';
 import { UpdateSaleDto } from './dto/update-sale.dto';
+import { SalesHistoryQueryDto } from './dto/sales-history-query.dto';
+import { SALES_HISTORY_DEFAULT_LIMIT } from './sale-history';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CurrentOrganization } from '../auth/decorators/current-organization.decorator';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
@@ -102,6 +104,39 @@ export class SalesController {
       return this.salesService.findAll(
         organizationContext.organizationId,
         productId,
+        organizationContext.userId,
+      );
+    }
+    throw new ForbiddenException(PERMISSION_DENIED_RESPONSE);
+  }
+
+  /**
+   * 1-20E — Historique PAGINÉ (contrat explicite, à côté de `GET /sales`
+   * conservé tel quel pour les anciens clients). Mêmes permissions et même
+   * périmètre que `findAll` : `view_all` → toute l'organisation, `view_own`
+   * → ventes du demandeur seulement (pages ET total), 403 sinon.
+   * Réponse : `{ items, total, nextCursor }` (`nextCursor` null en fin).
+   */
+  @Get('history')
+  findHistory(
+    @Query() query: SalesHistoryQueryDto,
+    @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+  ) {
+    const options = {
+      limit: query.limit ?? SALES_HISTORY_DEFAULT_LIMIT,
+      cursor: query.cursor,
+      productId: query.productId,
+    };
+    if (hasPermission(organizationContext, 'sales.view_all')) {
+      return this.salesService.findHistoryPage(
+        organizationContext.organizationId,
+        options,
+      );
+    }
+    if (hasPermission(organizationContext, 'sales.view_own')) {
+      return this.salesService.findHistoryPage(
+        organizationContext.organizationId,
+        options,
         organizationContext.userId,
       );
     }

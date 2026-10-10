@@ -1,0 +1,14 @@
+{
+  "oldApi_history": {
+    "status": 404,
+    "body": {
+      "statusCode": 404,
+      "message": "Cannot GET /sales/history?limit=20"
+    }
+  },
+  "oldApi_legacy": {
+    "status": 200,
+    "isArray": true,
+    "n": 3000
+  }
+}

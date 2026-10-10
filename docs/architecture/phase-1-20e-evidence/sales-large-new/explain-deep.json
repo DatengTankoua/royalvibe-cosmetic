@@ -1,0 +1,58 @@
+{
+  "at": "2026-10-10T20:37:05.555Z",
+  "indexes": [
+    "_id_",
+    "organizationId_1_createdAt_-1__id_-1",
+    "organizationId_1_sellerId_1_createdAt_-1__id_-1",
+    "organizationId_1_productId_1_createdAt_-1"
+  ],
+  "cases": {
+    "legacyAll": {
+      "index": "organizationId_1_createdAt_-1__id_-1",
+      "inMemorySort": false,
+      "docsExamined": 30000,
+      "keysExamined": 30000,
+      "returned": 30000,
+      "ms": 58
+    },
+    "legacyOwn": {
+      "index": "organizationId_1_sellerId_1_createdAt_-1__id_-1",
+      "inMemorySort": false,
+      "docsExamined": 1364,
+      "keysExamined": 1364,
+      "returned": 1364,
+      "ms": 4
+    },
+    "pagedFirst": {
+      "index": "organizationId_1_createdAt_-1__id_-1",
+      "inMemorySort": false,
+      "docsExamined": 21,
+      "keysExamined": 21,
+      "returned": 21,
+      "ms": 0
+    },
+    "pagedOwnFirst": {
+      "index": "organizationId_1_sellerId_1_createdAt_-1__id_-1",
+      "inMemorySort": false,
+      "docsExamined": 21,
+      "keysExamined": 21,
+      "returned": 21,
+      "ms": 0
+    },
+    "pagedFar": {
+      "index": "organizationId_1_createdAt_-1__id_-1",
+      "inMemorySort": false,
+      "docsExamined": 22,
+      "keysExamined": 22,
+      "returned": 21,
+      "ms": 3
+    },
+    "count": {
+      "ms": 10.1
+    }
+  },
+  "organization": {
+    "key": "conc1",
+    "sales": 30000
+  }
+}

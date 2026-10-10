@@ -99,6 +99,7 @@ describe('SalesController — transmission du tenant à la création (1-4C.1)', 
   const serviceStub = {
     create: jest.fn(),
     findAll: jest.fn(),
+    findHistoryPage: jest.fn(),
     update: jest.fn(),
     remove: jest.fn(),
   };
@@ -194,6 +195,7 @@ describe('SalesController — scope own/all (1-7B)', () => {
   const serviceStub = {
     create: jest.fn(),
     findAll: jest.fn(),
+    findHistoryPage: jest.fn(),
     update: jest.fn(),
     remove: jest.fn(),
   };
@@ -238,6 +240,29 @@ describe('SalesController — scope own/all (1-7B)', () => {
       undefined,
       SELLER_ID,
     );
+  });
+
+  describe('findHistory (1-20E) : même périmètre que findAll, limite par défaut', () => {
+    it('vendeur par défaut (view_own) : ses ventes seulement', async () => {
+      await controller.findHistory({}, sellerDefaultCtx);
+      expect(serviceStub.findHistoryPage).toHaveBeenCalledWith(
+        ORG_A,
+        { limit: 20, cursor: undefined, productId: undefined },
+        SELLER_ID,
+      );
+    });
+
+    it('view_all : toute l’organisation, paramètres transmis', async () => {
+      await controller.findHistory(
+        { limit: 50, cursor: 'abc', productId: VALID_OBJECT_ID },
+        sellerViewAllCtx,
+      );
+      expect(serviceStub.findHistoryPage).toHaveBeenCalledWith(ORG_A, {
+        limit: 50,
+        cursor: 'abc',
+        productId: VALID_OBJECT_ID,
+      });
+    });
   });
 
   it('findAll : seller délégué sales.view_all → aucun scope (voit toute l’organisation)', async () => {

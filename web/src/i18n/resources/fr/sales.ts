@@ -31,6 +31,21 @@ const salesFr = {
     productDeleted: "Produit supprimé",
     nameNotRecorded: "nom non enregistré lors de la vente",
     renamedTo: "Désormais : {{name}}",
+    // 1-20E : historique paginé.
+    page: {
+      summary_one: "{{count}} vente · page {{page}}",
+      summary_many: "{{count}} ventes · page {{page}}",
+      summary_other: "{{count}} ventes · page {{page}}",
+      complete_one: "{{count}} vente",
+      complete_many: "{{count}} ventes",
+      complete_other: "{{count}} ventes",
+      first: "Plus récentes",
+      previous: "Précédentes",
+      next: "Plus anciennes",
+      navLabel: "Pages de l'historique des ventes",
+      newer: "De nouvelles ventes ont été enregistrées.",
+      showNewer: "Voir les plus récentes",
+    },
   },
   pendingPage: {
     back: "Ventes",
