@@ -29,6 +29,11 @@ import {
   SubscriptionPayment,
   SubscriptionPaymentSchema,
 } from '../subscriptions/payments/schemas/subscription-payment.schema';
+import {
+  OrganizationMembership,
+  OrganizationMembershipSchema,
+} from '../organizations/schemas/membership.schema';
+import { Section, SectionSchema } from '../sections/schemas/section.schema';
 
 /**
  * 1-16A.1 — Centre de notifications, bilans mensuels et état d'activation.
@@ -57,6 +62,12 @@ import {
       { name: User.name, schema: UserSchema },
       { name: Organization.name, schema: OrganizationSchema },
       { name: SubscriptionPayment.name, schema: SubscriptionPaymentSchema },
+      // 1-19A : détail des notifications de membres (rôle actuel, cibles).
+      {
+        name: OrganizationMembership.name,
+        schema: OrganizationMembershipSchema,
+      },
+      { name: Section.name, schema: SectionSchema },
     ]),
   ],
   controllers: [NotificationsController],

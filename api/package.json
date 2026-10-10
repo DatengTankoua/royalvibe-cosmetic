@@ -23,6 +23,8 @@
     "migrate:support-request-indexes": "node dist/migrations/create-support-request-indexes.js",
     "migrate:legal-acceptance-indexes": "node dist/migrations/create-legal-acceptance-indexes.js",
     "migrate:invitation-account-token-index": "node dist/migrations/create-invitation-account-token-index.js",
+    "migrate:purge-terminated-invitations": "node dist/migrations/purge-terminated-invitations.js",
+    "migrate:sales-notifications-permission": "node dist/migrations/sales-notifications-permission.js",
     "migrate:rate-limit-indexes": "node dist/migrations/create-rate-limit-indexes.js",
     "migrate:predeploy": "node dist/migrations/predeploy-migrations.js",
     "storage:quota": "node dist/migrations/storage-quota.js",

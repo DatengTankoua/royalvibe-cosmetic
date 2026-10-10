@@ -314,6 +314,7 @@ export class SalesService {
           organizationId,
           productId: input.productId,
           saleId: String(sale._id),
+          sellerId,
         });
 
         created = sale;
@@ -510,9 +511,11 @@ export class SalesService {
     id: string,
     actorId: string,
     scopeSellerId?: string,
-  ): Promise<void> {
+  ): Promise<{ productName: string | null }> {
     const session = await this.connection.startSession();
     let removedProductId: string | undefined;
+    // 1-19A : nom figé pour l'activité annoncée au propriétaire.
+    let productName: string | null = null;
     try {
       await session.withTransaction(async () => {
         const filter: Record<string, Types.ObjectId> = {
@@ -527,6 +530,7 @@ export class SalesService {
 
         const productId = sale.productId.toString();
         removedProductId = productId;
+        productName = sale.productName ?? sale.lastKnownProductName ?? null;
         const { quantity, salePrice } = sale;
         await this.productsService.adjustStock(
           organizationId,
@@ -554,5 +558,6 @@ export class SalesService {
         productId: removedProductId,
       });
     }
+    return { productName };
   }
 }

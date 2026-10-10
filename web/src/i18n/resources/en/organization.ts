@@ -43,6 +43,7 @@ const organizationEn: Translation<typeof organizationFr> = {
     "members.invite": "Invite members",
     "members.manage": "Manage members",
     "support.contact": "Contact customer support",
+    "sales.notifications": "Receive sale notifications",
   },
   memberStatus: {
     active: "Active",

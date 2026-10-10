@@ -71,6 +71,12 @@ import {
   MonthlyReport,
   MonthlyReportDocument,
 } from '../notifications/schemas/monthly-report.schema';
+import {
+  MEMBER_ACTIVITY_ACTOR_NAME_MAX,
+  MEMBER_ACTIVITY_WINDOW_MS,
+  memberActivityGroupKey,
+  snapshotName,
+} from '../notifications/member-activity';
 
 /** Rappel d'échéance : à partir de 24 h avant l'échéance effective (UTC). */
 export const SUBSCRIPTION_REMINDER_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -93,6 +99,8 @@ export const PUSH_EVENT_MAX_AGE_MS: Readonly<
   [PushCategory.SALE_DIGEST]: 60 * 60 * 1000,
   [PushCategory.PAYMENT_SUCCEEDED]: 60 * 60 * 1000,
   [PushCategory.MONTHLY_REPORT]: 12 * 60 * 60 * 1000,
+  [PushCategory.MEMBER_JOINED]: 60 * 60 * 1000,
+  [PushCategory.MEMBER_ACTIVITY]: 60 * 60 * 1000,
   // Pertinent jusqu'à l'échéance visée elle-même.
   [PushCategory.SUBSCRIPTION_ENDING]: null,
 });
@@ -328,6 +336,7 @@ export class PushDispatcherService implements OnApplicationShutdown {
     coverageEndsAt?: Date;
     periodKind?: SubscriptionPeriodKind;
     reportId?: Types.ObjectId;
+    actorId?: Types.ObjectId;
     status?: PushJobStatus;
   }): Promise<number> {
     const result = await this.jobModel
@@ -340,6 +349,8 @@ export class PushDispatcherService implements OnApplicationShutdown {
             productId: null,
             paymentId: null,
             saleId: null,
+            actorId: job.actorId ?? null,
+            activity: null,
             reportId: job.reportId ?? null,
             coverageEndsAt: job.coverageEndsAt ?? null,
             periodKind: job.periodKind ?? null,
@@ -396,14 +407,25 @@ export class PushDispatcherService implements OnApplicationShutdown {
       }
       const members = await this.eligibleMembers(job);
       // Centre : indépendant du push et de ses délais.
-      summary.notifications += await this.center.createFromJob(
-        job,
-        await this.center.inAppEnabled(
-          job.organizationId,
-          members,
-          job.category,
-        ),
+      const recipients = await this.center.inAppEnabled(
+        job.organizationId,
+        members,
+        job.category,
       );
+      summary.notifications +=
+        job.category === PushCategory.MEMBER_ACTIVITY
+          ? await this.center.createActivityFromJob(
+              job,
+              recipients,
+              await this.actorName(job),
+            )
+          : await this.center.createFromJob(
+              job,
+              recipients,
+              job.category === PushCategory.MEMBER_JOINED
+                ? await this.actorName(job)
+                : null,
+            );
       let deliveries = 0;
       let outcome: string | null = null;
       if (!this.runtime.pushActive) {
@@ -435,6 +457,9 @@ export class PushDispatcherService implements OnApplicationShutdown {
     let nextAttemptAt = now;
     if (job.category === PushCategory.SALE_CREATED) {
       target = await this.saleDigest(job);
+      nextAttemptAt = new Date(target.eventAt.getTime());
+    } else if (job.category === PushCategory.MEMBER_ACTIVITY) {
+      target = await this.activityGroup(job);
       nextAttemptAt = new Date(target.eventAt.getTime());
     }
     for (const subscription of devices) {
@@ -468,6 +493,51 @@ export class PushDispatcherService implements OnApplicationShutdown {
       .exec();
     if (!digest) throw new Error('Sale digest vanished');
     return digest;
+  }
+
+  /**
+   * 1-19A — Événement push de regroupement des activités : même auteur,
+   * action et type de cible sur une fenêtre FIXE d'une minute ; une seule
+   * livraison par appareil, envoyée en fin de fenêtre (une action groupée
+   * de la corbeille ne produit pas un push par produit).
+   */
+  private async activityGroup(job: JobRecord): Promise<JobRecord> {
+    if (!job.activity || !job.actorId) return job;
+    const eventKey = memberActivityGroupKey({
+      organizationId: job.organizationId.toHexString(),
+      actorId: job.actorId.toHexString(),
+      entity: job.activity.entity,
+      action: job.activity.action,
+      eventAt: job.eventAt,
+    });
+    const windowEnd =
+      Number(eventKey.slice(eventKey.lastIndexOf(':') + 1)) +
+      MEMBER_ACTIVITY_WINDOW_MS;
+    await this.recordJob({
+      eventKey,
+      category: PushCategory.MEMBER_ACTIVITY,
+      organizationId: job.organizationId,
+      actorId: job.actorId,
+      eventAt: new Date(windowEnd),
+      status: PushJobStatus.DISPATCHED,
+    });
+    const group = await this.jobModel
+      .findOne({ eventKey })
+      .lean<JobRecord>()
+      .exec();
+    if (!group) throw new Error('Activity group vanished');
+    return group;
+  }
+
+  /** 1-19A : nom de l'auteur, figé dans la notification du centre. */
+  private async actorName(job: JobRecord): Promise<string | null> {
+    if (!job.actorId) return null;
+    const user = await this.userModel
+      .findById(job.actorId)
+      .select({ name: 1 })
+      .lean<{ name?: string }>()
+      .exec();
+    return snapshotName(user?.name, MEMBER_ACTIVITY_ACTOR_NAME_MAX);
   }
 
   private async upsertDelivery(
@@ -516,8 +586,28 @@ export class PushDispatcherService implements OnApplicationShutdown {
     return maxAge !== null && now.getTime() - job.eventAt.getTime() > maxAge;
   }
 
-  /** Membres actifs autorisés à cet instant (règle unique). */
+  /**
+   * 1-19A : auteur de l'événement, jamais destinataire. Ancien travail de
+   * vente sans `actorId` : vendeur relu sur la vente.
+   */
+  private async eventActor(job: JobRecord): Promise<Types.ObjectId | null> {
+    if (job.actorId) return job.actorId;
+    if (job.category !== PushCategory.SALE_CREATED || !job.saleId) return null;
+    const sale = await this.saleModel
+      .findOne({ _id: job.saleId, organizationId: job.organizationId })
+      .select({ sellerId: 1 })
+      .lean<{ sellerId: Types.ObjectId }>()
+      .exec();
+    return sale?.sellerId ?? null;
+  }
+
+  /**
+   * Membres actifs autorisés à cet instant (règle unique), hors auteur de
+   * l'événement (1-19A), sans doublon (une membership par utilisateur et
+   * organisation, index unique).
+   */
   private async eligibleMembers(job: JobRecord): Promise<Types.ObjectId[]> {
+    const actor = await this.eventActor(job);
     const memberships = await this.membershipModel
       .find({
         organizationId: job.organizationId,
@@ -532,11 +622,13 @@ export class PushDispatcherService implements OnApplicationShutdown {
         }>
       >()
       .exec();
-    const allowed = memberships.filter((m) =>
-      canAccessCategory(job.category, {
-        role: m.role,
-        permissions: m.permissions ?? [],
-      }),
+    const allowed = memberships.filter(
+      (m) =>
+        !(actor && m.userId.equals(actor)) &&
+        canAccessCategory(job.category, {
+          role: m.role,
+          permissions: m.permissions ?? [],
+        }),
     );
     if (allowed.length === 0) return [];
     const existing = await this.userModel
@@ -700,6 +792,7 @@ export class PushDispatcherService implements OnApplicationShutdown {
         saleId: job.saleId?.toHexString() ?? null,
         reportId: job.reportId?.toHexString() ?? null,
         periodKind: job.periodKind,
+        eventKey: job.eventKey,
       },
       {
         userId: subscription.userId.toHexString(),
@@ -881,7 +974,10 @@ export class PushDispatcherService implements OnApplicationShutdown {
           .exec();
         return sale ? null : 'sale-cancelled';
       }
+      // 1-19A : adhésion validée et action réussie sont des faits accomplis.
       case PushCategory.SALE_DIGEST:
+      case PushCategory.MEMBER_JOINED:
+      case PushCategory.MEMBER_ACTIVITY:
         return null;
       case PushCategory.PAYMENT_SUCCEEDED: {
         const payment = await this.paymentModel

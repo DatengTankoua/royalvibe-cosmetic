@@ -529,7 +529,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       expect(stillPending!.status).toBe('pending');
     });
 
-    it('owner A révoque sa propre invitation → 200, vue sans token, statut `revoked` en base', async () => {
+    it('owner A révoque sa propre invitation → 200, vue sans token, invitation supprimée (1-19A)', async () => {
       const email = `revoke-ok-${Date.now()}@royalvibe.test`;
       const created = await invite(ownerAToken, { email, role: 'seller' });
       const id = created.body.invitation._id as string;
@@ -540,7 +540,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       expect(JSON.stringify(res.body)).not.toContain('token');
 
       const stored = await invitationModel.findById(id).exec();
-      expect(stored!.status).toBe('revoked');
+      expect(stored).toBeNull();
 
       // Une invitation déjà révoquée ne peut plus être révoquée deux fois :
       const second = await revoke(ownerAToken, id);
@@ -803,8 +803,9 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
       };
     }
 
+    // 1-19A : une invitation acceptée est SUPPRIMÉE (`deleted`).
     const invitationStatus = async (id: string) =>
-      (await invitationModel.findById(id).exec())!.status;
+      (await invitationModel.findById(id).exec())?.status ?? 'deleted';
     const membershipsInB = (userId: Types.ObjectId) =>
       membershipModel.countDocuments({
         organizationId: new Types.ObjectId(orgBId),
@@ -975,7 +976,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
           .lean()
           .exec();
         expect(after).toEqual(before);
-        expect(await invitationStatus(invitation.id)).toBe('accepted');
+        expect(await invitationStatus(invitation.id)).toBe('deleted');
 
         // Usage unique ; connexion à B ensuite possible.
         const replay = await accept(target.jwt, {
@@ -1159,14 +1160,14 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
           .exec();
         expect(membership!.role).toBe('admin');
         expect(membership!.permissions).toEqual(['analytics.read']);
-        expect(await invitationStatus(invitation.id)).toBe('accepted');
+        expect(await invitationStatus(invitation.id)).toBe('deleted');
+        // Supprimée avec ses deux liens : aucun jeton conservé.
         const stored = await invitationModel
           .findById(invitation.id)
           .select('+accountTokenHash +accountTokenExpiresAt')
           .lean()
           .exec();
-        expect(stored!.accountTokenHash).toBeUndefined();
-        expect(stored!.accountTokenExpiresAt).toBeUndefined();
+        expect(stored).toBeNull();
 
         // Aucun nouvel e-mail de vérification : l'adresse est déjà prouvée.
         expect(
@@ -1578,7 +1579,7 @@ describe('Invitations (e2e 1-6B.1) — émission sécurisée, isolation A/B', ()
           },
           membership: { role: 'seller', status: 'active' },
         });
-        expect(await invitationStatus(invitation.id)).toBe('accepted');
+        expect(await invitationStatus(invitation.id)).toBe('deleted');
         const membership = await membershipModel
           .findOne({
             organizationId: new Types.ObjectId(orgBId),

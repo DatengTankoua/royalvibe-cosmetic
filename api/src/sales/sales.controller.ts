@@ -28,10 +28,39 @@ import {
   CurrentSubscriptionAccess,
 } from '../subscriptions/subscription-access';
 import type { SubscriptionAccessDecision } from '../subscriptions/subscription-access';
+import { PushOutboxService } from '../push/push-outbox.service';
+import {
+  MemberActivityAction,
+  MemberActivityEntity,
+} from '../notifications/member-activity';
 
 @Controller('sales')
 export class SalesController {
-  constructor(private readonly salesService: SalesService) {}
+  constructor(
+    private readonly salesService: SalesService,
+    private readonly pushOutbox: PushOutboxService,
+  ) {}
+
+  /**
+   * 1-19A : modification et annulation RÉUSSIES annoncées au propriétaire
+   * (best effort, après le service). La création a sa propre notification
+   * (`sale-created`) : jamais annoncée en double ici.
+   */
+  private activity(
+    context: ResolvedOrganizationContext,
+    action: MemberActivityAction,
+    saleId: string,
+    productName: string | null | undefined,
+    uniqueKey?: string,
+  ): Promise<void> {
+    return this.pushOutbox.memberActivity(context, {
+      entity: MemberActivityEntity.SALE,
+      action,
+      targetId: saleId,
+      targetName: productName ?? null,
+      uniqueKey,
+    });
+  }
 
   // 1-14C.1 : exception `sale-replay` — JWT applicatif, membership et
   // `sales.record` toujours exigés. Abonnement inactif : seule la
@@ -81,7 +110,7 @@ export class SalesController {
 
   @Patch(':id')
   @RequirePermissions('sales.record')
-  update(
+  async update(
     @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: UpdateSaleDto,
     @CurrentUser() user: User,
@@ -90,44 +119,57 @@ export class SalesController {
     const actorId = user._id.toString();
     // sans `sales.view_all` : uniquement ses propres ventes (404 sinon,
     // indistinguable d'une vente absente — jamais de fuite d'existence).
-    if (hasPermission(organizationContext, 'sales.view_all')) {
-      return this.salesService.update(
-        organizationContext.organizationId,
-        id,
-        dto,
-        actorId,
-      );
-    }
-    return this.salesService.update(
-      organizationContext.organizationId,
+    const updated = hasPermission(organizationContext, 'sales.view_all')
+      ? await this.salesService.update(
+          organizationContext.organizationId,
+          id,
+          dto,
+          actorId,
+        )
+      : await this.salesService.update(
+          organizationContext.organizationId,
+          id,
+          dto,
+          actorId,
+          organizationContext.userId,
+        );
+    await this.activity(
+      organizationContext,
+      MemberActivityAction.UPDATED,
       id,
-      dto,
-      actorId,
-      organizationContext.userId,
+      updated.productName ?? updated.lastKnownProductName,
     );
+    return updated;
   }
 
   @Delete(':id')
   @HttpCode(204)
   @RequirePermissions('sales.record')
-  remove(
+  async remove(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentUser() user: User,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
-  ) {
+  ): Promise<void> {
     const actorId = user._id.toString();
-    if (hasPermission(organizationContext, 'sales.view_all')) {
-      return this.salesService.remove(
-        organizationContext.organizationId,
-        id,
-        actorId,
-      );
-    }
-    return this.salesService.remove(
-      organizationContext.organizationId,
+    const removed = hasPermission(organizationContext, 'sales.view_all')
+      ? await this.salesService.remove(
+          organizationContext.organizationId,
+          id,
+          actorId,
+        )
+      : await this.salesService.remove(
+          organizationContext.organizationId,
+          id,
+          actorId,
+          organizationContext.userId,
+        );
+    // Une vente n'est annulée qu'une fois : clé stable.
+    await this.activity(
+      organizationContext,
+      MemberActivityAction.CANCELLED,
       id,
-      actorId,
-      organizationContext.userId,
+      removed.productName,
+      id,
     );
   }
 }

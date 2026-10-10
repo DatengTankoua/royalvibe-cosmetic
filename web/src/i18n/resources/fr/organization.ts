@@ -43,6 +43,7 @@ const organizationFr = {
     "members.invite": "Inviter des membres",
     "members.manage": "Gérer les membres",
     "support.contact": "Contacter le service client",
+    "sales.notifications": "Recevoir les notifications de ventes",
   },
   memberStatus: {
     active: "Active",

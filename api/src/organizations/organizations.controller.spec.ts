@@ -11,6 +11,7 @@ import {
   createInvitationThrottlerWindow,
 } from '../common/invitation-rate-limiting';
 import type { User } from '../users/schemas/user.schema';
+import { PushOutboxService } from '../push/push-outbox.service';
 
 // Clé interne de `@nestjs/throttler` (`THROTTLER_SKIP`, non ré-exportée par
 // l'index public du package — jamais d'import profond dans `dist/`).
@@ -69,6 +70,10 @@ describe('OrganizationsController — invitations (1-7B)', () => {
       controllers: [OrganizationsController],
       providers: [
         { provide: OrganizationsService, useValue: serviceStub },
+        {
+          provide: PushOutboxService,
+          useValue: { memberActivity: jest.fn().mockResolvedValue(undefined) },
+        },
         InvitationCreateThrottlerGuard,
       ],
     }).compile();

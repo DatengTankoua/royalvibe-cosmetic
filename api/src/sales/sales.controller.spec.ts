@@ -8,6 +8,7 @@ import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
 import { ResolvedOrganizationContext } from '../organizations/organizations.service';
 import { OrganizationRole } from '../organizations/permissions';
 import type { User } from '../users/schemas/user.schema';
+import { PushOutboxService } from '../push/push-outbox.service';
 
 const VALID_OBJECT_ID = '112233445566778899001122';
 
@@ -105,11 +106,18 @@ describe('SalesController — transmission du tenant à la création (1-4C.1)', 
   beforeEach(async () => {
     for (const key of Object.keys(serviceStub)) {
       serviceStub[key].mockReset();
-      serviceStub[key].mockResolvedValue(undefined);
+      // 1-19A : nom figé du produit (activité du membre).
+      serviceStub[key].mockResolvedValue({ productName: 'Savon' });
     }
     const module: TestingModule = await Test.createTestingModule({
       controllers: [SalesController],
-      providers: [{ provide: SalesService, useValue: serviceStub }],
+      providers: [
+        { provide: SalesService, useValue: serviceStub },
+        {
+          provide: PushOutboxService,
+          useValue: { memberActivity: jest.fn().mockResolvedValue(undefined) },
+        },
+      ],
     }).compile();
     controller = module.get(SalesController);
   });
@@ -193,11 +201,18 @@ describe('SalesController — scope own/all (1-7B)', () => {
   beforeEach(async () => {
     for (const key of Object.keys(serviceStub)) {
       serviceStub[key].mockReset();
-      serviceStub[key].mockResolvedValue(undefined);
+      // 1-19A : nom figé du produit (activité du membre).
+      serviceStub[key].mockResolvedValue({ productName: 'Savon' });
     }
     const module: TestingModule = await Test.createTestingModule({
       controllers: [SalesController],
-      providers: [{ provide: SalesService, useValue: serviceStub }],
+      providers: [
+        { provide: SalesService, useValue: serviceStub },
+        {
+          provide: PushOutboxService,
+          useValue: { memberActivity: jest.fn().mockResolvedValue(undefined) },
+        },
+      ],
     }).compile();
     controller = module.get(SalesController);
   });

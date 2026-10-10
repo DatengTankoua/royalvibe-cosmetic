@@ -488,7 +488,8 @@ describe('Notifications Web Push métier (e2e 1-16A)', () => {
     const ownerCfg = await categories(a.token);
     expect(ownerCfg.enabled).toBe(true);
     expect(ownerCfg.publicKey).toBe(config.publicKey);
-    // 1-16A.1 : règle unique `canAccessCategory` (six catégories).
+    // 1-16A.1 : règle unique `canAccessCategory` ; 1-19A : nouveau membre
+    // (`members.manage`) et activité des membres (propriétaire seul).
     expect(ownerCfg.categories).toEqual([
       'stock-depleted',
       'stock-low',
@@ -496,12 +497,15 @@ describe('Notifications Web Push métier (e2e 1-16A)', () => {
       'subscription-ending',
       'payment-succeeded',
       'monthly-report',
+      'member-joined',
+      'member-activity',
     ]);
     expect((await categories(admin.token)).categories).toEqual([
       'stock-depleted',
       'stock-low',
       'sale-created',
       'monthly-report',
+      'member-joined',
     ]);
     expect((await categories(seller.token)).categories).toEqual([]);
 
@@ -544,6 +548,9 @@ describe('Notifications Web Push métier (e2e 1-16A)', () => {
       subscriptionEnding: true,
       paymentSucceeded: true,
       monthlyReport: true,
+      // 1-19A.
+      memberJoined: true,
+      memberActivity: true,
     });
 
     const status = (token: string) =>
@@ -588,6 +595,8 @@ describe('Notifications Web Push métier (e2e 1-16A)', () => {
       subscriptionEnding: true,
       paymentSucceeded: true,
       monthlyReport: true,
+      memberJoined: true,
+      memberActivity: true,
     });
     // Aucune réponse ne renvoie l'endpoint ni les clés.
     expect(JSON.stringify(patch.body)).not.toContain('fcm.googleapis.com');

@@ -2,6 +2,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { PushCategory } from '../../push/schemas/push-category';
 import { SubscriptionPeriodKind } from '../../subscriptions/subscription-terms';
+import { MemberActivityAction, MemberActivityEntity } from '../member-activity';
 
 export type NotificationDocument = HydratedDocument<AppNotification>;
 
@@ -16,6 +17,11 @@ export const NOTIFICATIONS_COLLECTION = 'notifications';
  *
  * Aucun contenu métier n'est stocké : catégorie et références seules ; le
  * détail est relu à la consultation avec les droits ACTUELS.
+ * 1-19A — exception limitée aux catégories `member-*` : nom de l'auteur et
+ * nom des cibles FIGÉS (une cible supprimée définitivement, ou une
+ * invitation supprimée après acceptation, reste compréhensible sans lien
+ * cassé). Une activité regroupe les actions d'une même fenêtre
+ * (`activityEventIds` : une action n'est jamais comptée deux fois).
  *
  * `expiresAt` : nul tant que non lue ; fixé à la première lecture
  * (`readAt` + rétention de la catégorie). Index TTL sur `expiresAt` pour le
@@ -65,6 +71,44 @@ export class AppNotification {
     default: null,
   })
   periodKind: SubscriptionPeriodKind | null;
+
+  /** 1-19A : auteur (`member-*`). */
+  @Prop({ type: MongooseSchema.Types.ObjectId, default: null })
+  actorId: Types.ObjectId | null;
+
+  /** 1-19A : nom de l'auteur figé à la répartition. */
+  @Prop({ type: String, default: null, maxlength: 100 })
+  actorName: string | null;
+
+  /**
+   * 1-19A : regroupement d'activité (`member-activity`). Champs à plat : un
+   * même `updateOne` peut créer (`$setOnInsert`), compter (`$inc`) et
+   * ajouter une cible (`$addToSet`) sans conflit de chemins.
+   */
+  @Prop({ type: String, enum: MemberActivityEntity, default: undefined })
+  activityEntity?: MemberActivityEntity;
+
+  @Prop({ type: String, enum: MemberActivityAction, default: undefined })
+  activityAction?: MemberActivityAction;
+
+  @Prop({ type: Number, default: undefined })
+  activityCount?: number;
+
+  @Prop({
+    type: [
+      {
+        _id: false,
+        id: { type: String, default: null },
+        name: { type: String, default: null, maxlength: 120 },
+      },
+    ],
+    default: undefined,
+  })
+  activityTargets?: Array<{ id: string | null; name: string | null }>;
+
+  /** 1-19A : actions déjà comptées dans ce regroupement (jamais exposé). */
+  @Prop({ type: [MongooseSchema.Types.ObjectId], default: undefined })
+  activityEventIds?: Types.ObjectId[];
 
   /** Heure de l'événement (horloge serveur). */
   @Prop({ type: Date, required: true })

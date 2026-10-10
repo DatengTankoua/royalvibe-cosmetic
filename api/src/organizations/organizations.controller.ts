@@ -19,6 +19,11 @@ import { InvitationCreateThrottlerGuard } from '../common/invitation-rate-limiti
 import { SKIP_PAYMENT_THROTTLERS } from '../common/subscription-payment-rate-limiting';
 import { SKIP_SUPPORT_THROTTLER } from '../support/support-rate-limiting';
 import { User } from '../users/schemas/user.schema';
+import { PushOutboxService } from '../push/push-outbox.service';
+import {
+  MemberActivityAction,
+  MemberActivityEntity,
+} from '../notifications/member-activity';
 
 /**
  * Invitations tenant-scopées (1-6B.1) : autorisation `members.invite`
@@ -30,7 +35,10 @@ import { User } from '../users/schemas/user.schema';
 @Controller('organizations/invitations')
 @RequirePermissions('members.invite')
 export class OrganizationsController {
-  constructor(private readonly organizationsService: OrganizationsService) {}
+  constructor(
+    private readonly organizationsService: OrganizationsService,
+    private readonly pushOutbox: PushOutboxService,
+  ) {}
 
   // Rate limiting (correction sécurité 1-10B) : fenêtre nommée dédiée
   // (`invitation-create`, 5 créations / 60 s), tracker utilisateur+
@@ -47,16 +55,25 @@ export class OrganizationsController {
     ...SKIP_SUPPORT_THROTTLER,
   })
   @Post()
-  create(
+  async create(
     @Body() dto: CreateInvitationDto,
     @CurrentUser() user: User,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.organizationsService.createInvitation(
+    const created = await this.organizationsService.createInvitation(
       organizationContext.organizationId,
       user._id.toString(),
       dto,
     );
+    // 1-19A : annoncée au propriétaire (adresse invitée seule, jamais le
+    // lien ni le jeton). Aucun e-mail n'est envoyé à l'invité.
+    await this.pushOutbox.memberActivity(organizationContext, {
+      entity: MemberActivityEntity.INVITATION,
+      action: MemberActivityAction.CREATED,
+      targetId: created.invitation._id,
+      targetName: created.invitation.email,
+    });
+    return created;
   }
 
   @Get()
@@ -72,13 +89,21 @@ export class OrganizationsController {
   // par défaut NestJS répond 201 — trompeur pour une mutation d'état).
   @HttpCode(200)
   @Post(':id/revoke')
-  revoke(
+  async revoke(
     @Param('id', ParseObjectIdPipe) id: string,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
-    return this.organizationsService.revokeInvitation(
+    const revoked = await this.organizationsService.revokeInvitation(
       organizationContext.organizationId,
       id,
     );
+    await this.pushOutbox.memberActivity(organizationContext, {
+      entity: MemberActivityEntity.INVITATION,
+      action: MemberActivityAction.REVOKED,
+      targetId: revoked._id,
+      targetName: revoked.email,
+      uniqueKey: id,
+    });
+    return revoked;
   }
 }

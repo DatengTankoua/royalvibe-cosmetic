@@ -19,6 +19,11 @@ import {
 } from '../storage-quota/storage-quota.service';
 import { LogoUploadInterceptor } from './logo/logo-upload.interceptor';
 import { validateLogoFile } from './logo/logo-validation';
+import { PushOutboxService } from '../push/push-outbox.service';
+import {
+  MemberActivityAction,
+  MemberActivityEntity,
+} from '../notifications/member-activity';
 
 /**
  * Branding d'organisation (1-8A). `GET` est accessible à tout membre actif
@@ -33,7 +38,16 @@ export class OrganizationBrandingController {
   constructor(
     private readonly organizationsService: OrganizationsService,
     private readonly storageQuota: StorageQuotaService,
+    private readonly pushOutbox: PushOutboxService,
   ) {}
+
+  /** 1-19A : identité visuelle modifiée par un autre membre que le propriétaire. */
+  private brandingChanged(context: ResolvedOrganizationContext): Promise<void> {
+    return this.pushOutbox.memberActivity(context, {
+      entity: MemberActivityEntity.BRANDING,
+      action: MemberActivityAction.UPDATED,
+    });
+  }
 
   @Get()
   getCurrent(
@@ -98,6 +112,7 @@ export class OrganizationBrandingController {
       if (uploaded) await this.storageQuota.discard(uploaded);
       throw err;
     }
+    await this.brandingChanged(organizationContext);
     if (!uploaded) return result.organization;
     // APRÈS sauvegarde uniquement : ancien logo du stockage courant
     // supprimé ; un logo antérieur (stockage inconnu) est laissé en place.
@@ -117,6 +132,7 @@ export class OrganizationBrandingController {
   ) {
     const organizationId = organizationContext.organizationId;
     const result = await this.organizationsService.removeLogo(organizationId);
+    await this.brandingChanged(organizationContext);
     const storageCleanup = await this.storageQuota.deleteDetached(
       organizationId,
       result.previousLogo,

@@ -19,7 +19,7 @@ const notificationsFr = {
     },
     saleCreated: {
       label: "Nouvelle vente",
-      help: "À chaque vente enregistrée (push regroupés par minute).",
+      help: "À chaque vente enregistrée par un autre membre (push regroupés par minute).",
     },
     subscriptionEnding: {
       label: "Fin d'essai ou d'abonnement",
@@ -32,6 +32,14 @@ const notificationsFr = {
     monthlyReport: {
       label: "Bilan mensuel",
       help: "Au début de chaque mois, le bilan du mois écoulé.",
+    },
+    memberJoined: {
+      label: "Nouveau membre",
+      help: "Quand une personne invitée rejoint l'entreprise.",
+    },
+    memberActivity: {
+      label: "Actions des collaborateurs",
+      help: "Créations, modifications et suppressions faites par les autres membres (regroupées par minute).",
     },
   },
   bell: {
@@ -68,6 +76,27 @@ const notificationsFr = {
     paymentConfirmed: "Paiement confirmé.",
     paymentConfirmedOn: "Paiement confirmé le {{date}}.",
     reportUnavailable: "Bilan indisponible.",
+    amountHidden:
+      "Montant et quantité visibles seulement avec le droit « Voir toutes les ventes ».",
+    member: "Membre",
+    role: "Rôle",
+    memberInactive: "Ce membre ne fait plus partie de l'entreprise.",
+    roles: {
+      owner: "Propriétaire",
+      admin: "Administrateur",
+      seller: "Vendeur",
+    },
+    author: "Auteur",
+    unknownAuthor: "Un collaborateur",
+    actionsCount_one: "{{count}} action",
+    actionsCount_many: "{{count}} actions",
+    actionsCount_other: "{{count}} actions",
+    targets: "Éléments concernés",
+    unnamed: "Élément sans nom",
+    removed: "(supprimé)",
+    moreTargets_one: "et {{count}} autre",
+    moreTargets_many: "et {{count}} autres",
+    moreTargets_other: "et {{count}} autres",
   },
   report: {
     summary_one:

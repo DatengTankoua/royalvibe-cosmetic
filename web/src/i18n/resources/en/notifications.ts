@@ -33,6 +33,14 @@ const notificationsEn: Translation<typeof notificationsFr> = {
       label: "Monthly summary",
       help: "At the start of each month, the summary of the past month.",
     },
+    memberJoined: {
+      label: "New member",
+      help: "When an invited person joins the business.",
+    },
+    memberActivity: {
+      label: "Team activity",
+      help: "Items created, changed or deleted by other members (grouped by minute).",
+    },
   },
   bell: {
     noneUnread: "Notifications, none unread",
@@ -67,6 +75,25 @@ const notificationsEn: Translation<typeof notificationsFr> = {
     paymentConfirmed: "Payment confirmed.",
     paymentConfirmedOn: "Payment confirmed on {{date}}.",
     reportUnavailable: "Summary unavailable.",
+    amountHidden:
+      "Amount and quantity are only visible with the “View all sales” permission.",
+    member: "Member",
+    role: "Role",
+    memberInactive: "This member is no longer part of the business.",
+    roles: {
+      owner: "Owner",
+      admin: "Administrator",
+      seller: "Seller",
+    },
+    author: "By",
+    unknownAuthor: "A team member",
+    actionsCount_one: "{{count}} action",
+    actionsCount_other: "{{count}} actions",
+    targets: "Affected items",
+    unnamed: "Unnamed item",
+    removed: "(deleted)",
+    moreTargets_one: "and {{count}} more",
+    moreTargets_other: "and {{count}} more",
   },
   report: {
     summary_one:

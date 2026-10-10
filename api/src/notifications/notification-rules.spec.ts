@@ -14,7 +14,13 @@ import {
   accessibleCategories,
   canAccessCategory,
 } from '../push/schemas/push-category';
-import { OrganizationRole } from '../organizations/permissions';
+import {
+  DELEGABLE_PERMISSIONS,
+  DelegablePermission,
+  OrganizationRole,
+  mergeUnknownPermissions,
+  parsePermissionCatalog,
+} from '../organizations/permissions';
 
 const id = () => new Types.ObjectId();
 const row = (name: string, units: number, deleted = false) => ({
@@ -89,6 +95,8 @@ describe('Rétention après lecture (1-16A.1)', () => {
     [PushCategory.STOCK_DEPLETED, 30 * 24],
     [PushCategory.SUBSCRIPTION_ENDING, 30 * 24],
     [PushCategory.PAYMENT_SUCCEEDED, 30 * 24],
+    [PushCategory.MEMBER_JOINED, 7 * 24],
+    [PushCategory.MEMBER_ACTIVITY, 7 * 24],
   ])('%s : %i h après lecture', (category, hours) => {
     expect(expiresAfterRead(category, read).getTime() - read.getTime()).toBe(
       hours * 3600 * 1000,
@@ -118,6 +126,7 @@ describe('Droits par catégorie (1-16A.1)', () => {
       PushCategory.STOCK_LOW,
       PushCategory.SALE_CREATED,
       PushCategory.MONTHLY_REPORT,
+      PushCategory.MEMBER_JOINED,
     ]);
     expect(
       accessibleCategories({ role: OrganizationRole.SELLER, permissions: [] }),
@@ -135,10 +144,116 @@ describe('Droits par catégorie (1-16A.1)', () => {
     };
     expect(canAccessCategory(PushCategory.STOCK_LOW, seller)).toBe(true);
     expect(canAccessCategory(PushCategory.MONTHLY_REPORT, seller)).toBe(true);
-    // Notification de vente : propriétaire ou administrateur seulement.
+    // 1-19A : CONSULTER toutes les ventes ne vaut pas les RECEVOIR.
     expect(canAccessCategory(PushCategory.SALE_CREATED, seller)).toBe(false);
     expect(canAccessCategory(PushCategory.PAYMENT_SUCCEEDED, seller)).toBe(
       false,
     );
+  });
+});
+
+describe('Droits des catégories 1-19A', () => {
+  const seller = (...permissions: DelegablePermission[]) => ({
+    role: OrganizationRole.SELLER,
+    permissions,
+  });
+
+  it('ventes : permission dédiée `sales.notifications`, jamais `sales.record` seul', () => {
+    // Droits standard (sales.record, sales.view_own) : aucune notification.
+    expect(canAccessCategory(PushCategory.SALE_CREATED, seller())).toBe(false);
+    expect(
+      canAccessCategory(PushCategory.SALE_CREATED, seller('sales.record')),
+    ).toBe(false);
+    expect(
+      canAccessCategory(
+        PushCategory.SALE_CREATED,
+        seller('sales.notifications'),
+      ),
+    ).toBe(true);
+    expect(
+      canAccessCategory(
+        PushCategory.SALE_DIGEST,
+        seller('sales.notifications'),
+      ),
+    ).toBe(true);
+    // Propriétaire et administrateur : accordée par défaut (non retirable).
+    for (const role of [OrganizationRole.OWNER, OrganizationRole.ADMIN]) {
+      expect(
+        canAccessCategory(PushCategory.SALE_CREATED, { role, permissions: [] }),
+      ).toBe(true);
+    }
+  });
+
+  it('nouveau membre : droit de la section Membres (`members.manage`)', () => {
+    expect(canAccessCategory(PushCategory.MEMBER_JOINED, seller())).toBe(false);
+    expect(
+      canAccessCategory(PushCategory.MEMBER_JOINED, seller('members.invite')),
+    ).toBe(false);
+    expect(
+      canAccessCategory(PushCategory.MEMBER_JOINED, seller('members.manage')),
+    ).toBe(true);
+    expect(
+      canAccessCategory(PushCategory.MEMBER_JOINED, {
+        role: OrganizationRole.OWNER,
+        permissions: [],
+      }),
+    ).toBe(true);
+  });
+
+  it('activité des membres : propriétaire réel seulement, aucune permission ne l’ouvre', () => {
+    expect(
+      canAccessCategory(PushCategory.MEMBER_ACTIVITY, {
+        role: OrganizationRole.OWNER,
+        permissions: [],
+      }),
+    ).toBe(true);
+    expect(
+      canAccessCategory(PushCategory.MEMBER_ACTIVITY, {
+        role: OrganizationRole.ADMIN,
+        permissions: [...DELEGABLE_PERMISSIONS],
+      }),
+    ).toBe(false);
+    expect(
+      canAccessCategory(
+        PushCategory.MEMBER_ACTIVITY,
+        seller(...DELEGABLE_PERMISSIONS),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('Catalogue de permissions du formulaire (1-19A)', () => {
+  it('formulaire antérieur (catalogue 1) : `sales.notifications` jamais retirée à son insu', () => {
+    expect(
+      mergeUnknownPermissions(
+        ['analytics.read'],
+        ['sales.notifications', 'audit.read'],
+        1,
+      ),
+    ).toEqual(['analytics.read', 'sales.notifications']);
+  });
+
+  it('formulaire actuel (catalogue 2) : la liste envoyée fait foi (retrait possible)', () => {
+    expect(
+      mergeUnknownPermissions(['analytics.read'], ['sales.notifications'], 2),
+    ).toEqual(['analytics.read']);
+  });
+
+  it('aucun ajout : seules les permissions déjà accordées sont conservées', () => {
+    expect(mergeUnknownPermissions([], [], 1)).toEqual([]);
+    expect(
+      mergeUnknownPermissions(
+        ['sales.notifications'],
+        ['sales.notifications'],
+        1,
+      ),
+    ).toEqual(['sales.notifications']);
+  });
+
+  it('déclaration absente ou invalide → catalogue 1', () => {
+    expect(parsePermissionCatalog(undefined)).toBe(1);
+    expect(parsePermissionCatalog('abc')).toBe(1);
+    expect(parsePermissionCatalog('99')).toBe(1);
+    expect(parsePermissionCatalog('2')).toBe(2);
   });
 });

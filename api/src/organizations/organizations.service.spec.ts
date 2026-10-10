@@ -694,6 +694,7 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
     create: jest.Mock;
     find: jest.Mock;
     findOneAndUpdate: jest.Mock;
+    findOneAndDelete: jest.Mock;
   };
   let membershipModel: { findOne: jest.Mock };
   let usersService: { findByEmail: jest.Mock };
@@ -745,6 +746,7 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
         sort: () => ({ exec: () => Promise.resolve([]) }),
       })),
       findOneAndUpdate: jest.fn(() => ({ exec: () => Promise.resolve(null) })),
+      findOneAndDelete: jest.fn(() => ({ exec: () => Promise.resolve(null) })),
     };
     membershipByUserId = new Map([[OWNER_ID, ownerActor()]]);
     membershipModel = {
@@ -1245,12 +1247,12 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
     });
 
     it('révocation : signal si révoquée, aucun sur 404', async () => {
-      await build(); // findOneAndUpdate résout null par défaut
+      await build(); // findOneAndDelete résout null par défaut
       await service
         .revokeInvitation(ORG_OBJECT_ID, INVITATION_ID)
         .catch(() => undefined);
       expect(lastRegistry.signalOrganization).not.toHaveBeenCalled();
-      invitationModel.findOneAndUpdate.mockReturnValue({
+      invitationModel.findOneAndDelete.mockReturnValue({
         exec: () => Promise.resolve(invitationDoc()),
       });
       await service.revokeInvitation(ORG_OBJECT_ID, INVITATION_ID);
@@ -1282,27 +1284,27 @@ describe('OrganizationsService — invitations (1-6B.1)', () => {
   });
 
   describe('revokeInvitation', () => {
-    it('filtre exact { _id, organizationId, status: pending }', async () => {
+    it('1-19A : suppression conditionnelle { _id, organizationId, status: pending }, réponse `revoked`', async () => {
       await build();
-      invitationModel.findOneAndUpdate.mockReturnValue({
+      invitationModel.findOneAndDelete.mockReturnValue({
         exec: () => Promise.resolve(invitationDoc()),
       });
 
-      await service.revokeInvitation(ORG_OBJECT_ID, INVITATION_ID);
+      const view = await service.revokeInvitation(ORG_OBJECT_ID, INVITATION_ID);
 
-      expect(invitationModel.findOneAndUpdate).toHaveBeenCalledWith(
-        {
-          _id: new Types.ObjectId(INVITATION_ID),
-          organizationId: new Types.ObjectId(ORG_OBJECT_ID),
-          status: InvitationStatus.PENDING,
-        },
-        { status: InvitationStatus.REVOKED },
-        { new: true },
-      );
+      expect(invitationModel.findOneAndDelete).toHaveBeenCalledWith({
+        _id: new Types.ObjectId(INVITATION_ID),
+        organizationId: new Types.ObjectId(ORG_OBJECT_ID),
+        status: InvitationStatus.PENDING,
+      });
+      // Jamais un passage en `revoked` conservé dans la collection.
+      expect(invitationModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(view.status).toBe(InvitationStatus.REVOKED);
+      expect(JSON.stringify(view)).not.toContain('tokenHash');
     });
 
     it('invitation étrangère (autre org) ou absente → même 404', async () => {
-      await build(); // findOneAndUpdate résout null par défaut
+      await build(); // findOneAndDelete résout null par défaut
 
       const foreign: unknown = await service
         .revokeInvitation(OTHER_ORG_ID, INVITATION_ID)
