@@ -1,0 +1,59 @@
+{
+  "at": "2026-10-10T02:01:46.323Z",
+  "since": "2026-10-10T01:06:04.177Z",
+  "checks": {
+    "drain": {
+      "ok": true,
+      "jobs": 0,
+      "deliveriesDue": 0,
+      "deliveriesWaitingForGroupingWindow": 0,
+      "waitedS": 0
+    },
+    "stock": {
+      "ok": true,
+      "products": 1068,
+      "negative": 0,
+      "mismatched": 0,
+      "sample": []
+    },
+    "salesAudit": {
+      "ok": true,
+      "salesSince": 3807,
+      "soldAudits": 4248,
+      "cancelledAudits": 441,
+      "salesWithoutAudit": 0,
+      "orphanSold": 0,
+      "cancelledStillPresent": 0,
+      "crossOrganizationSales": 0
+    },
+    "notifications": {
+      "ok": true,
+      "notificationsSince": 9105,
+      "duplicateEventRecipient": 0,
+      "foreignRecipients": 0,
+      "saleJobs": 4248,
+      "saleJobsDispatched": 3807,
+      "saleJobsCancelled": 441,
+      "salesChecked": 3807,
+      "authorNotified": 0,
+      "wrongOrganization": 0,
+      "missingRecipients": 0,
+      "unexpectedRecipients": 0
+    },
+    "pushDeliveries": {
+      "ok": true,
+      "deliveries": 266,
+      "byStatus": {
+        "sent": 266
+      },
+      "duplicates": 0,
+      "foreignDevices": 0
+    }
+  },
+  "memberActivity": {
+    "jobs": 13433,
+    "notifications": 172,
+    "note": "best effort après l’action (1-19A §3) : un arrêt du processus entre action et enregistrement perd la notification ; non vérifiable exactement par comptage."
+  },
+  "ok": true
+}

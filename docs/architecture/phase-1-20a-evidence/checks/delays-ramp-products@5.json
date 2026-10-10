@@ -1,0 +1,40 @@
+{
+  "from": "2026-10-10T01:18:18.299Z",
+  "to": "2026-10-10T01:19:00.895Z",
+  "categories": {
+    "member-activity": {
+      "jobs": 522,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 522,
+        "p50S": 527.9,
+        "p95S": 539.1,
+        "p99S": 539.7,
+        "maxS": 539.9
+      },
+      "center": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "grouping": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "pushLate": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "deliveries": 0,
+      "deliveriesSent": 0
+    }
+  }
+}

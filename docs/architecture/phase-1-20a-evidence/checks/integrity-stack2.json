@@ -1,0 +1,67 @@
+{
+  "at": "2026-10-10T02:13:26.016Z",
+  "since": "2026-10-10T02:02:12.329Z",
+  "checks": {
+    "drain": {
+      "ok": true,
+      "jobs": 0,
+      "deliveriesDue": 0,
+      "deliveriesWaitingForGroupingWindow": 0,
+      "waitedS": 0
+    },
+    "stock": {
+      "ok": true,
+      "products": 1068,
+      "negative": 0,
+      "mismatched": 0,
+      "sample": []
+    },
+    "salesAudit": {
+      "ok": true,
+      "salesSince": 387,
+      "soldAudits": 433,
+      "cancelledAudits": 46,
+      "salesWithoutAudit": 0,
+      "orphanSold": 0,
+      "cancelledStillPresent": 0,
+      "crossOrganizationSales": 0
+    },
+    "notifications": {
+      "ok": true,
+      "notificationsSince": 1079,
+      "duplicateEventRecipient": 0,
+      "foreignRecipients": 0,
+      "saleJobs": 433,
+      "saleJobsDispatched": 387,
+      "saleJobsCancelled": 46,
+      "salesChecked": 387,
+      "authorNotified": 0,
+      "wrongOrganization": 0,
+      "missingRecipients": 0,
+      "unexpectedRecipients": 0
+    },
+    "membership": {
+      "ok": true,
+      "joiners": 3,
+      "memberships": 3,
+      "duplicateNotifications": 0,
+      "missingManagers": 0,
+      "foreignRecipients": 0
+    },
+    "pushDeliveries": {
+      "ok": true,
+      "deliveries": 215,
+      "byStatus": {
+        "sent": 215
+      },
+      "duplicates": 0,
+      "foreignDevices": 0
+    }
+  },
+  "memberActivity": {
+    "jobs": 985,
+    "notifications": 148,
+    "note": "best effort après l’action (1-19A §3) : un arrêt du processus entre action et enregistrement perd la notification ; non vérifiable exactement par comptage."
+  },
+  "ok": true
+}

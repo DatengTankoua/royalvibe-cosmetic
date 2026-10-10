@@ -1,0 +1,210 @@
+{
+  "from": "2026-10-10T05:47:50.256Z",
+  "to": "2026-10-10T05:50:56.467Z",
+  "categories": {
+    "member-activity": {
+      "jobs": 463,
+      "pendingAtRead": 57,
+      "dispatch": {
+        "n": 324,
+        "p50S": 52.8,
+        "p95S": 58.9,
+        "p99S": 61.1,
+        "maxS": 61.7
+      },
+      "center": {
+        "n": 82,
+        "p50S": 1.7,
+        "p95S": 50.7,
+        "p99S": 50.8,
+        "maxS": 50.8
+      },
+      "grouping": {
+        "n": 82,
+        "p50S": 0,
+        "p95S": 0,
+        "p99S": 0,
+        "maxS": 0
+      },
+      "pushLate": {
+        "n": 82,
+        "p50S": 4.7,
+        "p95S": 52.9,
+        "p99S": 54.4,
+        "maxS": 54.4
+      },
+      "deliveries": 82,
+      "deliveriesSent": 82
+    },
+    "sale-digest": {
+      "jobs": 21,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "center": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "grouping": {
+        "n": 45,
+        "p50S": 0,
+        "p95S": 0,
+        "p99S": 0,
+        "maxS": 0
+      },
+      "pushLate": {
+        "n": 45,
+        "p50S": 3,
+        "p95S": 4,
+        "p99S": 4.6,
+        "maxS": 4.6
+      },
+      "deliveries": 45,
+      "deliveriesSent": 45
+    },
+    "sale-created": {
+      "jobs": 572,
+      "pendingAtRead": 46,
+      "dispatch": {
+        "n": 526,
+        "p50S": 53,
+        "p95S": 58,
+        "p99S": 60.8,
+        "maxS": 61.7
+      },
+      "center": {
+        "n": 474,
+        "p50S": 52.8,
+        "p95S": 57.8,
+        "p99S": 60.1,
+        "maxS": 61.5
+      },
+      "grouping": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "pushLate": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "deliveries": 0,
+      "deliveriesSent": 0
+    },
+    "stock-low": {
+      "jobs": 2,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 2,
+        "p50S": 55.9,
+        "p95S": 55.9,
+        "p99S": 55.9,
+        "maxS": 55.9
+      },
+      "center": {
+        "n": 1,
+        "p50S": 52.9,
+        "p95S": 52.9,
+        "p99S": 52.9,
+        "maxS": 52.9
+      },
+      "grouping": {
+        "n": 3,
+        "p50S": 52.9,
+        "p95S": 52.9,
+        "p99S": 52.9,
+        "maxS": 52.9
+      },
+      "pushLate": {
+        "n": 3,
+        "p50S": 0.4,
+        "p95S": 0.4,
+        "p99S": 0.4,
+        "maxS": 0.4
+      },
+      "deliveries": 3,
+      "deliveriesSent": 3
+    },
+    "stock-depleted": {
+      "jobs": 2,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 2,
+        "p50S": 58,
+        "p95S": 58,
+        "p99S": 58,
+        "maxS": 58
+      },
+      "center": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "grouping": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "pushLate": {
+        "n": 0,
+        "p50S": null,
+        "p95S": null,
+        "p99S": null,
+        "maxS": null
+      },
+      "deliveries": 0,
+      "deliveriesSent": 0
+    },
+    "member-joined": {
+      "jobs": 3,
+      "pendingAtRead": 0,
+      "dispatch": {
+        "n": 3,
+        "p50S": 55.6,
+        "p95S": 55.8,
+        "p99S": 55.8,
+        "maxS": 55.8
+      },
+      "center": {
+        "n": 3,
+        "p50S": 55.6,
+        "p95S": 55.7,
+        "p99S": 55.7,
+        "maxS": 55.7
+      },
+      "grouping": {
+        "n": 6,
+        "p50S": 55.6,
+        "p95S": 55.7,
+        "p99S": 55.7,
+        "maxS": 55.7
+      },
+      "pushLate": {
+        "n": 6,
+        "p50S": 1.5,
+        "p95S": 1.5,
+        "p99S": 1.5,
+        "maxS": 1.5
+      },
+      "deliveries": 6,
+      "deliveriesSent": 6
+    }
+  }
+}

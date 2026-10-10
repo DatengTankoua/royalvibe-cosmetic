@@ -1,0 +1,735 @@
+{
+  "stop": {
+    "unexpectedErrorRate": 0.01,
+    "routeP95Ms": 1500,
+    "routeP99Ms": 3000,
+    "minRouteSamples": 20,
+    "achievedOfferedRatio": 0.9,
+    "heapRatio": 0.8,
+    "hostFreeMbMin": 250,
+    "eldP99MedianMs": 250,
+    "dbAvgLatencyMs": 50,
+    "poolWaitP99Ms": 200,
+    "generatorCores": 4
+  },
+  "limits": {
+    "apiHeapMb": 1024,
+    "wiredTigerCacheGb": 0.5
+  },
+  "results": [
+    {
+      "label": "mixed-ramp",
+      "scenario": "mixed",
+      "target": "multi",
+      "vus": 5,
+      "durationS": 60,
+      "paceS": null,
+      "think": true,
+      "windowS": 63,
+      "from": "2026-10-10T05:43:00.854Z",
+      "to": "2026-10-10T05:44:03.370Z",
+      "k6": {
+        "requests": 406,
+        "reqPerS": 6.8,
+        "iterations": 71,
+        "offeredIterPerS": null,
+        "obtainedIterPerS": 1.18,
+        "lateIterationsRate": 100,
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "product_restore": {
+            "n": 18,
+            "p50": 20.7,
+            "p95": 26.8,
+            "p99": 28.6,
+            "max": 29
+          },
+          "notifications_read": {
+            "n": 6,
+            "p50": 13.9,
+            "p95": 24.4,
+            "p99": 26.4,
+            "max": 27
+          },
+          "sales_history": {
+            "n": 17,
+            "p50": 47.8,
+            "p95": 76.1,
+            "p99": 78,
+            "max": 78.5
+          },
+          "product_detail": {
+            "n": 58,
+            "p50": 24.1,
+            "p95": 104.1,
+            "p99": 121.1,
+            "max": 124.5
+          },
+          "product_trash": {
+            "n": 18,
+            "p50": 26.1,
+            "p95": 40.6,
+            "p99": 41.9,
+            "max": 42.3
+          },
+          "sales_cancel": {
+            "n": 7,
+            "p50": 19.4,
+            "p95": 22.7,
+            "p99": 22.7,
+            "max": 22.7
+          },
+          "notifications_list": {
+            "n": 24,
+            "p50": 7.4,
+            "p95": 13.7,
+            "p99": 41.2,
+            "max": 49.3
+          },
+          "sections_list": {
+            "n": 58,
+            "p50": 6.8,
+            "p95": 30.6,
+            "p99": 36.8,
+            "max": 42.6
+          },
+          "sales_create": {
+            "n": 47,
+            "p50": 16.8,
+            "p95": 32.3,
+            "p99": 66.1,
+            "max": 71.1
+          },
+          "products_by_section": {
+            "n": 58,
+            "p50": 13.1,
+            "p95": 161.3,
+            "p99": 300.8,
+            "max": 336.9
+          },
+          "product_update": {
+            "n": 13,
+            "p50": 31,
+            "p95": 40.8,
+            "p99": 43.7,
+            "max": 44.4
+          },
+          "products_list": {
+            "n": 58,
+            "p50": 48.1,
+            "p95": 249.1,
+            "p99": 422,
+            "max": 477.1
+          },
+          "notifications_unread": {
+            "n": 24,
+            "p50": 7.2,
+            "p95": 11,
+            "p99": 13,
+            "max": 13.6
+          }
+        }
+      },
+      "api": {
+        "cpuPctAvg": 18.49,
+        "cpuPctMax": 95.5,
+        "rssMbMax": 168,
+        "heapUsedMbMax": 89,
+        "eldP99MsMedian": 19.9,
+        "eldMaxMs": 202.5,
+        "socketsMax": 0,
+        "poolMaxInUse": 5,
+        "poolWaitP99MsMax": 0.5,
+        "poolFailed": 0
+      },
+      "db": {
+        "connectionsMax": 13,
+        "reads": {
+          "ops": 3609,
+          "avgMs": 0.52
+        },
+        "writes": {
+          "ops": 918,
+          "avgMs": 3.06
+        },
+        "txCommitted": 54,
+        "txAborted": 0,
+        "cacheMbMax": 26,
+        "pendingJobsMax": 18,
+        "oldestPendingJobAgeSMax": 5,
+        "dueDeliveriesMax": 0,
+        "oldestDueDeliveryLateSMax": 0
+      },
+      "proc": {
+        "apiCoresAvg": 0.18,
+        "apiCoresMax": 0.38,
+        "mongodCoresAvg": 0.05,
+        "mongodCoresMax": 0.11,
+        "mongodWsMbMax": 209,
+        "k6CoresAvg": 0,
+        "k6CoresMax": 0.01,
+        "k6WsMbMax": 39,
+        "hostFreeMbMin": 340
+      },
+      "verdict": {
+        "reasons": [],
+        "warnings": []
+      }
+    },
+    {
+      "label": "mixed-ramp",
+      "scenario": "mixed",
+      "target": "multi",
+      "vus": 10,
+      "durationS": 60,
+      "paceS": null,
+      "think": true,
+      "windowS": 67,
+      "from": "2026-10-10T05:44:08.391Z",
+      "to": "2026-10-10T05:45:15.123Z",
+      "k6": {
+        "requests": 790,
+        "reqPerS": 13.2,
+        "iterations": 141,
+        "offeredIterPerS": null,
+        "obtainedIterPerS": 2.35,
+        "lateIterationsRate": 100,
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "products_by_section": {
+            "n": 108,
+            "p50": 12.5,
+            "p95": 184.9,
+            "p99": 356.1,
+            "max": 390.5
+          },
+          "sales_history": {
+            "n": 45,
+            "p50": 143.3,
+            "p95": 180.5,
+            "p99": 288.5,
+            "max": 372.8
+          },
+          "sections_list": {
+            "n": 108,
+            "p50": 6,
+            "p95": 35.1,
+            "p99": 53.4,
+            "max": 62.3
+          },
+          "notifications_list": {
+            "n": 45,
+            "p50": 6.7,
+            "p95": 28.4,
+            "p99": 52.8,
+            "max": 56.4
+          },
+          "analytics_insights": {
+            "n": 24,
+            "p50": 39.6,
+            "p95": 84.3,
+            "p99": 107.8,
+            "max": 113.9
+          },
+          "product_detail": {
+            "n": 108,
+            "p50": 23.7,
+            "p95": 122.3,
+            "p99": 137.3,
+            "max": 149.9
+          },
+          "sales_create": {
+            "n": 96,
+            "p50": 15.9,
+            "p95": 71.1,
+            "p99": 138.2,
+            "max": 817.9
+          },
+          "analytics_overview": {
+            "n": 24,
+            "p50": 37.8,
+            "p95": 72.8,
+            "p99": 270.1,
+            "max": 327.4
+          },
+          "product_restore": {
+            "n": 3,
+            "p50": 21,
+            "p95": 21,
+            "p99": 21,
+            "max": 21
+          },
+          "sales_cancel": {
+            "n": 10,
+            "p50": 17.2,
+            "p95": 42.1,
+            "p99": 55.5,
+            "max": 58.8
+          },
+          "notifications_unread": {
+            "n": 45,
+            "p50": 6,
+            "p95": 8.7,
+            "p99": 10.1,
+            "max": 10.6
+          },
+          "products_list": {
+            "n": 108,
+            "p50": 46.6,
+            "p95": 192.1,
+            "p99": 429.4,
+            "max": 513.2
+          },
+          "product_update": {
+            "n": 9,
+            "p50": 28.3,
+            "p95": 31.8,
+            "p99": 31.8,
+            "max": 31.8
+          },
+          "notifications_read": {
+            "n": 30,
+            "p50": 11,
+            "p95": 49.3,
+            "p99": 98,
+            "max": 117
+          },
+          "analytics_monthly": {
+            "n": 24,
+            "p50": 16.5,
+            "p95": 25.3,
+            "p99": 197.5,
+            "max": 248.7
+          },
+          "product_trash": {
+            "n": 3,
+            "p50": 26.3,
+            "p95": 26.3,
+            "p99": 26.3,
+            "max": 26.3
+          }
+        }
+      },
+      "api": {
+        "cpuPctAvg": 30.68,
+        "cpuPctMax": 91.5,
+        "rssMbMax": 197,
+        "heapUsedMbMax": 108,
+        "eldP99MsMedian": 43.1,
+        "eldMaxMs": 216.7,
+        "socketsMax": 0,
+        "poolMaxInUse": 13,
+        "poolWaitP99MsMax": 13.2,
+        "poolFailed": 0
+      },
+      "db": {
+        "connectionsMax": 19,
+        "reads": {
+          "ops": 6510,
+          "avgMs": 0.96
+        },
+        "writes": {
+          "ops": 1294,
+          "avgMs": 2.45
+        },
+        "txCommitted": 106,
+        "txAborted": 0,
+        "cacheMbMax": 28,
+        "pendingJobsMax": 16,
+        "oldestPendingJobAgeSMax": 5,
+        "dueDeliveriesMax": 19,
+        "oldestDueDeliveryLateSMax": 4
+      },
+      "proc": {
+        "apiCoresAvg": 0.31,
+        "apiCoresMax": 0.51,
+        "mongodCoresAvg": 0.12,
+        "mongodCoresMax": 0.22,
+        "mongodWsMbMax": 212,
+        "k6CoresAvg": 0.02,
+        "k6CoresMax": 0.03,
+        "k6WsMbMax": 57,
+        "hostFreeMbMin": 436
+      },
+      "verdict": {
+        "reasons": [],
+        "warnings": []
+      }
+    },
+    {
+      "label": "mixed-ramp",
+      "scenario": "mixed",
+      "target": "multi",
+      "vus": 25,
+      "durationS": 60,
+      "paceS": null,
+      "think": true,
+      "windowS": 66,
+      "from": "2026-10-10T05:45:20.145Z",
+      "to": "2026-10-10T05:46:26.638Z",
+      "k6": {
+        "requests": 2172,
+        "reqPerS": 36.2,
+        "iterations": 357,
+        "offeredIterPerS": null,
+        "obtainedIterPerS": 5.95,
+        "lateIterationsRate": 100,
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "sales_cancel": {
+            "n": 17,
+            "p50": 32.6,
+            "p95": 263.3,
+            "p99": 295.9,
+            "max": 304.1
+          },
+          "analytics_insights": {
+            "n": 93,
+            "p50": 72.7,
+            "p95": 380.7,
+            "p99": 715.3,
+            "max": 756.7
+          },
+          "sales_history": {
+            "n": 149,
+            "p50": 179.8,
+            "p95": 579.2,
+            "p99": 778.9,
+            "max": 1014.9
+          },
+          "product_restore": {
+            "n": 36,
+            "p50": 32.7,
+            "p95": 208.5,
+            "p99": 221.9,
+            "max": 229.1
+          },
+          "products_by_section": {
+            "n": 228,
+            "p50": 25.9,
+            "p95": 583.1,
+            "p99": 882.7,
+            "max": 1001.4
+          },
+          "products_list": {
+            "n": 228,
+            "p50": 70.4,
+            "p95": 636.7,
+            "p99": 1042.8,
+            "max": 1265.4
+          },
+          "sales_create": {
+            "n": 178,
+            "p50": 60,
+            "p95": 407.3,
+            "p99": 502.7,
+            "max": 591.4
+          },
+          "notifications_list": {
+            "n": 179,
+            "p50": 27.9,
+            "p95": 213.8,
+            "p99": 398.4,
+            "max": 424.4
+          },
+          "product_update": {
+            "n": 36,
+            "p50": 43.2,
+            "p95": 185.1,
+            "p99": 248.6,
+            "max": 276.1
+          },
+          "analytics_monthly": {
+            "n": 93,
+            "p50": 28.1,
+            "p95": 392.9,
+            "p99": 929.3,
+            "max": 931.7
+          },
+          "product_detail": {
+            "n": 228,
+            "p50": 57.5,
+            "p95": 354.2,
+            "p99": 578.3,
+            "max": 671.5
+          },
+          "notifications_unread": {
+            "n": 179,
+            "p50": 13,
+            "p95": 178.6,
+            "p99": 226.3,
+            "max": 244.2
+          },
+          "notifications_read": {
+            "n": 171,
+            "p50": 19.1,
+            "p95": 151.8,
+            "p99": 169.4,
+            "max": 197.4
+          },
+          "product_trash": {
+            "n": 36,
+            "p50": 35.1,
+            "p95": 130.7,
+            "p99": 131.5,
+            "max": 131.7
+          },
+          "analytics_overview": {
+            "n": 93,
+            "p50": 73.4,
+            "p95": 202.8,
+            "p99": 249.9,
+            "max": 323.2
+          },
+          "sections_list": {
+            "n": 228,
+            "p50": 18.3,
+            "p95": 310.5,
+            "p99": 441.1,
+            "max": 449.2
+          }
+        }
+      },
+      "api": {
+        "cpuPctAvg": 101.24,
+        "cpuPctMax": 165.4,
+        "rssMbMax": 247,
+        "heapUsedMbMax": 150,
+        "eldP99MsMedian": 87.7,
+        "eldMaxMs": 282.1,
+        "socketsMax": 0,
+        "poolMaxInUse": 27,
+        "poolWaitP99MsMax": 67.5,
+        "poolFailed": 0
+      },
+      "db": {
+        "connectionsMax": 35,
+        "reads": {
+          "ops": 17530,
+          "avgMs": 1.39
+        },
+        "writes": {
+          "ops": 3044,
+          "avgMs": 2.85
+        },
+        "txCommitted": 195,
+        "txAborted": 0,
+        "cacheMbMax": 33,
+        "pendingJobsMax": 48,
+        "oldestPendingJobAgeSMax": 8,
+        "dueDeliveriesMax": 31,
+        "oldestDueDeliveryLateSMax": 6
+      },
+      "proc": {
+        "apiCoresAvg": 1.01,
+        "apiCoresMax": 1.43,
+        "mongodCoresAvg": 0.44,
+        "mongodCoresMax": 0.7,
+        "mongodWsMbMax": 228,
+        "k6CoresAvg": 0.03,
+        "k6CoresMax": 0.06,
+        "k6WsMbMax": 104,
+        "hostFreeMbMin": 625
+      },
+      "verdict": {
+        "reasons": [],
+        "warnings": []
+      }
+    },
+    {
+      "label": "mixed-ramp",
+      "scenario": "mixed",
+      "target": "multi",
+      "vus": 50,
+      "durationS": 60,
+      "paceS": null,
+      "think": true,
+      "windowS": 68,
+      "from": "2026-10-10T05:46:31.645Z",
+      "to": "2026-10-10T05:47:39.609Z",
+      "k6": {
+        "requests": 2957,
+        "reqPerS": 49.3,
+        "iterations": 508,
+        "offeredIterPerS": null,
+        "obtainedIterPerS": 8.47,
+        "lateIterationsRate": 100,
+        "unexpectedErrors": 1,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "analytics_monthly": {
+            "n": 91,
+            "p50": 245.1,
+            "p95": 859.3,
+            "p99": 2483.3,
+            "max": 2593.3
+          },
+          "sections_list": {
+            "n": 359,
+            "p50": 213.5,
+            "p95": 550.8,
+            "p99": 746.4,
+            "max": 943
+          },
+          "products_by_section": {
+            "n": 359,
+            "p50": 230.8,
+            "p95": 1612.1,
+            "p99": 2112.4,
+            "max": 2430.3
+          },
+          "analytics_insights": {
+            "n": 91,
+            "p50": 293.9,
+            "p95": 836.4,
+            "p99": 2299.3,
+            "max": 2430.5
+          },
+          "notifications_read": {
+            "n": 166,
+            "p50": 307.2,
+            "p95": 647.8,
+            "p99": 755.6,
+            "max": 794.4
+          },
+          "product_restore": {
+            "n": 54,
+            "p50": 276.8,
+            "p95": 593.7,
+            "p99": 629.4,
+            "max": 629.4
+          },
+          "sales_cancel": {
+            "n": 24,
+            "p50": 465.9,
+            "p95": 930.1,
+            "p99": 973.8,
+            "max": 976.3
+          },
+          "product_trash": {
+            "n": 54,
+            "p50": 314.3,
+            "p95": 1082,
+            "p99": 1268.1,
+            "max": 1280.8
+          },
+          "product_detail": {
+            "n": 359,
+            "p50": 369.3,
+            "p95": 716.7,
+            "p99": 985.2,
+            "max": 1242.1
+          },
+          "notifications_list": {
+            "n": 201,
+            "p50": 244,
+            "p95": 592.7,
+            "p99": 925.8,
+            "max": 1004.9
+          },
+          "notifications_unread": {
+            "n": 201,
+            "p50": 245.8,
+            "p95": 577.4,
+            "p99": 747.2,
+            "max": 976.4
+          },
+          "sales_history": {
+            "n": 183,
+            "p50": 484.5,
+            "p95": 1042.3,
+            "p99": 1269.1,
+            "max": 1482.1
+          },
+          "product_update": {
+            "n": 58,
+            "p50": 441.7,
+            "p95": 976.4,
+            "p99": 1719,
+            "max": 2086.4
+          },
+          "analytics_overview": {
+            "n": 91,
+            "p50": 240.4,
+            "p95": 530,
+            "p99": 711.6,
+            "max": 777.9
+          },
+          "sales_create": {
+            "n": 307,
+            "p50": 462.9,
+            "p95": 942.5,
+            "p99": 1194.8,
+            "max": 1517.3
+          },
+          "products_list": {
+            "n": 359,
+            "p50": 321.4,
+            "p95": 1396.2,
+            "p99": 2224.5,
+            "max": 2800.6
+          }
+        }
+      },
+      "api": {
+        "cpuPctAvg": 129.34,
+        "cpuPctMax": 176.6,
+        "rssMbMax": 276,
+        "heapUsedMbMax": 148,
+        "eldP99MsMedian": 158.6,
+        "eldMaxMs": 877.7,
+        "socketsMax": 0,
+        "poolMaxInUse": 48,
+        "poolWaitP99MsMax": 368.1,
+        "poolFailed": 0
+      },
+      "db": {
+        "connectionsMax": 55,
+        "reads": {
+          "ops": 20274,
+          "avgMs": 1.43
+        },
+        "writes": {
+          "ops": 2959,
+          "avgMs": 2.02
+        },
+        "txCommitted": 330,
+        "txAborted": 1,
+        "cacheMbMax": 37,
+        "pendingJobsMax": 410,
+        "oldestPendingJobAgeSMax": 50,
+        "dueDeliveriesMax": 36,
+        "oldestDueDeliveryLateSMax": 33
+      },
+      "proc": {
+        "apiCoresAvg": 1.27,
+        "apiCoresMax": 1.61,
+        "mongodCoresAvg": 0.49,
+        "mongodCoresMax": 0.73,
+        "mongodWsMbMax": 151,
+        "k6CoresAvg": 0.04,
+        "k6CoresMax": 0.08,
+        "k6WsMbMax": 136,
+        "hostFreeMbMin": 696
+      },
+      "verdict": {
+        "reasons": [
+          "p95 products_by_section = 1612.1 ms",
+          "attente pool 368.1 ms"
+        ],
+        "warnings": []
+      }
+    }
+  ]
+}

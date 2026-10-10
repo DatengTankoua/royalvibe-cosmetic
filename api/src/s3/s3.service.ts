@@ -10,6 +10,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'crypto';
+import { SignedUrlCache } from './signed-url-cache';
 
 /**
  * Référence DURABLE d'un objet stocké (R2) : la clé ET l'identité du
@@ -65,6 +66,15 @@ export const ORGANIZATIONS_PREFIX = 'organizations/';
 export const DEFAULT_SIGNED_URL_TTL_SECONDS = 900;
 const MIN_SIGNED_URL_TTL_SECONDS = 60;
 const MAX_SIGNED_URL_TTL_SECONDS = 3600;
+/**
+ * 1-20C — Réutilisation d'une URL signée : au plus le TIERS de sa validité
+ * après signature (300 s pour 900 s). Toute URL délivrée garde donc au moins
+ * les deux tiers de sa validité (≥ 600 s par défaut), au-delà du délai de
+ * 5 min entre deux renouvellements d'une même image côté web.
+ */
+export const SIGNED_URL_REUSE_FRACTION = 1 / 3;
+/** 1-20C — Entrées au plus (≈ 0,6 Ko par URL : quelques Mo). */
+export const SIGNED_URL_CACHE_MAX_ENTRIES = 10_000;
 
 type ChecksumMode = 'WHEN_SUPPORTED' | 'WHEN_REQUIRED';
 
@@ -168,6 +178,10 @@ export class S3Service {
   /** Identité du stockage courant ; `null` si endpoint/bucket absents. */
   readonly storage: string | null;
   readonly signedUrlTtlSeconds: number;
+  /** 1-20C : URL GET signées réutilisées (bornées, voir `SignedUrlCache`). */
+  private readonly signedUrls: SignedUrlCache;
+  /** 1-20C : tout ce qui, hors clé d'objet, détermine la signature. */
+  private readonly signingContext: string;
 
   constructor(private configService: ConfigService) {
     this.bucket = this.configService.get<string>('S3_BUCKET') ?? '';
@@ -207,6 +221,22 @@ export class S3Service {
     this.signingClient = signingEndpoint
       ? clientFor(signingEndpoint)
       : this.s3Client;
+    this.signingContext = JSON.stringify([
+      this.storage,
+      this.bucket,
+      signingEndpoint ?? endpoint ?? null,
+      this.configService.get<string>('S3_REGION') ?? null,
+      this.configService.get<string>('S3_ACCESS_KEY') ?? '',
+      this.configService.get<string>('S3_FORCE_PATH_STYLE') === 'true',
+      checksum,
+      this.signedUrlTtlSeconds,
+    ]);
+    this.signedUrls = new SignedUrlCache({
+      maxEntries: SIGNED_URL_CACHE_MAX_ENTRIES,
+      reuseMs: Math.floor(
+        this.signedUrlTtlSeconds * 1000 * SIGNED_URL_REUSE_FRACTION,
+      ),
+    });
   }
 
   /**
@@ -336,16 +366,22 @@ export class S3Service {
   ): Promise<string | null> {
     if (!ref || !this.storage || ref.storage !== this.storage) return null;
     if (!isWithinPrefix(ref.key, allowedPrefix)) return null;
-    try {
-      return await getSignedUrl(
-        this.signingClient,
-        new GetObjectCommand({ Bucket: this.bucket, Key: ref.key }),
-        { expiresIn: this.signedUrlTtlSeconds },
-      );
-    } catch {
-      this.logger.warn('Signature de lecture impossible');
-      return null;
-    }
+    // 1-20C : contrôles ci-dessus TOUJOURS exécutés ; seule la signature
+    // est réutilisée (clé d'objet immuable : une nouvelle photo a une
+    // nouvelle clé). Échec : `null`, jamais mis en cache.
+    const key = `${this.signingContext}\u0000${ref.key}`;
+    return this.signedUrls.get(key, async () => {
+      try {
+        return await getSignedUrl(
+          this.signingClient,
+          new GetObjectCommand({ Bucket: this.bucket, Key: ref.key }),
+          { expiresIn: this.signedUrlTtlSeconds },
+        );
+      } catch {
+        this.logger.warn('Signature de lecture impossible');
+        return null;
+      }
+    });
   }
 
   /**
