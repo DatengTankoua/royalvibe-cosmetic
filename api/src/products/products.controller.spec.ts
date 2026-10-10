@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import sharp from 'sharp';
-import { ProductsController } from './products.controller';
+import { PRODUCT_IDS_MAX, ProductsController } from './products.controller';
 import { ProductsService } from './products.service';
 import { StorageQuotaService } from '../storage-quota/storage-quota.service';
 import { ResolvedOrganizationContext } from '../organizations/organizations.service';
@@ -257,16 +257,69 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
   });
 
   it('findAll : transmet l’org du contexte + sectionId de la query inchangée', async () => {
-    await controller.findAll(SECTION_QUERY, ctxA);
+    await controller.findAll(SECTION_QUERY, undefined, ctxA);
     expect(serviceStub.findAll).toHaveBeenCalledTimes(1);
     expect(serviceStub.findAll).toHaveBeenCalledWith(
       ORG_A,
       SECTION_QUERY,
       FULL,
+      undefined,
     );
 
-    await controller.findAll(undefined, ctxA);
-    expect(serviceStub.findAll).toHaveBeenCalledWith(ORG_A, undefined, FULL);
+    await controller.findAll(undefined, undefined, ctxA);
+    expect(serviceStub.findAll).toHaveBeenCalledWith(
+      ORG_A,
+      undefined,
+      FULL,
+      undefined,
+    );
+  });
+
+  describe('findAll — relecture ciblée `ids` (1-20D)', () => {
+    const A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+    const B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+
+    it('identifiants distincts transmis, avec l’org du contexte et la projection', async () => {
+      await controller.findAll(SECTION_QUERY, `${A},${B},${A}`, ctxA);
+      expect(serviceStub.findAll).toHaveBeenLastCalledWith(
+        ORG_A,
+        SECTION_QUERY,
+        FULL,
+        [A, B],
+      );
+    });
+
+    it('projection selon les permissions du demandeur (vendeur : champs standard)', async () => {
+      await controller.findAll(
+        undefined,
+        A,
+        makeContext(ORG_A, OrganizationRole.SELLER, []),
+      );
+      expect(serviceStub.findAll).toHaveBeenLastCalledWith(
+        ORG_A,
+        undefined,
+        STANDARD,
+        [A],
+      );
+    });
+
+    it.each([
+      ['vide', ''],
+      ['identifiant invalide', `${A},nope`],
+      ['tableau (paramètre répété)', [A, B]],
+      [
+        'plus de PRODUCT_IDS_MAX',
+        Array.from({ length: PRODUCT_IDS_MAX + 1 }, (_, i) =>
+          i.toString(16).padStart(24, '0'),
+        ).join(','),
+      ],
+    ])('%s → 400, service jamais appelé', async (_label, ids) => {
+      serviceStub.findAll.mockClear();
+      await expect(
+        Promise.resolve().then(() => controller.findAll(undefined, ids, ctxA)),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(serviceStub.findAll).not.toHaveBeenCalled();
+    });
   });
 
   it('findOne : transmet l’org du contexte + l’id du paramètre + le scope calculé', async () => {
@@ -302,16 +355,18 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       ['seller + analytics.read seul', ['analytics.read'], STANDARD],
     ] as const)('%s', async (_label, permissions, expected) => {
       const ctx = makeContext(ORG_A, OrganizationRole.SELLER, [...permissions]);
-      await controller.findAll(undefined, ctx);
+      await controller.findAll(undefined, undefined, ctx);
       expect(serviceStub.findAll).toHaveBeenLastCalledWith(
         ORG_A,
         undefined,
         expected,
+        undefined,
       );
     });
 
     it('admin : les deux groupes par défaut', async () => {
       await controller.findAll(
+        undefined,
         undefined,
         makeContext(ORG_A, OrganizationRole.ADMIN, []),
       );
@@ -319,6 +374,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
         ORG_A,
         undefined,
         FULL,
+        undefined,
       );
     });
   });

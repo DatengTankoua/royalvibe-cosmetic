@@ -1,0 +1,52 @@
+{
+  "at": "2026-10-10T19:48:05.838Z",
+  "options": {
+    "mode": "targeted",
+    "clients": 120,
+    "salesPerS": 2,
+    "duration": 30,
+    "out": "fichier"
+  },
+  "clients": 120,
+  "sales": {
+    "created": 54,
+    "errors": 5,
+    "statuses": [
+      400
+    ],
+    "httpMs": {
+      "n": 59,
+      "p50": 25,
+      "p95": 182,
+      "max": 357
+    }
+  },
+  "reads": {
+    "full": 0,
+    "targeted": 1260,
+    "errors": 0,
+    "bytes": 1061457,
+    "mbPerS": 0.03
+  },
+  "freshness": {
+    "saleToFreshStockMs": {
+      "n": 1380,
+      "p50": 542,
+      "p95": 608,
+      "max": 787
+    }
+  },
+  "api": {
+    "cpuCoresAvg": 0.39,
+    "cpuPctAvg": 34.18,
+    "eldP99MsMedian": 24.3,
+    "eldMaxMs": 214.2,
+    "rssMbMax": 169,
+    "signatures": 0,
+    "hostFreeMbMin": 455
+  },
+  "finalStock": {
+    "checked": 2910,
+    "mismatches": 0
+  }
+}

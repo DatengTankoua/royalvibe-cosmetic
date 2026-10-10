@@ -578,6 +578,16 @@ describe('ProductsService — isolation multi-tenant catalogue (1-4B)', () => {
       sectionId: new Types.ObjectId(SECTION_ID),
     });
     expect(findChain.sort).toHaveBeenCalledWith({ createdAt: -1 });
+
+    // 1-20D : relecture ciblée — mêmes bornes tenant/actif/rayon, plus ids.
+    const A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+    await service.findAll(ORG_A, SECTION_ID, undefined, [A]);
+    expect(productModel.find).toHaveBeenNthCalledWith(3, {
+      organizationId: new Types.ObjectId(ORG_A),
+      deletedAt: null,
+      sectionId: new Types.ObjectId(SECTION_ID),
+      _id: { $in: [new Types.ObjectId(A)] },
+    });
   });
 
   it('findTrashed : filtre EXACT {organizationId, deletedAt:{$ne:null}}', async () => {

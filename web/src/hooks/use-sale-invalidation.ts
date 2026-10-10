@@ -31,7 +31,8 @@ interface SaleInvalidationPayload {
  */
 export function useSaleInvalidation(
   matches: (productId: string) => boolean,
-  onInvalidate: () => void,
+  // 1-20D : reçoit le produit concerné (relecture ciblée possible).
+  onInvalidate: (productId: string) => void,
 ): void {
   const socket = useSocket();
   // Dernières fonctions en ref : pas de réabonnement à chaque rendu.
@@ -48,7 +49,7 @@ export function useSaleInvalidation(
       const productId =
         typeof payload?.productId === "string" ? payload.productId : null;
       if (!productId || !matchesRef.current(productId)) return;
-      invalidateRef.current();
+      invalidateRef.current(productId);
     };
     for (const event of SALE_INVALIDATION_EVENTS) socket.on(event, handler);
     return () => {

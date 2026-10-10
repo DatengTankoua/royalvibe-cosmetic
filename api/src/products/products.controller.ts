@@ -69,6 +69,28 @@ function requiredPermissionsForUpdate(
  * annoncée au propriétaire (`PushOutboxService.memberActivity`, best effort,
  * APRÈS le service : jamais sur un refus ni un échec). Nom du produit figé.
  */
+/** 1-20D : identifiants au plus dans une relecture ciblée. */
+export const PRODUCT_IDS_MAX = 50;
+
+/** `ids=a,b` → identifiants distincts valides ; refus 400 sinon. */
+export function parseProductIds(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new BadRequestException('ids must be a comma-separated list');
+  }
+  const ids = [...new Set(value.split(',').map((v) => v.trim()))];
+  if (
+    ids.length === 0 ||
+    ids.length > PRODUCT_IDS_MAX ||
+    ids.some((id) => !/^[0-9a-f]{24}$/i.test(id))
+  ) {
+    throw new BadRequestException(
+      `ids must contain 1 to ${PRODUCT_IDS_MAX} product ids`,
+    );
+  }
+  return ids;
+}
+
 @Controller('products')
 export class ProductsController {
   constructor(
@@ -152,11 +174,20 @@ export class ProductsController {
     return created;
   }
 
+  /**
+   * 1-20D : `ids` (facultatif, identifiants séparés par des virgules, au
+   * plus `PRODUCT_IDS_MAX`) restreint la liste à ces produits — relecture
+   * ciblée du web après une vente. Même filtre (organisation du demandeur,
+   * produits actifs, rayon éventuel) et même projection que la liste : un
+   * produit absent de la réponse n'est plus visible dans cette vue. Une API
+   * antérieure ignore ce paramètre et renvoie la liste complète.
+   */
   @Get()
   findAll(
     // `= undefined` (et non `?`) : un paramètre optionnel ne peut précéder un
     // paramètre requis (TS1016) tandis que le contexte suit.
     @Query('sectionId') sectionId = undefined,
+    @Query('ids') ids: unknown = undefined,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
   ) {
     // 1-12H : projection selon les permissions effectives du demandeur.
@@ -164,6 +195,7 @@ export class ProductsController {
       organizationContext.organizationId,
       sectionId,
       productVisibility(organizationContext),
+      parseProductIds(ids),
     );
   }
 

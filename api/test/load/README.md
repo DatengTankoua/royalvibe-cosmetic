@@ -1,4 +1,4 @@
-# Campagnes de charge locales (1-20A, 1-20B, 1-20C)
+# Campagnes de charge locales (1-20A à 1-20D)
 
 Outils de mesure de charge **strictement locaux** de Stock Master. Rapports :
 [phase-1-20a-load-baseline.md](../../../docs/architecture/phase-1-20a-load-baseline.md)
@@ -6,7 +6,9 @@ Outils de mesure de charge **strictement locaux** de Stock Master. Rapports :
 [phase-1-20b-notification-throughput.md](../../../docs/architecture/phase-1-20b-notification-throughput.md)
 (débit du dispatcher, avant/après) et
 [phase-1-20c-product-image-signing.md](../../../docs/architecture/phase-1-20c-product-image-signing.md)
-(signatures d'URL des photos, avant/après).
+(signatures d'URL des photos, avant/après) et
+[phase-1-20d-realtime-catalog-refresh.md](../../../docs/architecture/phase-1-20d-realtime-catalog-refresh.md)
+(relectures du catalogue après les ventes, avant/après).
 
 > Aucune cible distante : toute URL non locale (ou port ≠ 4300) et toute base
 > autre que l'instance éphémère `stockmaster_load` sont refusées. Aucun appel
@@ -15,25 +17,27 @@ Outils de mesure de charge **strictement locaux** de Stock Master. Rapports :
 
 ## Outils
 
-| Fichier                  | Rôle                                                                                                                                              |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `load-stack.js`          | Stack : MongoDB éphémère (replica set, cache borné), 9 migrations de pré-déploiement, peuplement, stockage simulé, API compilée, échantillonneurs |
-| `load-api.js`            | Entrée de test de l'API (réplique `main.ts`) : e-mail et push simulés, mesures internes, profil CPU à la demande                                  |
-| `load-seed.js`           | Jeu déterministe (profils `current`, `large`) et sessions préparées                                                                               |
-| `k6/stockmaster.js`      | Parcours HTTP (Grafana k6) : `catalog`, `dashboard`, `sales`, `products`, `notifications`, `mixed`                                                |
-| `run-campaign.js`        | Paliers, agrégation des mesures, critères d'arrêt fixés                                                                                           |
-| `realtime-probe.js`      | Socket.IO (client `socket.io-client`, mesuré à part de k6)                                                                                        |
-| `concurrency.js`         | Intégrité sous concurrence (stock, annulations, rejeu, adhésions, 429)                                                                            |
-| `integrity.js`           | Invariants en lecture seule (stock, audit, notifications, vidange)                                                                                |
-| `notification-delays.js` | Délais du dispatcher (outbox, centre, regroupement volontaire, retard push) sur une fenêtre                                                       |
-| `render-results.js`      | Tableaux Markdown des résultats                                                                                                                   |
-| `profile-summary.js`     | Synthèse d'un `.cpuprofile`                                                                                                                       |
-| `campaign-1-20a.sh`      | Commandes exactes de la campagne 1-20A                                                                                                            |
-| `compare-1-20b.sh`       | 1-20B : un groupe (`sales`, `products-fairness`, `mixed`) sur une stack neuve, ancien (`baseline`) ou nouveau (`new`) dispatcher                  |
-| `compare-summary.js`     | 1-20B : synthèse avant/après (paliers, file, délais, vidange, intégrité, entreprise peu active, réponses inattendues)                             |
-| `quiet-org-probe.js`     | 1-20B : entreprise peu active pendant la charge d'une autre (délai vu par l'utilisateur)                                                          |
-| `make-baseline-dist.js`  | 1-20B : témoin `api/.load-dist-1-20a-baseline` (dist identique, dispatcher d'une révision donnée)                                                 |
-| `compare-1-20c.sh`       | 1-20C : catalogue (`current` : froid puis 1, 5, 10 VU ; `large` : froid puis 1 VU) sur une stack neuve, avant (`baseline`) ou après (`new`)       |
+| Fichier                    | Rôle                                                                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `load-stack.js`            | Stack : MongoDB éphémère (replica set, cache borné), 9 migrations de pré-déploiement, peuplement, stockage simulé, API compilée, échantillonneurs                              |
+| `load-api.js`              | Entrée de test de l'API (réplique `main.ts`) : e-mail et push simulés, mesures internes, profil CPU à la demande                                                               |
+| `load-seed.js`             | Jeu déterministe (profils `current`, `large`) et sessions préparées                                                                                                            |
+| `k6/stockmaster.js`        | Parcours HTTP (Grafana k6) : `catalog`, `dashboard`, `sales`, `products`, `notifications`, `mixed`                                                                             |
+| `run-campaign.js`          | Paliers, agrégation des mesures, critères d'arrêt fixés                                                                                                                        |
+| `realtime-probe.js`        | Socket.IO (client `socket.io-client`, mesuré à part de k6)                                                                                                                     |
+| `concurrency.js`           | Intégrité sous concurrence (stock, annulations, rejeu, adhésions, 429)                                                                                                         |
+| `integrity.js`             | Invariants en lecture seule (stock, audit, notifications, vidange)                                                                                                             |
+| `notification-delays.js`   | Délais du dispatcher (outbox, centre, regroupement volontaire, retard push) sur une fenêtre                                                                                    |
+| `render-results.js`        | Tableaux Markdown des résultats                                                                                                                                                |
+| `profile-summary.js`       | Synthèse d'un `.cpuprofile`                                                                                                                                                    |
+| `campaign-1-20a.sh`        | Commandes exactes de la campagne 1-20A                                                                                                                                         |
+| `compare-1-20b.sh`         | 1-20B : un groupe (`sales`, `products-fairness`, `mixed`) sur une stack neuve, ancien (`baseline`) ou nouveau (`new`) dispatcher                                               |
+| `compare-summary.js`       | 1-20B : synthèse avant/après (paliers, file, délais, vidange, intégrité, entreprise peu active, réponses inattendues)                                                          |
+| `quiet-org-probe.js`       | 1-20B : entreprise peu active pendant la charge d'une autre (délai vu par l'utilisateur)                                                                                       |
+| `make-baseline-dist.js`    | 1-20B : témoin `api/.load-dist-1-20a-baseline` (dist identique, dispatcher d'une révision donnée)                                                                              |
+| `compare-1-20c.sh`         | 1-20C : catalogue (`current` : froid puis 1, 5, 10 VU ; `large` : froid puis 1 VU) sur une stack neuve, avant (`baseline`) ou après (`new`)                                    |
+| `catalog-refresh-probe.js` | 1-20D : clients Socket.IO affichant un rayon, ventes, relectures simulées du web 1-20C (`legacy`) ou 1-20D (`targeted`) ; lectures, octets, délai de stock à jour, stock final |
+| `compare-1-20d.sh`         | 1-20D : un scénario (`<clients>`) sur une stack neuve, avant (`baseline`) ou après (`new`)                                                                                     |
 
 ## Prérequis
 
@@ -82,6 +86,17 @@ for p in current large; do
   done
 done
 node api/test/load/compare-summary.js <dossier>
+rm -rf api/.load-dist-1-20a-baseline
+```
+
+Comparaison 1-20D :
+
+```bash
+pnpm --filter api build
+node api/test/load/make-baseline-dist.js --ref=<révision 1-20C>   --files=src/products/products.controller.ts,src/products/products.service.ts
+for c in 20 120; do
+  for v in baseline new; do OUT=<dossier> bash api/test/load/compare-1-20d.sh $c $v; done
+done
 rm -rf api/.load-dist-1-20a-baseline
 ```
 

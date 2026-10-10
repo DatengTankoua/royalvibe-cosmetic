@@ -32,6 +32,7 @@ import { useSocket } from "@/contexts/socket-context";
 import { useLiveRefresh } from "@/hooks/use-live-refresh";
 import { SECTION_SIGNALS, readSectionSignal } from "@/hooks/use-sections";
 import { createResponseOrder } from "@/lib/refresh-coordinator";
+import { reservesStock } from "@/lib/offline-sales-policy";
 
 type ContentMode = "loading" | "subsections" | "products" | "empty";
 
@@ -87,14 +88,38 @@ export default function CatalogSectionPage() {
     addProduct,
     editProduct,
     removeProduct,
-    reload: reloadProducts,
-    loadedAt: productsLoadedAt,
+    refreshProducts,
+    serverLoadedAtFor,
   } = useProducts(params.id);
   // 1-11C.3 : stock serveur rechargé après confirmation d'une vente locale.
-  const { syncedVersion } = useOfflineSales();
+  // 1-20D : seuls les produits affichés dont une vente confirmée n'est pas
+  // encore incluse dans leur dernière lecture serveur sont relus (relecture
+  // ciblée, regroupée avec le signal `sale:created` reçu par l'auteur).
+  const { syncedVersion, operations } = useOfflineSales();
+  const productsRef = useRef(products);
+  const operationsRef = useRef(operations);
+  const loadedAtForRef = useRef(serverLoadedAtFor);
   useEffect(() => {
-    if (syncedVersion > 0) void reloadProducts();
-  }, [syncedVersion, reloadProducts]);
+    productsRef.current = products;
+    operationsRef.current = operations;
+    loadedAtForRef.current = serverLoadedAtFor;
+  });
+  useEffect(() => {
+    if (syncedVersion === 0) return;
+    const displayed = new Set(productsRef.current.map((p) => p._id));
+    const ids = new Set<string>();
+    for (const op of operationsRef.current) {
+      const id = op.payload.productId;
+      if (
+        op.status === "synced" &&
+        displayed.has(id) &&
+        reservesStock(op, loadedAtForRef.current(id))
+      ) {
+        ids.add(id);
+      }
+    }
+    refreshProducts([...ids]);
+  }, [syncedVersion, refreshProducts]);
   const { writeSectionScope } = useOfflineCatalog();
 
   const loadSubSections = useCallback(
@@ -420,7 +445,7 @@ export default function CatalogSectionPage() {
                   canEdit={canEditProduct}
                   canDelete={canManageProducts}
                   priority={i === 0}
-                  serverLoadedAt={productsLoadedAt}
+                  serverLoadedAt={serverLoadedAtFor(p._id)}
                   onDelete={handleDeleteProduct}
                   onEdit={handleEditProduct}
                 />

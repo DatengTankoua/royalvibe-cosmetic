@@ -343,7 +343,10 @@ export default function ProductDetailPage() {
                   targetPrice={detail.salePrice}
                   remainingStock={detail.remainingQuantity}
                   serverLoadedAt={loadedAt}
-                  onSaleRecorded={reload}
+                  // 1-20D : relecture REGROUPÉE avec le signal `sale:created`
+                  // que l'auteur reçoit aussi (une seule relecture au lieu
+                  // de deux) ; le stock indicatif couvre l'intervalle.
+                  onSaleRecorded={scheduleRefresh}
                 />
               )}
             </div>

@@ -404,12 +404,15 @@ export class ProductsService {
     organizationId: string,
     sectionId?: string,
     visibility: ProductVisibility = COMMON_VISIBILITY,
+    // 1-20D : relecture ciblée (identifiants déjà validés par le contrôleur).
+    ids?: readonly string[],
   ): Promise<ProductMetricsView[]> {
     const filter: Record<string, unknown> = {
       organizationId: new Types.ObjectId(organizationId),
       deletedAt: null,
     };
     if (sectionId) filter.sectionId = new Types.ObjectId(sectionId);
+    if (ids) filter._id = { $in: ids.map((id) => new Types.ObjectId(id)) };
     const products = await this.productModel
       .find(filter)
       .sort({ createdAt: -1 })

@@ -1,0 +1,133 @@
+{
+  "at": "2026-10-10T19:39:27.566Z",
+  "passed": 12,
+  "total": 12,
+  "results": [
+    {
+      "id": "R0",
+      "label": "stock initial affiché dans les deux sessions",
+      "ok": true
+    },
+    {
+      "id": "R1",
+      "label": "vente dans A : B voit 18 sans rechargement",
+      "ok": true,
+      "detail": {
+        "delaiMs": 591
+      }
+    },
+    {
+      "id": "R1b",
+      "label": "B : une relecture CIBLÉE, aucune complète",
+      "ok": true,
+      "detail": [
+        {
+          "t": 1791661157737,
+          "kind": "targeted",
+          "ids": "6aca945ecfc94b981c5bbc80"
+        }
+      ]
+    },
+    {
+      "id": "R1c",
+      "label": "A (auteur) : une relecture ciblée (réponse + signal regroupés), aucune complète",
+      "ok": true,
+      "detail": [
+        {
+          "t": 1791661157737,
+          "kind": "targeted",
+          "ids": "6aca945ecfc94b981c5bbc80"
+        }
+      ]
+    },
+    {
+      "id": "R1d",
+      "label": "A affiche 18",
+      "ok": true
+    },
+    {
+      "id": "R2",
+      "label": "rafale : stocks finaux exacts chez B (16 et 13)",
+      "ok": true,
+      "detail": {
+        "burstP1": 411,
+        "burstP2": 2
+      }
+    },
+    {
+      "id": "R2b",
+      "label": "rafale : relectures ciblées regroupées (≤ 2), aucune complète",
+      "ok": true,
+      "detail": [
+        {
+          "t": 1791661159748,
+          "kind": "targeted",
+          "ids": "6aca945ecfc94b981c5bbc80,6aca945ecfc94b981c5bbc82"
+        }
+      ]
+    },
+    {
+      "id": "R3",
+      "label": "annulation : stock restauré chez A et B (15)",
+      "ok": true,
+      "detail": {
+        "status": 204,
+        "restoredB": 426,
+        "restoredA": 6
+      }
+    },
+    {
+      "id": "R3b",
+      "label": "annulation : relecture ciblée seulement",
+      "ok": true,
+      "detail": [
+        {
+          "t": 1791661161763,
+          "kind": "targeted",
+          "ids": "6aca945ecfc94b981c5bbc82"
+        }
+      ]
+    },
+    {
+      "id": "R4",
+      "label": "reconnexion : ventes manquées rattrapées (13 et 14)",
+      "ok": true,
+      "detail": {
+        "staleWhileOffline": 16,
+        "caughtP1": 513,
+        "caughtP2": 3
+      }
+    },
+    {
+      "id": "R4b",
+      "label": "reconnexion : UNE relecture complète de la liste (rattrapage), pas une par signal",
+      "ok": true,
+      "detail": [
+        {
+          "t": 1791661165847,
+          "kind": "full",
+          "ids": null
+        }
+      ]
+    },
+    {
+      "id": "R5",
+      "label": "état final : A et B affichent le stock serveur",
+      "ok": true,
+      "detail": {
+        "truth": {
+          "Huile mv2ssfi5": 14,
+          "Savon mv2ssfi5": 13
+        },
+        "finalA": {
+          "Savon mv2ssfi5": 13,
+          "Huile mv2ssfi5": 14
+        },
+        "finalB": {
+          "Savon mv2ssfi5": 13,
+          "Huile mv2ssfi5": 14
+        }
+      }
+    }
+  ]
+}

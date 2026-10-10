@@ -920,6 +920,23 @@ export async function fetchProducts(sectionId?: string): Promise<ApiProduct[]> {
   return data.map(flattenProduct);
 }
 
+/**
+ * 1-20D — Relecture ciblée : mêmes produits que `fetchProducts` (même
+ * rayon, même projection selon les permissions), restreints à `ids`. Une API
+ * antérieure ignore `ids` et renvoie la liste complète : seuls les produits
+ * demandés sont alors retenus (résultat correct, coût d'une liste complète).
+ */
+export async function fetchProductsByIds(
+  ids: readonly string[],
+  sectionId?: string,
+): Promise<ApiProduct[]> {
+  const { data } = await apiClient.get<ApiProductEnvelope[]>("/products", {
+    params: { ids: ids.join(","), ...(sectionId ? { sectionId } : {}) },
+  });
+  const wanted = new Set(ids);
+  return data.map(flattenProduct).filter((p) => wanted.has(p._id));
+}
+
 export async function fetchProduct(id: string): Promise<ApiProductDetail> {
   const { data } = await apiClient.get<
     ApiProductEnvelope & { sales: ApiSale[]; auditLogs: ApiAuditLog[] }

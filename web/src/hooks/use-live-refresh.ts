@@ -16,16 +16,22 @@ import { createRefreshCoordinator } from "@/lib/refresh-coordinator";
 //   rattrapage aura lieu à la connexion suivante.
 // - `lastLoadStartedAt` : début de la dernière requête réussie (même valeur
 //   que `serverLoadedAt` 1-11C.3, jamais avancée par un événement).
+// - 1-20D : `onCatchUp` (facultatif) est appelé juste avant la demande de
+//   rattrapage, pour que l'écran sache qu'elle doit être COMPLÈTE (les
+//   événements manqués ne sont pas connus).
 export const LIVE_REFRESH_DELAY_MS = 400;
 
 export function useLiveRefresh(
   refresh: () => Promise<unknown>,
   lastLoadStartedAt: number | undefined,
   delayMs: number = LIVE_REFRESH_DELAY_MS,
+  onCatchUp?: () => void,
 ): () => void {
   const refreshRef = useRef(refresh);
+  const onCatchUpRef = useRef(onCatchUp);
   useEffect(() => {
     refreshRef.current = refresh;
+    onCatchUpRef.current = onCatchUp;
   });
   const coordinatorRef = useRef<ReturnType<
     typeof createRefreshCoordinator
@@ -56,6 +62,7 @@ export function useLiveRefresh(
     // Jamais chargé avec succès : le chargement initial (ou « Réessayer »)
     // s'en charge ; chargé APRÈS l'entrée dans la room : rien à rattraper.
     if (last === undefined || last >= connectedAt) return;
+    onCatchUpRef.current?.();
     request();
   }, [connectedAt, request]);
 

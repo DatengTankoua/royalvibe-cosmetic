@@ -462,6 +462,60 @@ describe('Permissions et visibilité des informations produit (e2e 1-12H)', () =
       const res = await http().get(`/products/${productId}`).set(auth(ownerB));
       expect(res.status).toBe(404);
     });
+
+    describe('1-20D — relecture ciblée `GET /products?ids=`', () => {
+      const targeted = (token: string, query: Record<string, string>) =>
+        http().get('/products').query(query).set(auth(token));
+
+      it('même projection que la liste, selon les permissions de chaque lecteur', async () => {
+        for (const member of [sellerA, sellerB, bothSeller]) {
+          const list = await listProducts(member.token);
+          const one = await targeted(member.token, {
+            sectionId: sectionA,
+            ids: productId,
+          });
+          expect(one.status).toBe(200);
+          expect(one.body).toHaveLength(1);
+          const fromList = (
+            list.body as Array<{ product: { _id: string } }>
+          ).find((v) => v.product._id === productId);
+          // Projection identique (y compris l'absence des champs restreints
+          // pour le vendeur standard) ; l'URL signée de la photo est la même
+          // (réutilisée, 1-20C) ou absente.
+          expect(one.body[0]).toEqual(fromList);
+        }
+        const standard = (await targeted(sellerA.token, { ids: productId }))
+          .body[0] as Record<string, unknown>;
+        for (const key of FINANCIAL_KEYS) {
+          expect(standard).not.toHaveProperty(key);
+        }
+        expect(standard.product).not.toHaveProperty('purchasePrice');
+      });
+
+      it('autre organisation : liste vide (jamais 404, aucune fuite d’existence)', async () => {
+        const res = await targeted(ownerB, { ids: productId });
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual([]);
+      });
+
+      it('rayon : le filtre de la vue s’applique aussi à la relecture ciblée', async () => {
+        const other = new Types.ObjectId().toHexString();
+        const res = await targeted(ownerA, {
+          sectionId: other,
+          ids: productId,
+        });
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual([]);
+      });
+
+      it('identifiants invalides ou trop nombreux : 400', async () => {
+        expect((await targeted(ownerA, { ids: 'nope' })).status).toBe(400);
+        const many = Array.from({ length: 51 }, () =>
+          new Types.ObjectId().toHexString(),
+        ).join(',');
+        expect((await targeted(ownerA, { ids: many })).status).toBe(400);
+      });
+    });
   });
 
   describe('3. Autres réponses et diffusions', () => {
