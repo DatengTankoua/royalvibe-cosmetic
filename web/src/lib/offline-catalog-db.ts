@@ -90,6 +90,26 @@ export interface OfflineCatalogSnapshot {
   // Scopes ayant reçu au moins une réponse complète réussie — distingue
   // "scope synchronisé vide" de "scope jamais synchronisé" côté UI.
   syncedScopes: string[];
+  // 1-20F — champs FACULTATIFS (même schemaVersion : une version antérieure
+  // les ignore et les abandonne à sa prochaine écriture, sans autre effet) :
+  // - début de la lecture serveur ayant fourni chaque produit (ms), borne des
+  //   ventes locales déjà reflétées (1-11C.3) ; à défaut `updatedAt` ;
+  // - date (ms) de la dernière réponse complète de chaque scope ;
+  // - synchronisation complète d'un rayon en cours (reprise, voir
+  //   `offline-section-sync.ts`).
+  productLoadedAt?: Record<string, number>;
+  scopeSyncedAt?: Record<string, number>;
+  pendingSyncs?: Record<string, PendingScopeSync>;
+}
+
+/** 1-20F — Pages déjà lues d'une synchronisation complète de rayon. */
+export interface PendingScopeSync {
+  startedAt: number;
+  updatedAt: number;
+  cursor: string;
+  pages: number;
+  products: OfflineCatalogProduct[];
+  loadedAt: Record<string, number>;
 }
 
 // ─── Fonctions pures (testables sans IndexedDB) ─────────────────────────────
@@ -152,7 +172,7 @@ function emptySnapshot(
   };
 }
 
-type ScopeUpdate =
+export type ScopeUpdate =
   | { kind: "root-sections"; sections: OfflineCatalogSection[] }
   | {
       kind: "section-children";
@@ -163,15 +183,55 @@ type ScopeUpdate =
       kind: "section-products";
       sectionId: string;
       products: OfflineCatalogProduct[];
+      // 1-20F : début de la lecture de chaque produit, et début de la lecture
+      // complète. Un produit du rayon relu APRÈS ce début (page consultée
+      // pendant une synchronisation) est conservé dans sa version plus
+      // récente, même s'il manque à la réponse complète (créé entre-temps).
+      loadedAt?: Record<string, number>;
+      readStartedAt?: number;
+    }
+  // 1-20F : page d'une liste paginée — mise à jour des seuls produits reçus
+  // (jamais une suppression des absents, jamais un scope marqué synchronisé).
+  | {
+      kind: "products-upsert";
+      products: OfflineCatalogProduct[];
+      loadedAt: Record<string, number>;
+    }
+  // 1-20F : produits mis à la corbeille, purgés ou déplacés (signal) ;
+  // `keepInSectionId` : conservé s'il est déjà rangé dans ce rayon.
+  | { kind: "products-remove"; ids: string[]; keepInSectionId?: string }
+  // 1-20F : progression d'une synchronisation complète (`null` : terminée).
+  // `finishedAt` : fin d'une synchronisation tronquée (aucun nouvel essai
+  // avant l'intervalle, scope toujours NON synchronisé).
+  | {
+      kind: "sync-progress";
+      scope: string;
+      pending: PendingScopeSync | null;
+      finishedAt?: number;
     };
+
+type ScopeReplacement = Extract<
+  ScopeUpdate,
+  { kind: "root-sections" | "section-children" | "section-products" }
+>;
 
 // Le discriminant imbriqué (`update.scope.kind`) ne réduit pas le type de
 // `update` en TypeScript (limitation connue) : `kind` est donc dupliqué au
 // niveau supérieur de `ScopeUpdate` pour un narrowing fiable ; ce helper
 // reconstruit le `CatalogScope` correspondant pour les fonctions ci-dessus.
-function updateScope(update: ScopeUpdate): CatalogScope {
+function updateScope(update: ScopeReplacement): CatalogScope {
   if (update.kind === "root-sections") return { kind: "root-sections" };
   return { kind: update.kind, sectionId: update.sectionId };
+}
+
+/** Version reçue plus ancienne que celle déjà enregistrée ? */
+function isOlder(
+  stored: Record<string, number>,
+  id: string,
+  incoming: number | undefined,
+): boolean {
+  const current = stored[id];
+  return current !== undefined && incoming !== undefined && current > incoming;
 }
 
 // Applique un ou plusieurs remplacements de scope sur la base existante :
@@ -179,21 +239,87 @@ function updateScope(update: ScopeUpdate): CatalogScope {
 // réinséré (même hors du scope), insère la nouvelle réponse (même vide),
 // marque le(s) scope(s) synchronisé(s) — jamais un simple merge par _id,
 // jamais touché : les autres scopes déjà synchronisés.
+// 1-20F : mises à jour partielles (`products-upsert`, `products-remove`,
+// `sync-progress`) qui ne marquent jamais un scope synchronisé ; une
+// version plus ancienne d'un produit n'écrase jamais une plus récente.
 export function applyScopeUpdatesToSnapshot(
   base: OfflineCatalogSnapshot,
   updates: ScopeUpdate[],
+  now: number = Date.now(),
 ): OfflineCatalogSnapshot {
   let sections = base.sections;
   let products = base.products;
   const syncedScopes = new Set(base.syncedScopes);
+  const productLoadedAt = { ...(base.productLoadedAt ?? {}) };
+  const scopeSyncedAt = { ...(base.scopeSyncedAt ?? {}) };
+  const pendingSyncs = { ...(base.pendingSyncs ?? {}) };
 
   for (const update of updates) {
+    if (update.kind === "products-upsert") {
+      for (const incoming of update.products) {
+        const at = update.loadedAt[incoming._id];
+        if (isOlder(productLoadedAt, incoming._id, at)) continue;
+        const copy = toOfflineCatalogProduct(incoming);
+        const index = products.findIndex((p) => p._id === incoming._id);
+        products =
+          index < 0
+            ? products.concat(copy)
+            : products.map((p, i) => (i === index ? copy : p));
+        if (at !== undefined) productLoadedAt[incoming._id] = at;
+      }
+      continue;
+    }
+    if (update.kind === "products-remove") {
+      const ids = new Set(update.ids);
+      products = products.filter(
+        (p) =>
+          !ids.has(p._id) ||
+          (update.keepInSectionId !== undefined &&
+            p.sectionId === update.keepInSectionId),
+      );
+      continue;
+    }
+    if (update.kind === "sync-progress") {
+      if (update.pending) pendingSyncs[update.scope] = update.pending;
+      else delete pendingSyncs[update.scope];
+      if (update.finishedAt !== undefined) {
+        scopeSyncedAt[update.scope] = update.finishedAt;
+      }
+      continue;
+    }
     const scope = updateScope(update);
     if (update.kind === "section-products") {
-      products = products.filter((p) => !productBelongsToScope(p, scope));
+      const loadedAt = update.loadedAt ?? {};
+      const readStartedAt = update.readStartedAt;
       const incomingIds = new Set(update.products.map((p) => p._id));
-      products = products.filter((p) => !incomingIds.has(p._id));
-      products = products.concat(update.products.map(toOfflineCatalogProduct));
+      // Version enregistrée relue APRÈS celle de cette réponse complète
+      // (produit reçu) ou après son début (produit du rayon absent).
+      const fresher = products.filter((p) =>
+        incomingIds.has(p._id)
+          ? isOlder(productLoadedAt, p._id, loadedAt[p._id] ?? readStartedAt)
+          : productBelongsToScope(p, scope) &&
+            isOlder(productLoadedAt, p._id, readStartedAt),
+      );
+      const fresherIds = new Set(fresher.map((p) => p._id));
+      products = products.filter(
+        (p) =>
+          !productBelongsToScope(p, scope) &&
+          !incomingIds.has(p._id) &&
+          !fresherIds.has(p._id),
+      );
+      products = products
+        .concat(fresher)
+        .concat(
+          update.products
+            .filter((p) => !fresherIds.has(p._id))
+            .map(toOfflineCatalogProduct),
+        );
+      for (const p of update.products) {
+        if (fresherIds.has(p._id)) continue;
+        const at = loadedAt[p._id] ?? readStartedAt;
+        if (at !== undefined) productLoadedAt[p._id] = at;
+        else delete productLoadedAt[p._id];
+      }
     } else {
       sections = sections.filter((s) => !sectionBelongsToScope(s, scope));
       const incomingIds = new Set(update.sections.map((s) => s._id));
@@ -201,17 +327,41 @@ export function applyScopeUpdatesToSnapshot(
       sections = sections.concat(update.sections);
     }
     syncedScopes.add(scopeKey(scope));
+    scopeSyncedAt[scopeKey(scope)] = now;
+  }
+
+  // Dates des seuls produits encore présents.
+  const present = new Set(products.map((p) => p._id));
+  for (const id of Object.keys(productLoadedAt)) {
+    if (!present.has(id)) delete productLoadedAt[id];
   }
 
   return {
     schemaVersion: OFFLINE_CATALOG_SCHEMA_VERSION,
     userId: base.userId,
     organizationId: base.organizationId,
-    updatedAt: new Date().toISOString(),
+    updatedAt: new Date(now).toISOString(),
     sections,
     products,
     syncedScopes: Array.from(syncedScopes),
+    productLoadedAt,
+    scopeSyncedAt,
+    pendingSyncs,
   };
+}
+
+/**
+ * 1-20F — Début de la lecture serveur ayant fourni `productId` dans le
+ * snapshot (ms) ; à défaut (snapshot antérieur), date d'écriture.
+ */
+export function snapshotProductLoadedAt(
+  snapshot: OfflineCatalogSnapshot,
+  productId: string,
+): number | undefined {
+  const own = snapshot.productLoadedAt?.[productId];
+  if (typeof own === "number" && Number.isFinite(own)) return own;
+  const parsed = Date.parse(snapshot.updatedAt);
+  return Number.isNaN(parsed) ? undefined : parsed;
 }
 
 // ─── Accès IndexedDB (jamais de log du contenu — message générique only) ───

@@ -1,4 +1,4 @@
-# Campagnes de charge locales (1-20A à 1-20E)
+# Campagnes de charge locales (1-20A à 1-20F)
 
 Outils de mesure de charge **strictement locaux** de Stock Master. Rapports :
 [phase-1-20a-load-baseline.md](../../../docs/architecture/phase-1-20a-load-baseline.md)
@@ -10,7 +10,9 @@ Outils de mesure de charge **strictement locaux** de Stock Master. Rapports :
 [phase-1-20d-realtime-catalog-refresh.md](../../../docs/architecture/phase-1-20d-realtime-catalog-refresh.md)
 (relectures du catalogue après les ventes, avant/après) et
 [phase-1-20e-sales-pagination.md](../../../docs/architecture/phase-1-20e-sales-pagination.md)
-(pagination de l'historique des ventes, avant/après).
+(pagination de l'historique des ventes, avant/après) et
+[phase-1-20f-products-pagination.md](../../../docs/architecture/phase-1-20f-products-pagination.md)
+(pagination serveur des produits, avant/après).
 
 > Aucune cible distante : toute URL non locale (ou port ≠ 4300) et toute base
 > autre que l'instance éphémère `stockmaster_load` sont refusées. Aucun appel
@@ -41,6 +43,9 @@ Outils de mesure de charge **strictement locaux** de Stock Master. Rapports :
 | `catalog-refresh-probe.js` | 1-20D : clients Socket.IO affichant un rayon, ventes, relectures simulées du web 1-20C (`legacy`) ou 1-20D (`targeted`) ; lectures, octets, délai de stock à jour, stock final |
 | `compare-1-20d.sh`         | 1-20D : un scénario (`<clients>`) sur une stack neuve, avant (`baseline`) ou après (`new`)                                                                                     |
 | `compare-1-20e.sh`         | 1-20E : page Ventes (`current` : 1 et 5 VU ; `large` : 1 VU, 30 000 ventes) ; `baseline`, `new` (+ pages éloignées), `legacy-on-new` (ancien contrat sur la nouvelle API)      |
+| `compare-1-20f.sh`         | 1-20F : ouverture d'un rayon (`current` : froid puis 1 et 10 VU ; `large` et `bigsection` : froid puis 1 VU) ; `baseline`, `new`, `legacy-on-new` |
+| `products-page-explain.js` | 1-20F : plans MongoDB de la liste d'un rayon (`--synthetic=<n>` : rayon temporaire de n produits, supprimé ensuite)                           |
+| `compat-probe.js`          | 1-20F : requête paginée du nouveau web face à l'API en service (tableau complet sur une API antérieure)                                  |
 | `sales-history-explain.js` | 1-20E : plans MongoDB des requêtes de la page Ventes (documents et clés examinés, tri en mémoire)                                                                              |
 
 ## Prérequis
@@ -107,6 +112,23 @@ rm -rf api/.load-dist-1-20a-baseline
 Les signatures d'URL réellement calculées sont comptées par l'entrée de
 test (intergiciel sur le client de signature, `metrics-api.jsonl`,
 champ `signatures`), identiquement pour les deux variantes.
+
+Comparaison 1-20F :
+
+```bash
+pnpm --filter api build
+node api/test/load/make-baseline-dist.js --ref=<révision 1-20E> \n  --files=src/products/products.controller.ts,src/products/products.service.ts,src/migrations/predeploy-migrations.ts
+for p in current large bigsection; do
+  for v in baseline new; do
+    K6=<k6.exe> OUT=<dossier> bash api/test/load/compare-1-20f.sh $p $v
+  done
+done
+K6=<k6.exe> OUT=<dossier> bash api/test/load/compare-1-20f.sh large legacy-on-new
+rm -rf api/.load-dist-1-20a-baseline
+```
+
+Scénario `catalogpage` : `CATALOG_MODE=legacy|paged`, `SECTION=big`
+(rayon `LOAD_BIG_SECTION=<n>` ajouté au peuplement, entreprise concentrée).
 
 Options de k6 : `TARGET=org:<clé>` concentre la charge sur une entreprise ;
 `ROLES=owner,…` restreint les sessions ; scénario `salespage` :

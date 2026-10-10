@@ -31,7 +31,9 @@ import {
 } from '../organizations/permissions';
 import { User } from '../users/schemas/user.schema';
 import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
+import { isValidObjectId } from 'mongoose';
 import { productVisibility } from './product-projection';
+import { parseProductPageQuery } from './product-page';
 import { validateProductImage } from './product-image-validation';
 // 1-12D : limites multipart durcies (GHSA-535w) ; 413 stable (R2).
 import { ProductImageUploadInterceptor } from './product-image-upload.interceptor';
@@ -182,14 +184,41 @@ export class ProductsController {
    * produit absent de la réponse n'est plus visible dans cette vue. Une API
    * antérieure ignore ce paramètre et renvoie la liste complète.
    */
+  /**
+   * 1-20F : `limit` (1 à `PRODUCT_PAGE_MAX_LIMIT`) sélectionne le contrat
+   * PAGINÉ `{ items, total, scopeTotal, nextCursor }`, avec `cursor` (page
+   * suivante) et `q` (nom contenant le texte, casse ignorée) facultatifs.
+   * Sans `limit` : tableau complet, inchangé. `ids` et `limit` s'excluent.
+   */
   @Get()
   findAll(
     // `= undefined` (et non `?`) : un paramètre optionnel ne peut précéder un
     // paramètre requis (TS1016) tandis que le contexte suit.
-    @Query('sectionId') sectionId = undefined,
+    @Query('sectionId') sectionId: string | undefined = undefined,
     @Query('ids') ids: unknown = undefined,
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+    @Query('limit') limit?: unknown,
+    @Query('cursor') cursor?: unknown,
+    @Query('q') q?: unknown,
   ) {
+    const page = parseProductPageQuery({ limit, cursor, q });
+    if (page) {
+      if (ids !== undefined) {
+        throw new BadRequestException('ids and limit are exclusive');
+      }
+      if (
+        sectionId !== undefined &&
+        (typeof sectionId !== 'string' || !isValidObjectId(sectionId))
+      ) {
+        throw new BadRequestException('sectionId must be a product section id');
+      }
+      return this.productsService.findPage(
+        organizationContext.organizationId,
+        sectionId,
+        page,
+        productVisibility(organizationContext),
+      );
+    }
     // 1-12H : projection selon les permissions effectives du demandeur.
     return this.productsService.findAll(
       organizationContext.organizationId,

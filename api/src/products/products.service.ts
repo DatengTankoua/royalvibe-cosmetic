@@ -42,6 +42,13 @@ import {
 } from './product-projection';
 
 import { productImagePrefix } from '../storage-quota/storage-prefixes';
+import {
+  PRODUCT_PAGE_SORT,
+  encodeProductPageCursor,
+  productNameSearch,
+  productPageFilter,
+  type ProductPageQuery,
+} from './product-page';
 
 export type { ProductStatus } from './product-projection';
 
@@ -418,6 +425,57 @@ export class ProductsService {
       .sort({ createdAt: -1 })
       .exec();
     return this.toMetricsViews(organizationId, products, visibility);
+  }
+
+  /**
+   * 1-20F — Page de la liste : organisation, produits actifs, rayon
+   * éventuel et recherche appliqués AVANT la pagination ; `limit + 1`
+   * produits lus au plus (jamais toute la liste). `total` : produits du
+   * périmètre recherche comprise ; `scopeTotal` : sans la recherche. Seuls
+   * les produits renvoyés sont projetés, agrégés (CA) et signés.
+   */
+  async findPage(
+    organizationId: string,
+    sectionId: string | undefined,
+    query: ProductPageQuery,
+    visibility: ProductVisibility = COMMON_VISIBILITY,
+  ): Promise<{
+    items: ProductMetricsView[];
+    total: number;
+    scopeTotal: number;
+    nextCursor: string | null;
+  }> {
+    const scope: Record<string, unknown> = {
+      organizationId: new Types.ObjectId(organizationId),
+      deletedAt: null,
+    };
+    if (sectionId) scope.sectionId = new Types.ObjectId(sectionId);
+    const filter = query.search
+      ? { ...scope, name: productNameSearch(query.search) }
+      : scope;
+    const [total, scopeTotal, rows] = await Promise.all([
+      this.productModel.countDocuments(filter).exec(),
+      query.search
+        ? this.productModel.countDocuments(scope).exec()
+        : Promise.resolve(undefined),
+      this.productModel
+        .find(productPageFilter(filter, query.cursor))
+        .sort({ ...PRODUCT_PAGE_SORT })
+        .limit(query.limit + 1)
+        .exec(),
+    ]);
+    const products = rows.slice(0, query.limit);
+    const last = products[products.length - 1] as
+      (ProductDocument & { createdAt?: Date }) | undefined;
+    return {
+      items: await this.toMetricsViews(organizationId, products, visibility),
+      total,
+      scopeTotal: scopeTotal ?? total,
+      nextCursor:
+        rows.length > query.limit && last
+          ? encodeProductPageCursor(last)
+          : null,
+    };
   }
 
   async findOne(

@@ -73,6 +73,12 @@ const ROUTES = [
   // 1-20E : page Ventes (chargement réel, total compris) et pages éloignées.
   'sales_page',
   'sales_page_far',
+  // 1-20F : ouverture d'un rayon (première page, suivante, recherche) et
+  // synchronisation hors ligne.
+  'catalog_first',
+  'catalog_next',
+  'catalog_search',
+  'catalog_sync',
 ];
 
 const thresholds = {};
@@ -417,7 +423,80 @@ function salesPage(session) {
   }
 }
 
+/**
+ * 1-20F — Ouverture d'un rayon, comme le web : `CATALOG_MODE=legacy` (web
+ * 1-20E : `GET /products?sectionId=` complet ; recherche et pages faites
+ * dans le navigateur, sans requête) ou `paged` (web 1-20F : première page,
+ * page suivante si elle existe, recherche ciblée d'un produit HORS de la
+ * première page, chacune avec ses totaux). La synchronisation hors ligne
+ * complète du rayon (pages de 100) est mesurée À PART (`catalog_sync`) et
+ * n'a lieu qu'une fois par rayon et par VU, comme dans le web (au plus une
+ * fois par intervalle de 15 min) : jamais masquée, jamais répétée à chaque
+ * ouverture. Octets reçus par étape : `catalog_bytes_*`.
+ */
+const CATALOG_MODE = __ENV.CATALOG_MODE || 'paged';
+const PAGE_SIZE = 24;
+const bytesFirst = new Counter('catalog_bytes_first');
+const bytesNext = new Counter('catalog_bytes_next');
+const bytesSearch = new Counter('catalog_bytes_search');
+const bytesSync = new Counter('catalog_bytes_sync');
+const syncedSections = {};
+function catalogPage(session) {
+  const org = orgByKey[session.org];
+  // `SECTION=big` : le rayon supplémentaire (`LOAD_BIG_SECTION`).
+  const sectionId =
+    __ENV.SECTION === 'big' ? org.bigSectionId : rand(org.sectionIds);
+  const base = `/products?sectionId=${sectionId}`;
+  if (CATALOG_MODE === 'legacy') {
+    const res = get(session, base, 'catalog_first');
+    bytesFirst.add(res.body ? res.body.length : 0);
+    return;
+  }
+  const first = get(session, `${base}&limit=${PAGE_SIZE}`, 'catalog_first');
+  bytesFirst.add(first.body ? first.body.length : 0);
+  if (first.status !== 200) return;
+  let last = first.json('items');
+  const cursor = first.json('nextCursor');
+  const scopeTotal = first.json('scopeTotal');
+  if (cursor) {
+    const next = get(
+      session,
+      `${base}&limit=${PAGE_SIZE}&cursor=${encodeURIComponent(cursor)}`,
+      'catalog_next',
+    );
+    bytesNext.add(next.body ? next.body.length : 0);
+    if (next.status === 200) last = next.json('items');
+  }
+  // Recherche ciblée : nom exact d'un produit de la dernière page lue.
+  if (last && last.length > 0) {
+    const name = last[last.length - 1].product.name;
+    const search = get(
+      session,
+      `${base}&limit=${PAGE_SIZE}&q=${encodeURIComponent(name)}`,
+      'catalog_search',
+    );
+    bytesSearch.add(search.body ? search.body.length : 0);
+  }
+  // Rayon de plusieurs pages : synchronisation hors ligne, une fois.
+  const key = `${session.token.slice(-12)}:${sectionId}`;
+  if (scopeTotal > PAGE_SIZE && !syncedSections[key]) {
+    syncedSections[key] = true;
+    let syncCursor = null;
+    for (let i = 0; i < 50; i += 1) {
+      const page = get(
+        session,
+        `${base}&limit=100${syncCursor ? `&cursor=${encodeURIComponent(syncCursor)}` : ''}`,
+        'catalog_sync',
+      );
+      bytesSync.add(page.body ? page.body.length : 0);
+      syncCursor = page.status === 200 ? page.json('nextCursor') : null;
+      if (!syncCursor) break;
+    }
+  }
+}
+
 const PLAN = {
+  catalogpage: { roles: ['owner', 'admin', 'seller'], fn: catalogPage },
   salespage: { roles: ['owner', 'admin', 'seller'], fn: salesPage },
   catalog: { roles: ['owner', 'admin', 'seller'], fn: catalog },
   dashboard: { roles: ['owner', 'admin'], fn: dashboard },

@@ -1,0 +1,224 @@
+{
+  "stop": {
+    "unexpectedErrorRate": 0.01,
+    "routeP95Ms": 1500,
+    "routeP99Ms": 3000,
+    "minRouteSamples": 20,
+    "achievedOfferedRatio": 0.9,
+    "heapRatio": 0.8,
+    "hostFreeMbMin": 250,
+    "eldP99MedianMs": 250,
+    "dbAvgLatencyMs": 50,
+    "poolWaitP99Ms": 200,
+    "generatorCores": 4,
+    "queueOldestAgeS": 120
+  },
+  "limits": {
+    "apiHeapMb": 1024,
+    "wiredTigerCacheGb": 0.5
+  },
+  "results": [
+    {
+      "label": "warm",
+      "scenario": "catalogpage",
+      "target": "multi",
+      "vus": 1,
+      "durationS": 45,
+      "paceS": 1,
+      "think": false,
+      "windowS": 45,
+      "from": "2026-10-10T22:16:36.183Z",
+      "to": "2026-10-10T22:17:21.445Z",
+      "k6": {
+        "requests": 90,
+        "reqPerS": 2,
+        "iterations": 45,
+        "offeredIterPerS": 1,
+        "obtainedIterPerS": 1,
+        "lateIterationsRate": 0,
+        "dataReceivedMb": 0.66,
+        "catalogBytes": {
+          "first": 639114,
+          "next": 0,
+          "search": 35006,
+          "sync": 0
+        },
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "catalog_search": {
+            "n": 45,
+            "p50": 8.4,
+            "p95": 10.4,
+            "p99": 11.8,
+            "max": 12.2
+          },
+          "catalog_first": {
+            "n": 45,
+            "p50": 8.9,
+            "p95": 13.4,
+            "p99": 19.9,
+            "max": 23.7
+          }
+        },
+        "unexpectedLogged": 0
+      },
+      "api": {
+        "cpuPctAvg": 3.11,
+        "cpuPctMax": 15.6,
+        "rssMbMax": 112,
+        "heapUsedMbMax": 54,
+        "eldP99MsMedian": 16.5,
+        "eldMaxMs": 26.3,
+        "socketsMax": 0,
+        "poolMaxInUse": 4,
+        "poolWaitP99MsMax": 0.1,
+        "poolFailed": 0,
+        "signatures": 37
+      },
+      "db": {
+        "connectionsMax": 14,
+        "reads": {
+          "ops": 687,
+          "avgMs": 0.41
+        },
+        "writes": {
+          "ops": 0,
+          "avgMs": 0
+        },
+        "txCommitted": 0,
+        "txAborted": 0,
+        "cacheMbMax": 26,
+        "pendingJobsMax": 0,
+        "oldestPendingJobAgeSMax": 0,
+        "dueDeliveriesMax": 0,
+        "oldestDueDeliveryLateSMax": 0
+      },
+      "proc": {
+        "apiCoresAvg": 0.03,
+        "apiCoresMax": 0.07,
+        "mongodCoresAvg": 0.03,
+        "mongodCoresMax": 0.04,
+        "mongodWsMbMax": 213,
+        "k6CoresAvg": 0,
+        "k6CoresMax": 0.02,
+        "k6WsMbMax": 32,
+        "hostFreeMbMin": 531
+      },
+      "verdict": {
+        "reasons": [],
+        "warnings": []
+      }
+    },
+    {
+      "label": "warm",
+      "scenario": "catalogpage",
+      "target": "multi",
+      "vus": 10,
+      "durationS": 45,
+      "paceS": 1,
+      "think": false,
+      "windowS": 45,
+      "from": "2026-10-10T22:17:26.465Z",
+      "to": "2026-10-10T22:18:11.731Z",
+      "k6": {
+        "requests": 957,
+        "reqPerS": 21.3,
+        "iterations": 450,
+        "offeredIterPerS": 10,
+        "obtainedIterPerS": 10,
+        "lateIterationsRate": 0,
+        "dataReceivedMb": 7.19,
+        "catalogBytes": {
+          "first": 6682031,
+          "next": 43809,
+          "search": 362971,
+          "sync": 220513
+        },
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "catalog_first": {
+            "n": 450,
+            "p50": 42.4,
+            "p95": 93.7,
+            "p99": 148.5,
+            "max": 208.6
+          },
+          "catalog_sync": {
+            "n": 12,
+            "p50": 9,
+            "p95": 11.4,
+            "p99": 11.6,
+            "max": 11.7
+          },
+          "catalog_search": {
+            "n": 450,
+            "p50": 53.9,
+            "p95": 105.8,
+            "p99": 130.3,
+            "max": 172
+          },
+          "catalog_next": {
+            "n": 45,
+            "p50": 56.9,
+            "p95": 98.3,
+            "p99": 125.2,
+            "max": 136.9
+          }
+        },
+        "unexpectedLogged": 0
+      },
+      "api": {
+        "cpuPctAvg": 19.09,
+        "cpuPctMax": 48.2,
+        "rssMbMax": 144,
+        "heapUsedMbMax": 64,
+        "eldP99MsMedian": 17.1,
+        "eldMaxMs": 58,
+        "socketsMax": 0,
+        "poolMaxInUse": 25,
+        "poolWaitP99MsMax": 40.1,
+        "poolFailed": 0,
+        "signatures": 915
+      },
+      "db": {
+        "connectionsMax": 31,
+        "reads": {
+          "ops": 6347,
+          "avgMs": 0.42
+        },
+        "writes": {
+          "ops": 0,
+          "avgMs": 0
+        },
+        "txCommitted": 0,
+        "txAborted": 0,
+        "cacheMbMax": 26,
+        "pendingJobsMax": 0,
+        "oldestPendingJobAgeSMax": 0,
+        "dueDeliveriesMax": 0,
+        "oldestDueDeliveryLateSMax": 0
+      },
+      "proc": {
+        "apiCoresAvg": 0.19,
+        "apiCoresMax": 0.34,
+        "mongodCoresAvg": 0.1,
+        "mongodCoresMax": 0.14,
+        "mongodWsMbMax": 215,
+        "k6CoresAvg": 0.02,
+        "k6CoresMax": 0.07,
+        "k6WsMbMax": 44,
+        "hostFreeMbMin": 478
+      },
+      "verdict": {
+        "reasons": [],
+        "warnings": []
+      }
+    }
+  ]
+}

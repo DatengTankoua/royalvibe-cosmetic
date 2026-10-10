@@ -264,6 +264,39 @@ async function main() {
         }),
       );
       await Product.collection.insertMany(productDocs);
+      // 1-20F (facultatif, `LOAD_BIG_SECTION=<n>`) : un rayon SUPPLÉMENTAIRE
+      // de n produits dans l'entreprise concentrée, sans vente, pour mesurer
+      // la liste d'un grand rayon. Les rayons et produits du profil sont
+      // inchangés ; ce rayon n'est jamais tiré par les autres scénarios.
+      const bigCount = Number(process.env.LOAD_BIG_SECTION || 0);
+      let bigSectionId = null;
+      if (bigCount > 0 && spec.kind === 'concentrated') {
+        const big = doc(Section, { organizationId: orgOid, name: 'Rayon géant' });
+        await Section.collection.insertOne(big);
+        bigSectionId = String(big._id);
+        const bigDocs = [];
+        for (let i = 0; i < bigCount; i += 1) {
+          bigDocs.push(
+            doc(
+              Product,
+              {
+                organizationId: orgOid,
+                sectionId: big._id,
+                name: `Grand ${spec.key} ${String(i + 1).padStart(5, '0')}`,
+                imageKey: `${prefix}/big-${i + 1}.webp`,
+                imageStorage: storage,
+                purchasePrice: 600,
+                salePrice: 1000,
+                initialQuantity: 100,
+                remainingQuantity: 100,
+              },
+              new Date(now - (bigCount - i) * 1000),
+            ),
+          );
+        }
+        for (let i = 0; i < bigDocs.length; i += 5000)
+          await Product.collection.insertMany(bigDocs.slice(i, i + 5000));
+      }
       for (let i = 0; i < sales.length; i += 5000)
         await Sale.collection.insertMany(sales.slice(i, i + 5000));
 
@@ -315,6 +348,7 @@ async function main() {
         kind: spec.kind,
         organizationId,
         sectionIds: sectionDocs.map((s) => String(s._id)),
+        bigSectionId,
         productIds: regular.map((p) => String(p._id)),
         contentionProductIds: products
           .filter((p) => p.contention)

@@ -1,0 +1,125 @@
+{
+  "at": "2026-10-10T22:35:02.595Z",
+  "passed": 12,
+  "total": 12,
+  "results": [
+    {
+      "id": "B1",
+      "label": "propriétaire, bureau, FR : page 1 de 24, total serveur ; aucune liste complète",
+      "ok": true,
+      "detail": {
+        "cards": 24,
+        "text": "30 produits · page 1",
+        "requests": [
+          "/products?limit=24&sectionId=6acabd81479cff09d883d23c",
+          "/products?limit=100&sectionId=6acabd81479cff09d883d23c"
+        ]
+      }
+    },
+    {
+      "id": "B1b",
+      "label": "rayon de plusieurs pages : synchronisation hors ligne séparée (pages de 100), une fois",
+      "ok": true,
+      "detail": {
+        "sync": 1
+      }
+    },
+    {
+      "id": "B2",
+      "label": "page 2 : 6 produits, aucun de la page 1, même total",
+      "ok": true,
+      "detail": {
+        "cards": 6,
+        "text": "30 produits · page 2"
+      }
+    },
+    {
+      "id": "B3",
+      "label": "recherche serveur « éCLAIR » : produit de la page 2 trouvé, « 1 résultat sur 30 produits »",
+      "ok": true,
+      "detail": {
+        "found": [
+          "6acabd814ccb9c78add157ce"
+        ],
+        "text": "1 résultat sur 30 produits · page 1",
+        "requests": [
+          "/products?limit=24&sectionId=6acabd81479cff09d883d23c&q=%C3%A9CLAIR"
+        ]
+      }
+    },
+    {
+      "id": "B3b",
+      "label": "accents distingués (« eclair » ne trouve pas « Éclair »), comme avant",
+      "ok": true,
+      "detail": {}
+    },
+    {
+      "id": "B4",
+      "label": "vente d’une autre session : stock à jour (47) sans rechargement, relecture ciblée seulement",
+      "ok": true,
+      "detail": {
+        "status": 201,
+        "body": "{\"organizationId\":\"6acabd09291892d1522f8558\",\"productId\":\"6acabd814ccb9c78add157e9\",\"productName\":\"Article R27\",\"quantity\":3,\"salePrice\":1000,\"sellerId\":{\"_id\":\"6acabd0a291892d1522f8573\",\"name\":\"Vende",
+        "sold": "6acabd814ccb9c78add157e9",
+        "requests": [
+          "/products?ids=6acabd814ccb9c78add157e9&sectionId=6acabd81479cff09d883d23c"
+        ]
+      }
+    },
+    {
+      "id": "B5",
+      "label": "corbeille d’un produit affiché : retiré, page complétée à 24, total 29, aucun doublon",
+      "ok": true,
+      "detail": {
+        "cards": 24,
+        "text": "29 produits · page 1",
+        "requests": [
+          "/products?limit=24&sectionId=6acabd81479cff09d883d23c"
+        ]
+      }
+    },
+    {
+      "id": "B6",
+      "label": "IndexedDB : 29 produits du rayon (page lue + synchronisation), supprimé absent, dates par produit",
+      "ok": true,
+      "detail": {
+        "count": 29,
+        "synced": true
+      }
+    },
+    {
+      "id": "B7",
+      "label": "reconnexion : page courante relue (une requête limit=24), aucune autre page ni synchronisation ; stock 45",
+      "ok": true,
+      "detail": {
+        "requests": [
+          "/products?limit=24&sectionId=6acabd81479cff09d883d23c"
+        ]
+      }
+    },
+    {
+      "id": "B8",
+      "label": "hors ligne : rayon consultable en entier (29), sans mention partielle",
+      "ok": true,
+      "detail": {
+        "offlineCards": 29,
+        "partialNote": 0
+      }
+    },
+    {
+      "id": "B9",
+      "label": "bureau 1 280 px : aucun défilement horizontal",
+      "ok": true,
+      "detail": {}
+    },
+    {
+      "id": "B10",
+      "label": "vendeur, mobile 390 px, EN : « 29 products · page 1 », page 2 de 5, aucun défilement horizontal",
+      "ok": true,
+      "detail": {
+        "mText": "29 products · page 1",
+        "cards": 5
+      }
+    }
+  ]
+}

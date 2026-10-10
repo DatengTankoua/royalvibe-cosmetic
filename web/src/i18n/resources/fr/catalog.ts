@@ -46,6 +46,8 @@ const catalogFr = {
     noData: "Aucune donnée de catalogue disponible sur cet appareil.",
     empty: "Aucun élément.",
     sectionUnavailable: "Cette section n'est pas disponible sur cet appareil.",
+    partial:
+      "Liste partielle : seuls les produits déjà affichés en ligne sont disponibles sur cet appareil.",
     productNote:
       "Historique et analyses indisponibles hors connexion. Le stock affiché peut ne plus être à jour.",
   },
@@ -74,6 +76,24 @@ const catalogFr = {
     purged: "Ce catalogue a été supprimé définitivement.",
     trashed: "Ce catalogue a été placé dans la corbeille.",
     noProducts: "Aucun produit dans cette section.",
+    page: {
+      summary_one: "{{count}} produit · page {{page}}",
+      summary_many: "{{count}} produits · page {{page}}",
+      summary_other: "{{count}} produits · page {{page}}",
+      complete_one: "{{count}} produit",
+      complete_many: "{{count}} produits",
+      complete_other: "{{count}} produits",
+      search_one: "{{count}} résultat sur {{scope}} produits · page {{page}}",
+      search_many: "{{count}} résultats sur {{scope}} produits · page {{page}}",
+      search_other:
+        "{{count}} résultats sur {{scope}} produits · page {{page}}",
+      first: "Première page",
+      previous: "Précédents",
+      next: "Suivants",
+      navLabel: "Pages des produits du catalogue",
+      changed: "La liste a changé depuis la première page.",
+      showFirst: "Revenir à la première page",
+    },
     empty: "Ce catalogue est vide.",
     emptyHint:
       "Utilise les boutons ci-dessus pour créer un sous-catalogue ou ajouter un produit.",

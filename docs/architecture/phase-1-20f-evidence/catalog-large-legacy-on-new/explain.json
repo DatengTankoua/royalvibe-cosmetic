@@ -1,0 +1,164 @@
+{
+  "at": "2026-10-10T22:25:06.714Z",
+  "indexes": [
+    "_id_",
+    "organizationId_1_sectionId_1_deletedAt_1_createdAt_-1__id_-1",
+    "organizationId_1_sectionId_1_deletedAt_1"
+  ],
+  "real": {
+    "products": 63,
+    "cases": {
+      "legacyAll": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1_createdAt_-1__id_-1",
+        "inMemorySort": false,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 63,
+        "ms": 1
+      },
+      "pagedFirst": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1_createdAt_-1__id_-1",
+        "inMemorySort": false,
+        "docsExamined": 25,
+        "keysExamined": 25,
+        "returned": 25,
+        "ms": 0
+      },
+      "pagedFar": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1_createdAt_-1__id_-1",
+        "inMemorySort": false,
+        "docsExamined": 26,
+        "keysExamined": 26,
+        "returned": 25,
+        "ms": 2
+      },
+      "search": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1_createdAt_-1__id_-1",
+        "inMemorySort": false,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 1,
+        "ms": 1
+      },
+      "count": {
+        "ms": 2.8
+      }
+    },
+    "oldIndexOnly": {
+      "legacyAll": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 63,
+        "ms": 0
+      },
+      "pagedFirst": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 25,
+        "ms": 0
+      },
+      "pagedFar": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 25,
+        "ms": 0
+      },
+      "search": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 1,
+        "ms": 0
+      },
+      "count": {
+        "ms": 2.4
+      }
+    }
+  },
+  "synthetic": {
+    "products": 5000,
+    "cases": {
+      "legacyAll": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1_createdAt_-1__id_-1",
+        "inMemorySort": false,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 5000,
+        "ms": 13
+      },
+      "pagedFirst": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1_createdAt_-1__id_-1",
+        "inMemorySort": false,
+        "docsExamined": 25,
+        "keysExamined": 25,
+        "returned": 25,
+        "ms": 0
+      },
+      "pagedFar": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1_createdAt_-1__id_-1",
+        "inMemorySort": false,
+        "docsExamined": 26,
+        "keysExamined": 26,
+        "returned": 25,
+        "ms": 2
+      },
+      "search": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1_createdAt_-1__id_-1",
+        "inMemorySort": false,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 1,
+        "ms": 35
+      },
+      "count": {
+        "ms": 4.4
+      }
+    },
+    "oldIndexOnly": {
+      "legacyAll": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 5000,
+        "ms": 16
+      },
+      "pagedFirst": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 25,
+        "ms": 14
+      },
+      "pagedFar": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 25,
+        "ms": 19
+      },
+      "search": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 1,
+        "ms": 19
+      },
+      "count": {
+        "ms": 4.7
+      }
+    }
+  },
+  "pageIndexPresent": true,
+  "syntheticRemoved": 5000
+}

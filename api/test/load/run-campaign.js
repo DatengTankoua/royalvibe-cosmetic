@@ -209,6 +209,13 @@ function summarize(o, vus, summary, from, to) {
       dataReceivedMb: m.data_received
         ? Math.round((m.data_received.values.count / 2 ** 20) * 100) / 100
         : null,
+      // 1-20F : octets reçus par étape de l'ouverture d'un rayon.
+      catalogBytes: Object.fromEntries(
+        ['first', 'next', 'search', 'sync'].map((k) => [
+          k,
+          count(`catalog_bytes_${k}`),
+        ]),
+      ),
       unexpectedErrors: count('unexpected_errors'),
       businessRefusals: count('business_refusals'),
       rateLimited: count('rate_limited'),

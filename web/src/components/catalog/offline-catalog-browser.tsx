@@ -27,6 +27,7 @@ import {
 import { productInfoItems } from "@/lib/product-info";
 import {
   scopeKey,
+  snapshotProductLoadedAt,
   type CatalogScope,
   type OfflineCatalogProduct,
   type OfflineCatalogSnapshot,
@@ -86,10 +87,9 @@ export function OfflineCatalogBrowser({
       if (target?.isConnected) target.focus();
     });
   };
-  const parsedUpdatedAt = Date.parse(snapshot.updatedAt);
-  const snapshotUpdatedAt = Number.isNaN(parsedUpdatedAt)
-    ? undefined
-    : parsedUpdatedAt;
+  // 1-20F : borne des ventes déjà reflétées PAR PRODUIT (début de la
+  // lecture serveur qui l'a fourni) ; à défaut, écriture du snapshot.
+  const loadedAtOf = (id: string) => snapshotProductLoadedAt(snapshot, id);
 
   const currentParentId = stack.length ? stack[stack.length - 1].id : null;
 
@@ -171,13 +171,20 @@ export function OfflineCatalogBrowser({
         </div>
       )}
 
+      {/* 1-20F : rayon jamais synchronisé en entier (pages consultées). */}
+      {childSections.length === 0 && products.length > 0 && !productsSynced && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {t("offline.partial")}
+        </p>
+      )}
+
       {childSections.length === 0 && products.length > 0 && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {products.map((p) => (
             <OfflineProductCard
               key={p._id}
               product={p}
-              snapshotUpdatedAt={snapshotUpdatedAt}
+              snapshotUpdatedAt={loadedAtOf(p._id)}
               onSelect={() => {
                 rememberFocus();
                 setProductId(p._id);
@@ -214,13 +221,13 @@ export function OfflineCatalogBrowser({
               </div>
               <OfflineProductInfo
                 product={openProduct}
-                loadedAt={snapshotUpdatedAt}
+                loadedAt={loadedAtOf(openProduct._id)}
               />
               {canRecordSales && (
                 <OfflineSaleButton
                   productId={openProduct._id}
                   remaining={openProduct.remainingQuantity}
-                  loadedAt={snapshotUpdatedAt}
+                  loadedAt={loadedAtOf(openProduct._id)}
                   onClick={() => openSale(openProduct._id, true)}
                 />
               )}
@@ -244,7 +251,7 @@ export function OfflineCatalogBrowser({
           productName={saleProduct.name}
           targetPrice={saleProduct.salePrice}
           remainingStock={saleProduct.remainingQuantity}
-          serverLoadedAt={snapshotUpdatedAt}
+          serverLoadedAt={loadedAtOf(saleProduct._id)}
         />
       )}
     </div>

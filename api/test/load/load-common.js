@@ -183,6 +183,8 @@ function apiEnv(uri, extra = {}) {
     LOAD_DIST: process.env.LOAD_DIST || '',
     LOAD_DISPATCH_LANES: process.env.LOAD_DISPATCH_LANES || '',
     LOAD_KEEPALIVE_MS: process.env.LOAD_KEEPALIVE_MS || '',
+    // 1-20F : rayon supplémentaire de N produits (entreprise concentrée).
+    LOAD_BIG_SECTION: process.env.LOAD_BIG_SECTION || '',
     RECIPE_ENV_GUARD_LOG: path.join(STATE_DIR, 'env-guard.jsonl'),
     ...extra,
   });

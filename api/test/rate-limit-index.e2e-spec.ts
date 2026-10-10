@@ -74,9 +74,12 @@ describe('Index TTL rate_limit_buckets (e2e 1-18C)', () => {
     expect((await ttlIndex())?.expireAfterSeconds).toBe(60);
   });
 
-  it('pré-déploiement : dernière migration, après celles de 1-18B', () => {
-    expect(PREDEPLOY_MIGRATIONS.at(-1)).toBe('create-rate-limit-indexes.js');
-    expect(PREDEPLOY_MIGRATIONS.at(-2)).toBe(
+  // 1-20F : des migrations de performance (1-20E, 1-20F) suivent désormais ;
+  // l'ordre utile est celui relatif à 1-18B.
+  it('pré-déploiement : juste après celles de 1-18B', () => {
+    const index = PREDEPLOY_MIGRATIONS.indexOf('create-rate-limit-indexes.js');
+    expect(index).toBeGreaterThan(0);
+    expect(PREDEPLOY_MIGRATIONS[index - 1]).toBe(
       'create-invitation-account-token-index.js',
     );
   });

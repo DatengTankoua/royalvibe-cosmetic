@@ -1,0 +1,15 @@
+{
+  "at": "2026-10-10T22:19:28.131Z",
+  "legacy": {
+    "status": 200,
+    "isArray": true,
+    "length": 63
+  },
+  "paged": {
+    "status": 200,
+    "isArray": true,
+    "length": 63,
+    "keys": null
+  },
+  "verdict": "API antérieure : tableau complet (repli `legacy` du web, résultat complet)"
+}

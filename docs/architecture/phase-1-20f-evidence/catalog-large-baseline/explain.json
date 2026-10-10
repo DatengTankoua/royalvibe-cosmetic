@@ -1,0 +1,163 @@
+{
+  "at": "2026-10-10T22:20:39.849Z",
+  "indexes": [
+    "_id_",
+    "organizationId_1_sectionId_1_deletedAt_1"
+  ],
+  "real": {
+    "products": 63,
+    "cases": {
+      "legacyAll": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 63,
+        "ms": 3
+      },
+      "pagedFirst": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 25,
+        "ms": 0
+      },
+      "pagedFar": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 25,
+        "ms": 0
+      },
+      "search": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 1,
+        "ms": 2
+      },
+      "count": {
+        "ms": 2.5
+      }
+    },
+    "oldIndexOnly": {
+      "legacyAll": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 63,
+        "ms": 0
+      },
+      "pagedFirst": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 25,
+        "ms": 0
+      },
+      "pagedFar": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 25,
+        "ms": 0
+      },
+      "search": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 63,
+        "keysExamined": 63,
+        "returned": 1,
+        "ms": 0
+      },
+      "count": {
+        "ms": 2.5
+      }
+    }
+  },
+  "synthetic": {
+    "products": 5000,
+    "cases": {
+      "legacyAll": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 5000,
+        "ms": 16
+      },
+      "pagedFirst": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 25,
+        "ms": 14
+      },
+      "pagedFar": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 25,
+        "ms": 16
+      },
+      "search": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 1,
+        "ms": 16
+      },
+      "count": {
+        "ms": 3.9
+      }
+    },
+    "oldIndexOnly": {
+      "legacyAll": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 5000,
+        "ms": 13
+      },
+      "pagedFirst": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 25,
+        "ms": 11
+      },
+      "pagedFar": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 25,
+        "ms": 14
+      },
+      "search": {
+        "index": "organizationId_1_sectionId_1_deletedAt_1",
+        "inMemorySort": true,
+        "docsExamined": 5000,
+        "keysExamined": 5000,
+        "returned": 1,
+        "ms": 15
+      },
+      "count": {
+        "ms": 4.2
+      }
+    }
+  },
+  "pageIndexPresent": false,
+  "syntheticRemoved": 5000
+}

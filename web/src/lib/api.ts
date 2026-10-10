@@ -9,6 +9,7 @@ import type {
 import { PERMISSION_CATALOG } from "./organization-permissions";
 import type { LegalAcceptancePayload } from "./legal/acceptance";
 import { clientT, currentLocale } from "@/i18n/client-t";
+import { isProductSearch, matchesProductSearch } from "./product-search";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -935,6 +936,68 @@ export async function fetchProductsByIds(
   });
   const wanted = new Set(ids);
   return data.map(flattenProduct).filter((p) => wanted.has(p._id));
+}
+
+/** 1-20F — Produits par page de la liste d'un rayon (maximum serveur : 100). */
+export const PRODUCTS_PAGE_SIZE = 24;
+
+/**
+ * 1-20F — Une page de la liste (`GET /products?limit=…`) : `total` porte sur
+ * tout le périmètre de la vue (rayon et recherche), `scopeTotal` sur tout le
+ * rayon sans la recherche, jamais sur la page. `legacy` : API antérieure, qui
+ * ignore `limit` et renvoie le tableau COMPLET du rayon → recherche appliquée
+ * ici avec la même règle, résultat complet présenté comme tel (aucune page
+ * suivante, totaux exacts).
+ */
+export interface ProductsPage {
+  items: ApiProduct[];
+  total: number;
+  scopeTotal: number;
+  nextCursor: string | null;
+  legacy: boolean;
+}
+
+export async function fetchProductsPage(options: {
+  sectionId?: string;
+  cursor?: string | null;
+  query?: string;
+  limit?: number;
+}): Promise<ProductsPage> {
+  const query = options.query ?? "";
+  const { data } = await apiClient.get<
+    | ApiProductEnvelope[]
+    | {
+        items: ApiProductEnvelope[];
+        total: number;
+        scopeTotal: number;
+        nextCursor: string | null;
+      }
+  >("/products", {
+    params: {
+      limit: options.limit ?? PRODUCTS_PAGE_SIZE,
+      ...(options.sectionId ? { sectionId: options.sectionId } : {}),
+      ...(options.cursor ? { cursor: options.cursor } : {}),
+      ...(isProductSearch(query) ? { q: query } : {}),
+    },
+  });
+  if (Array.isArray(data)) {
+    const all = data.map(flattenProduct);
+    const items = all.filter((p) => matchesProductSearch(p.name, query));
+    return {
+      items,
+      total: items.length,
+      scopeTotal: all.length,
+      nextCursor: null,
+      legacy: true,
+    };
+  }
+  return {
+    items: data.items.map(flattenProduct),
+    total: data.total,
+    scopeTotal: data.scopeTotal,
+    nextCursor: data.nextCursor,
+    legacy: false,
+  };
 }
 
 export async function fetchProduct(id: string): Promise<ApiProductDetail> {

@@ -1,0 +1,109 @@
+{
+  "stop": {
+    "unexpectedErrorRate": 0.01,
+    "routeP95Ms": 1500,
+    "routeP99Ms": 3000,
+    "minRouteSamples": 20,
+    "achievedOfferedRatio": 0.9,
+    "heapRatio": 0.8,
+    "hostFreeMbMin": 250,
+    "eldP99MedianMs": 250,
+    "dbAvgLatencyMs": 50,
+    "poolWaitP99Ms": 200,
+    "generatorCores": 4,
+    "queueOldestAgeS": 120
+  },
+  "limits": {
+    "apiHeapMb": 1024,
+    "wiredTigerCacheGb": 0.5
+  },
+  "results": [
+    {
+      "label": "cold",
+      "scenario": "catalogpage",
+      "target": "concentrated",
+      "vus": 1,
+      "durationS": 15,
+      "paceS": 1,
+      "think": false,
+      "windowS": 15,
+      "from": "2026-10-10T22:26:57.796Z",
+      "to": "2026-10-10T22:27:13.205Z",
+      "k6": {
+        "requests": 15,
+        "reqPerS": 1,
+        "iterations": 15,
+        "offeredIterPerS": 1,
+        "obtainedIterPerS": 1,
+        "lateIterationsRate": 6.7,
+        "dataReceivedMb": 24.45,
+        "catalogBytes": {
+          "first": 25633410,
+          "next": 0,
+          "search": 0,
+          "sync": 0
+        },
+        "unexpectedErrors": 0,
+        "businessRefusals": 0,
+        "rateLimited": 0,
+        "timeouts": 0,
+        "routes": {
+          "catalog_first": {
+            "n": 15,
+            "p50": 106.8,
+            "p95": 399.8,
+            "p99": 914.7,
+            "max": 1043.5
+          }
+        },
+        "unexpectedLogged": 0
+      },
+      "api": {
+        "cpuPctAvg": 22.52,
+        "cpuPctMax": 112.9,
+        "rssMbMax": 248,
+        "heapUsedMbMax": 145,
+        "eldP99MsMedian": 35.3,
+        "eldMaxMs": 952.6,
+        "socketsMax": 0,
+        "poolMaxInUse": 1,
+        "poolWaitP99MsMax": 0.2,
+        "poolFailed": 0,
+        "signatures": 2063
+      },
+      "db": {
+        "connectionsMax": 13,
+        "reads": {
+          "ops": 158,
+          "avgMs": 1.35
+        },
+        "writes": {
+          "ops": 0,
+          "avgMs": 0
+        },
+        "txCommitted": 0,
+        "txAborted": 0,
+        "cacheMbMax": 127,
+        "pendingJobsMax": 0,
+        "oldestPendingJobAgeSMax": 0,
+        "dueDeliveriesMax": 0,
+        "oldestDueDeliveryLateSMax": 0
+      },
+      "proc": {
+        "apiCoresAvg": 0.34,
+        "apiCoresMax": 0.81,
+        "mongodCoresAvg": 0.06,
+        "mongodCoresMax": 0.06,
+        "mongodWsMbMax": 324,
+        "k6CoresAvg": 0.01,
+        "k6CoresMax": 0.01,
+        "k6WsMbMax": 55,
+        "hostFreeMbMin": 552
+      },
+      "verdict": {
+        "reasons": [],
+        "warnings": []
+      }
+    }
+  ]
+}

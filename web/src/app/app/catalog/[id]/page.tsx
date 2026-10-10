@@ -12,22 +12,30 @@ import { UpdateProductDialog } from "@/components/products/update-product-dialog
 import { SectionCard } from "@/components/sections/section-card";
 import { CreateSectionDialog } from "@/components/sections/create-section-dialog";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import {
   fetchSection,
   fetchSections,
   createSection,
   updateSection,
   deleteSection,
+  fetchProductsByIds,
+  fetchProductsPage,
   getApiErrorMessage,
+  PRODUCTS_PAGE_SIZE,
   type ApiSection,
   type ApiProduct,
 } from "@/lib/api";
+import { OFFLINE_SYNC_PAGE_SIZE } from "@/lib/offline-section-sync";
 import { useProducts } from "@/hooks/use-products";
 import { useOfflineCatalog } from "@/hooks/use-offline-catalog";
 import { useOrganizationShell } from "@/contexts/organization-shell-context";
 import { useOfflineSales } from "@/contexts/offline-sales-context";
 import { hasPermission } from "@/lib/organization-permissions";
-import type { OfflineCatalogSection } from "@/lib/offline-catalog-db";
+import type {
+  OfflineCatalogProduct,
+  OfflineCatalogSection,
+} from "@/lib/offline-catalog-db";
 import { useSocket } from "@/contexts/socket-context";
 import { useLiveRefresh } from "@/hooks/use-live-refresh";
 import { SECTION_SIGNALS, readSectionSignal } from "@/hooks/use-sections";
@@ -35,6 +43,21 @@ import { createResponseOrder } from "@/lib/refresh-coordinator";
 import { reservesStock } from "@/lib/offline-sales-policy";
 
 type ContentMode = "loading" | "subsections" | "products" | "empty";
+
+/** 1-20F : délai avant une recherche serveur (frappe en cours). */
+const SEARCH_DELAY_MS = 300;
+
+// 1-12H : informations standard uniquement (allowlist v3).
+function toOfflineProduct(p: ApiProduct): OfflineCatalogProduct {
+  return {
+    _id: p._id,
+    sectionId: p.sectionId,
+    name: p.name,
+    salePrice: p.salePrice,
+    remainingQuantity: p.remainingQuantity,
+    status: p.status,
+  };
+}
 
 function toOfflineSection(s: ApiSection): OfflineCatalogSection {
   return {
@@ -55,6 +78,14 @@ function toOfflineSection(s: ApiSection): OfflineCatalogSection {
 // sans réseau) — seule `/app/catalog` (OfflineCatalogBrowser) le fait. Cette
 // page continue en revanche d'ALIMENTER le cache (scope section) après
 // chaque chargement en ligne complet et réussi.
+//
+// 1-20F : produits PAGINÉS et recherchés par le serveur (tout le rayon,
+// même règle qu'avant). Le cache hors ligne n'est REMPLACÉ que par une
+// réponse complète (première page sans recherche ni page suivante, ou API
+// antérieure) ; une page ne fait que mettre à jour ses produits. Un rayon de
+// plusieurs pages est relu en entier par la synchronisation distincte,
+// bornée et reprenable de `useOfflineCatalog().syncSection` (au plus une
+// fois par intervalle, jamais à chaque événement).
 export default function CatalogSectionPage() {
   const { t } = useT("catalog");
   const params = useParams<{ id: string }>();
@@ -80,6 +111,14 @@ export default function CatalogSectionPage() {
   const [editTarget, setEditTarget] = useState<ApiProduct | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // 1-20F : recherche serveur après une courte pause de frappe.
+  const [searchQuery, setSearchQuery] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchQuery(query), SEARCH_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [query]);
+  const { writeSectionScope, writeSectionPage, removeProducts, syncSection } =
+    useOfflineCatalog();
 
   const {
     products,
@@ -90,7 +129,20 @@ export default function CatalogSectionPage() {
     removeProduct,
     refreshProducts,
     serverLoadedAtFor,
-  } = useProducts(params.id);
+    loadedAt: productsLoadedAt,
+    total,
+    scopeTotal,
+    legacy,
+    pageIndex,
+    hasNext,
+    complete,
+    newerAvailable,
+    goToPage,
+  } = useProducts(params.id, {
+    // Sous-catalogues : recherche locale seulement (aucun produit).
+    query: subSections.length > 0 ? "" : searchQuery,
+    onRemoved: removeProducts,
+  });
   // 1-11C.3 : stock serveur rechargé après confirmation d'une vente locale.
   // 1-20D : seuls les produits affichés dont une vente confirmée n'est pas
   // encore incluse dans leur dernière lecture serveur sont relus (relecture
@@ -120,7 +172,6 @@ export default function CatalogSectionPage() {
     }
     refreshProducts([...ids]);
   }, [syncedVersion, refreshProducts]);
-  const { writeSectionScope } = useOfflineCatalog();
 
   const loadSubSections = useCallback(
     async (options: { silent?: boolean } = {}) => {
@@ -159,44 +210,89 @@ export default function CatalogSectionPage() {
 
   const isLoading = subSectionsLoading || productsLoading;
 
-  // N'écrit qu'après un chargement COMPLET et réussi des deux appels
-  // (sous-sections + produits) — remplace intégralement les deux scopes de
+  // N'écrit qu'après un chargement réussi des deux appels (sous-sections +
+  // produits). Réponse COMPLÈTE : remplace intégralement les deux scopes de
   // cette section en une seule transaction (jamais un simple merge).
+  // 1-20F : page partielle → sous-sections remplacées, produits de la page
+  // mis à jour, jamais une suppression des produits absents de la page.
   useEffect(() => {
-    if (!isLoading && !error) {
+    if (isLoading || error || productsLoadedAt === undefined) return;
+    const loadedAt: Record<string, number> = {};
+    for (const p of products) {
+      loadedAt[p._id] = serverLoadedAtFor(p._id) ?? productsLoadedAt;
+    }
+    const sections = subSections.map(toOfflineSection);
+    const offline = products.map(toOfflineProduct);
+    if (complete) {
       writeSectionScope(
         params.id,
-        subSections.map(toOfflineSection),
-        // 1-12H : informations standard uniquement (allowlist v3).
-        products.map((p) => ({
-          _id: p._id,
-          sectionId: p.sectionId,
-          name: p.name,
-          salePrice: p.salePrice,
-          remainingQuantity: p.remainingQuantity,
-          status: p.status,
-        })),
+        sections,
+        offline,
+        loadedAt,
+        productsLoadedAt,
       );
+    } else {
+      writeSectionPage(params.id, sections, offline, loadedAt);
     }
-  }, [isLoading, error, params.id, subSections, products, writeSectionScope]);
+  }, [
+    isLoading,
+    error,
+    complete,
+    params.id,
+    subSections,
+    products,
+    productsLoadedAt,
+    serverLoadedAtFor,
+    writeSectionScope,
+    writeSectionPage,
+  ]);
 
-  const mode: ContentMode = isLoading
-    ? "loading"
-    : subSections.length > 0
-      ? "subsections"
-      : products.length > 0
-        ? "products"
-        : "empty";
+  // 1-20F : rayon de plusieurs pages → synchronisation hors ligne complète
+  // si elle est due (parcours distinct, interrompu si le rayon est quitté).
+  const activeSection = useRef<string | null>(null);
+  useEffect(() => {
+    activeSection.current = params.id;
+    return () => {
+      activeSection.current = null;
+    };
+  }, [params.id]);
+  const multiPage =
+    !legacy && scopeTotal !== null && scopeTotal > PRODUCTS_PAGE_SIZE;
+  useEffect(() => {
+    if (!multiPage || isLoading || error) return;
+    if (typeof navigator !== "undefined" && !navigator.onLine) return;
+    const sectionId = params.id;
+    void syncSection(
+      sectionId,
+      async (cursor) => {
+        const page = await fetchProductsPage({
+          sectionId,
+          cursor,
+          limit: OFFLINE_SYNC_PAGE_SIZE,
+        });
+        return {
+          items: page.items.map(toOfflineProduct),
+          nextCursor: page.nextCursor,
+          legacy: page.legacy,
+        };
+      },
+      () =>
+        activeSection.current === sectionId &&
+        (typeof navigator === "undefined" || navigator.onLine),
+    );
+  }, [multiPage, isLoading, error, params.id, syncSection]);
 
-  const filtered = useMemo(
-    () =>
-      query.trim()
-        ? products.filter((p) =>
-            p.name.toLowerCase().includes(query.toLowerCase()),
-          )
-        : products,
-    [products, query],
-  );
+  // 1-20F : présence de produits jugée sur tout le rayon (`scopeTotal`),
+  // jamais sur la page ni sur le résultat d'une recherche.
+  const mode: ContentMode =
+    subSectionsLoading || (productsLoading && scopeTotal === null)
+      ? "loading"
+      : subSections.length > 0
+        ? "subsections"
+        : (scopeTotal ?? 0) > 0
+          ? "products"
+          : "empty";
+  const searching = searchQuery.trim() !== "";
 
   const filteredSubSections = useMemo(
     () =>
@@ -298,8 +394,18 @@ export default function CatalogSectionPage() {
     if (product) {
       setEditTarget(product);
       setEditOpen(true);
+      return;
     }
-  }, [products, productsLoading, canEditProduct]);
+    // 1-20F : produit hors de la page affichée → lu seul (même projection).
+    void fetchProductsByIds([requested], params.id)
+      .then(([found]) => {
+        if (found) {
+          setEditTarget(found);
+          setEditOpen(true);
+        }
+      })
+      .catch(() => undefined);
+  }, [products, productsLoading, canEditProduct, params.id]);
 
   const handleDeleteSubSection = async (id: string) => {
     try {
@@ -367,8 +473,9 @@ export default function CatalogSectionPage() {
         </div>
       </div>
 
-      {/* Search bar — only show when there's content */}
-      {!isLoading && (subSections.length > 0 || products.length > 0) && (
+      {/* Search bar — only show when there's content (1-20F : tout le
+          rayon ; conservée pendant une recherche serveur) */}
+      {(mode === "subsections" || mode === "products") && (
         <div className="relative">
           <SearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -394,6 +501,15 @@ export default function CatalogSectionPage() {
           {t("section.trashed")}
         </p>
       ) : null}
+
+      {mode === "products" && newerAvailable && pageIndex > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 text-sm">
+          <span>{t("section.page.changed")}</span>
+          <Button variant="outline" size="sm" onClick={() => goToPage(0)}>
+            {t("section.page.showFirst")}
+          </Button>
+        </div>
+      )}
 
       {isLoading && (
         <p className="text-sm text-muted-foreground">{t("loading")}</p>
@@ -425,20 +541,18 @@ export default function CatalogSectionPage() {
         </>
       )}
 
-      {/* Products view */}
+      {/* Products view (1-20F : page serveur, recherche comprise) */}
       {!isLoading && mode === "products" && (
         <>
           {products.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              {t("section.noProducts")}
-            </p>
-          ) : filtered.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              {t("noResults", { query })}
+              {searching
+                ? t("noResults", { query: searchQuery })
+                : t("section.noProducts")}
             </p>
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {filtered.map((p, i) => (
+              {products.map((p, i) => (
                 <ProductCard
                   key={p._id}
                   product={p}
@@ -453,6 +567,56 @@ export default function CatalogSectionPage() {
             </div>
           )}
         </>
+      )}
+
+      {!isLoading && mode === "products" && !error && total !== null && (
+        <nav
+          aria-label={t("section.page.navLabel")}
+          className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <p className="text-sm text-muted-foreground" aria-live="polite">
+            {legacy
+              ? t("section.page.complete", { count: total })
+              : searching
+                ? t("section.page.search", {
+                    count: total,
+                    scope: scopeTotal ?? total,
+                    page: pageIndex + 1,
+                  })
+                : t("section.page.summary", {
+                    count: total,
+                    page: pageIndex + 1,
+                  })}
+          </p>
+          {!legacy && (pageIndex > 0 || hasNext) && (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pageIndex === 0}
+                onClick={() => goToPage(0)}
+              >
+                {t("section.page.first")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pageIndex === 0}
+                onClick={() => goToPage(pageIndex - 1)}
+              >
+                {t("section.page.previous")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!hasNext}
+                onClick={() => goToPage(pageIndex + 1)}
+              >
+                {t("section.page.next")}
+              </Button>
+            </div>
+          )}
+        </nav>
       )}
 
       {/* Empty state */}

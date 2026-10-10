@@ -70,6 +70,7 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
   const serviceStub = {
     create: jest.fn(),
     findAll: jest.fn(),
+    findPage: jest.fn(),
     findOne: jest.fn(),
     update: jest.fn(),
     restore: jest.fn(),
@@ -318,6 +319,72 @@ describe('ProductsController — transmission du tenant (1-4B)', () => {
       await expect(
         Promise.resolve().then(() => controller.findAll(undefined, ids, ctxA)),
       ).rejects.toBeInstanceOf(BadRequestException);
+      expect(serviceStub.findAll).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findAll — contrat paginé `limit` (1-20F)', () => {
+    const SECTION = 'cccccccccccccccccccccccc';
+
+    it('`limit` → page (org du contexte, rayon, projection), jamais la liste complète', async () => {
+      serviceStub.findAll.mockClear();
+      await controller.findAll(
+        SECTION,
+        undefined,
+        ctxA,
+        '24',
+        undefined,
+        'Sav',
+      );
+      expect(serviceStub.findPage).toHaveBeenLastCalledWith(
+        ORG_A,
+        SECTION,
+        { limit: 24, search: 'Sav' },
+        FULL,
+      );
+      expect(serviceStub.findAll).not.toHaveBeenCalled();
+    });
+
+    it('vendeur : projection standard sur la page', async () => {
+      await controller.findAll(
+        undefined,
+        undefined,
+        makeContext(ORG_A, OrganizationRole.SELLER, []),
+        '10',
+      );
+      expect(serviceStub.findPage).toHaveBeenLastCalledWith(
+        ORG_A,
+        undefined,
+        { limit: 10 },
+        STANDARD,
+      );
+    });
+
+    it.each([
+      ['`ids` avec `limit`', [SECTION, SECTION, '10'] as const],
+      ['rayon invalide', ['nope', undefined, '10'] as const],
+      ['`limit` hors bornes', [SECTION, undefined, '101'] as const],
+      [
+        '`q` sans `limit`',
+        [SECTION, undefined, undefined, undefined, 'x'] as const,
+      ],
+    ])('%s → 400, service jamais appelé', async (_label, args) => {
+      serviceStub.findPage.mockClear();
+      serviceStub.findAll.mockClear();
+      const [sectionId, ids, limit, cursor, q] = args as readonly unknown[];
+      await expect(
+        Promise.resolve().then(() =>
+          controller.findAll(
+            sectionId as string | undefined,
+            ids,
+            ctxA,
+            limit,
+            cursor,
+            q,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(serviceStub.findPage).not.toHaveBeenCalled();
       expect(serviceStub.findAll).not.toHaveBeenCalled();
     });
   });
