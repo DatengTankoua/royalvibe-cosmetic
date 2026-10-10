@@ -62,6 +62,8 @@ const {
   OFFLINE_SYNC_MAX_PAGES,
   OFFLINE_SYNC_INTERVAL_MS,
   OFFLINE_SYNC_RESUME_MS,
+  OFFLINE_SYNC_RETRY_MS,
+  createSectionSyncGate,
 } = load("offline-section-sync.ts");
 const { reservesStock } = load("offline-sales-policy.ts");
 
@@ -375,7 +377,7 @@ test("synchronisation interrompue (rayon quitté) puis REPRISE au curseur enregi
     shouldContinue: () => allowed-- > 0,
     now: store.now,
   });
-  assert.equal(outcome, "paused");
+  assert.equal(outcome, "interrupted");
   assert.equal(store.get().pendingSyncs[KEY].cursor, "100");
   assert.ok(!store.get().syncedScopes.includes(KEY));
   // Aucun produit de la synchronisation n'est publié avant la fin.
@@ -504,4 +506,137 @@ test("ventes locales : ni comptées deux fois, ni oubliées, avec la date de lec
     ),
     true,
   );
+});
+
+// ─── Clôture 1-20F : articulation des délais, horloge simulée ───────────────
+// `open` reproduit `useOfflineCatalog().syncSection` : garde par onglet,
+// passage, issue `failed` sur exception, délai fixé par l'issue.
+function tab(store, api) {
+  const gate = createSectionSyncGate();
+  return async (shouldContinue = () => true) => {
+    if (!gate.tryStart(S, store.now())) return "skipped";
+    let outcome = "failed";
+    try {
+      outcome = await runSectionSync({
+        sectionId: S,
+        readSnapshot: store.readSnapshot,
+        fetchPage: api.fetchPage,
+        apply: store.apply,
+        shouldContinue,
+        now: store.now,
+      });
+      return outcome;
+    } catch {
+      outcome = "failed";
+      return outcome;
+    } finally {
+      gate.finish(S, outcome, store.now());
+    }
+  };
+}
+
+test("délais : nouvel essai après échec < fenêtre de reprise < intervalle", () => {
+  assert.ok(OFFLINE_SYNC_RETRY_MS > 0);
+  assert.ok(OFFLINE_SYNC_RETRY_MS < OFFLINE_SYNC_RESUME_MS);
+  assert.ok(OFFLINE_SYNC_RESUME_MS < OFFLINE_SYNC_INTERVAL_MS);
+});
+
+test("horloge simulée : rayon quitté après 1 page, rouvert 1 min plus tard → reprise au curseur enregistré", async () => {
+  const api = fakeApi(250, 100);
+  const store = memoryStore();
+  const open = tab(store, api);
+  let allowed = 1;
+  assert.equal(await open(() => allowed-- > 0), "interrupted");
+  store.tick(60_000);
+  assert.equal(await open(), "complete");
+  assert.deepEqual(api.calls, [null, "100", "200"]);
+  assert.equal(store.get().products.length, 250);
+});
+
+test("horloge simulée : erreur réseau en page 2 → aucun essai avant 2 min, puis REPRISE (pas de redémarrage)", async () => {
+  const api = fakeApi(250, 100);
+  const store = memoryStore();
+  let failNext = false;
+  const flaky = {
+    calls: api.calls,
+    async fetchPage(c) {
+      if (c === "100" && !failNext) {
+        failNext = true;
+        api.calls.push("ERR");
+        throw new Error("réseau");
+      }
+      return api.fetchPage(c);
+    },
+  };
+  const open = tab(store, flaky);
+  assert.equal(await open(), "failed");
+  assert.equal(store.get().pendingSyncs[KEY].cursor, "100");
+  store.tick(60_000);
+  assert.equal(await open(), "skipped"); // aucune requête
+  store.tick(OFFLINE_SYNC_RETRY_MS);
+  assert.equal(await open(), "complete");
+  assert.deepEqual(api.calls, [null, "ERR", "100", "200"]);
+});
+
+test("horloge simulée : échec persistant → au plus un essai par délai, jamais une boucle", async () => {
+  const store = memoryStore();
+  let fetches = 0;
+  const down = {
+    async fetchPage() {
+      fetches += 1;
+      throw new Error("API indisponible");
+    },
+  };
+  const open = tab(store, down);
+  // 60 ouvertures ou rendus, un toutes les 10 s, pendant 10 min.
+  for (let i = 0; i < 60; i += 1) {
+    await open();
+    store.tick(10_000);
+  }
+  assert.ok(
+    fetches <= Math.ceil((10 * 60_000) / OFFLINE_SYNC_RETRY_MS) + 1,
+    String(fetches),
+  );
+  assert.ok(fetches >= 2);
+});
+
+test("horloge simulée : écriture locale refusée → échec retardé, pas d'essai à chaque ouverture", async () => {
+  const api = fakeApi(250, 100);
+  const store = memoryStore();
+  const refusing = { ...store, apply: async () => false };
+  const open = tab(refusing, api);
+  assert.equal(await open(), "failed");
+  store.tick(30_000);
+  assert.equal(await open(), "skipped");
+  assert.equal(api.calls.length, 1);
+});
+
+test("horloge simulée : rayon rouvert après la fenêtre de reprise (11 min) → recommencé en tête", async () => {
+  const api = fakeApi(250, 100);
+  const store = memoryStore();
+  const open = tab(store, api);
+  let allowed = 1;
+  await open(() => allowed-- > 0);
+  store.tick(OFFLINE_SYNC_RESUME_MS + 60_000);
+  assert.equal(await open(), "complete");
+  assert.deepEqual(api.calls, [null, null, "100", "200"]);
+});
+
+test("rayon au-delà du plafond : chaque passage relit les MÊMES produits les plus récents, jamais complété", async () => {
+  const total = OFFLINE_SYNC_MAX_PAGES * 10 + 30;
+  const api = fakeApi(total, 10);
+  const store = memoryStore();
+  const open = tab(store, api);
+  assert.equal(await open(), "truncated");
+  store.tick(60_000);
+  assert.equal(await open(), "skipped"); // intervalle
+  store.tick(OFFLINE_SYNC_INTERVAL_MS);
+  assert.equal(await open(), "truncated");
+  // Les deux passages commencent en tête : aucune continuation.
+  assert.equal(api.calls.filter((c) => c === null).length, 2);
+  assert.equal(api.calls.length, 2 * OFFLINE_SYNC_MAX_PAGES);
+  const kept = new Set(store.get().products.map((x) => x._id));
+  assert.equal(kept.size, OFFLINE_SYNC_MAX_PAGES * 10);
+  assert.ok(!kept.has(api.all[total - 1]._id)); // plus anciens absents
+  assert.ok(!store.get().syncedScopes.includes(KEY));
 });

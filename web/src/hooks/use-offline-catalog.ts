@@ -10,16 +10,17 @@ import {
   type OfflineCatalogSnapshot,
 } from "@/lib/offline-catalog-db";
 import {
-  OFFLINE_SYNC_INTERVAL_MS,
+  createSectionSyncGate,
   runSectionSync,
   type SectionSyncOutcome,
   type SyncPage,
 } from "@/lib/offline-section-sync";
 
-// 1-20F : une synchronisation de rayon à la fois par onglet, et au plus un
-// essai par intervalle (même si l'IndexedDB est indisponible ou en échec).
-const syncInFlight = new Set<string>();
-const syncAttemptedAt = new Map<string, number>();
+// 1-20F : une synchronisation de rayon à la fois par onglet ; délai avant
+// le passage suivant selon l'issue (`nextSyncAllowedAt`) : aucun après une
+// interruption (reprise), court après un échec (reprise, jamais en boucle),
+// l'intervalle après un passage terminé ou tronqué.
+const syncGate = createSectionSyncGate();
 
 // Écriture/lecture du catalogue hors ligne (1-11B, correction) : la
 // partition vient de `authContext` (réseau OK) ou, à défaut, de
@@ -135,17 +136,10 @@ export function useOfflineCatalog() {
     ): Promise<SectionSyncOutcome | "skipped"> => {
       if (!identity) return "skipped";
       const key = `${identity.userId}:${identity.organizationId}:${sectionId}`;
-      const now = Date.now();
-      const last = syncAttemptedAt.get(key);
-      if (
-        syncInFlight.has(key) ||
-        (last !== undefined && now - last < OFFLINE_SYNC_INTERVAL_MS)
-      ) {
-        return "skipped";
-      }
-      syncInFlight.add(key);
+      if (!syncGate.tryStart(key, Date.now())) return "skipped";
+      let outcome: SectionSyncOutcome = "failed";
       try {
-        const outcome = await runSectionSync({
+        outcome = await runSectionSync({
           sectionId,
           readSnapshot: () => readCatalogSnapshot(identity),
           fetchPage,
@@ -153,16 +147,14 @@ export function useOfflineCatalog() {
             applyCatalogScopeUpdates({ ...identity, updates }),
           shouldContinue,
         });
-        // Interrompue : reprise permise à la prochaine ouverture.
-        if (outcome !== "paused") syncAttemptedAt.set(key, Date.now());
         return outcome;
       } catch {
-        // Réseau ou API : progression conservée, reprise après l'intervalle
-        // (jamais un nouvel essai à chaque ouverture).
-        syncAttemptedAt.set(key, Date.now());
-        return "paused";
+        // Réseau ou API : progression enregistrée conservée, nouvel essai
+        // (avec reprise) après `OFFLINE_SYNC_RETRY_MS`.
+        outcome = "failed";
+        return outcome;
       } finally {
-        syncInFlight.delete(key);
+        syncGate.finish(key, outcome, Date.now());
       }
     },
     [identity],

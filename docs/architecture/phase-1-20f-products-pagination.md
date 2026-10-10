@@ -199,19 +199,36 @@ snapshot.
   un autre rayon).
 - **Synchronisation complète distincte** (`offline-section-sync.ts`) pour
   un rayon de plusieurs pages :
-  - lancée à l'ouverture si le rayon n'a jamais été synchronisé ou date de
-    plus de **15 min**, jamais à chaque ouverture ni événement ;
-  - au plus une fois par intervalle et par onglet, même en échec ;
-  - **bornée** : pages de 100, au plus 50 pages (5 000 produits). Au-delà,
-    les produits lus sont conservés, le rayon n'est **pas** marqué
-    synchronisé et le navigateur hors ligne affiche « Liste partielle » ;
-  - **reprenable** : progression enregistrée après chaque page, reprise à
-    la prochaine ouverture si elle a moins de 10 min (sinon recommencée).
-    Elle s'arrête entre deux pages si le rayon est quitté ou la connexion
-    perdue ;
+  - lancée à l'ouverture **en ligne** du rayon, si sa dernière
+    synchronisation terminée (complète ou tronquée) date de plus de
+    **15 min** ou n'existe pas ; jamais sur un événement ;
+  - **reprenable** : progression (curseur, produits lus, date de chaque
+    page) enregistrée après chaque page ; reprise au passage suivant si
+    elle a moins de **10 min**, sinon recommencée en tête (jamais
+    d'assemblage de lectures trop éloignées). Elle s'arrête entre deux
+    pages si le rayon est quitté ou la connexion perdue ;
+  - **garde par onglet** : un passage à la fois par rayon ; délai avant le
+    suivant selon l'issue :
+
+    | Issue | Délai | Effet |
+    |---|---|---|
+    | interrompue (rayon quitté, hors ligne) | aucun | reprise à la prochaine ouverture en ligne (< 10 min) |
+    | échec (réseau, API, écriture IndexedDB refusée) | **2 min** | reprise au curseur ensuite (2 < 10 min) ; jamais un essai par ouverture ou par rendu |
+    | terminée ou tronquée | 15 min | rien avant l'intervalle |
+
+  - **bornée par passage** : pages de 100, au plus **50 pages (5 000
+    produits) par passage**, sans reprise au-delà (§ 8) ;
   - publiée en une transaction à la fin : un produit relu par une page
     **après** le début de la synchronisation (créé ou vendu entre-temps)
     est conservé dans sa version plus récente.
+
+  **Correction de clôture.** La première version bloquait l'onglet
+  15 min après une erreur, alors que la progression expire après 10 min :
+  la reprise après erreur était impossible (toujours recommencée en tête).
+  Une écriture IndexedDB refusée était traitée comme une interruption,
+  sans délai : un nouvel essai pouvait partir à chaque changement de page.
+  Les délais dépendent désormais de l'issue (tableau ci-dessus), vérifiés
+  avec une horloge simulée (§ 6).
 - **Date de lecture serveur par produit** (`productLoadedAt`, nouvelle,
   facultative). Le navigateur hors ligne s'en sert pour le stock
   indicatif, à défaut de la date d'écriture. Une vente confirmée entre la
@@ -268,7 +285,7 @@ hors de ce lot. Les données locales restent lisibles (§ 4).
 | E2E `test/products-page.e2e-spec.ts` (nouveau) | **10 / 10** |
 | E2E `product-field-permissions` (projection, `ids`), `sales-history` (1-20E), `rate-limit-index` | **49 / 49** avec le précédent |
 | Unitaires `src/products/product-page.spec.ts` (nouveau), `products.controller.spec.ts` (+ 6), `src/products`, `src/sales`, `src/migrations` | **256 / 256** |
-| Web `test:products-pagination` (nouveau, 13 cas), `test:catalog-refresh`, `test:coordinator`, `test:image-renewal` | **13 / 13, 13 / 13, 6 / 6, 6 / 6** |
+| Web `test:products-pagination` (nouveau, 20 cas), `test:catalog-refresh`, `test:coordinator`, `test:image-renewal` | **20 / 20, 13 / 13, 6 / 6, 6 / 6** |
 | Web : `tsc`, ESLint, Prettier, `check-i18n` (0 problème), `i18n:coverage` (0 texte en dur) | OK |
 | API : `tsc` (build), ESLint (0 erreur), Prettier des fichiers touchés | OK |
 
@@ -291,7 +308,23 @@ Les 10 scénarios e2e :
    navigation : page complétée, sans doublon ni produit supprimé ;
 10. plans : nouvel index, sans tri, documents bornés ; page éloignée.
 
-Les 13 cas web :
+Les 20 cas web, dont 7 de clôture avec une horloge simulée qui pilote la
+garde de l'onglet et le passage, comme `useOfflineCatalog().syncSection` :
+
+- délais ordonnés : nouvel essai (2 min) < reprise (10 min) < intervalle
+  (15 min) ;
+- rayon quitté après une page, rouvert 1 min plus tard : **reprise au
+  curseur** (requêtes `null`, `100`, `200`, rayon complet) ;
+- erreur réseau en page 2 : rien à 1 min (aucune requête), **reprise au
+  curseur** à 3 min (pas de redémarrage) ;
+- échec persistant, 60 ouvertures en 10 min : au plus un essai par 2 min ;
+- écriture locale refusée : essai suivant retardé ;
+- rouvert après 11 min : recommencé en tête (fenêtre de reprise dépassée) ;
+- rayon au-delà du plafond : deux passages espacés de l'intervalle
+  relisent tous deux les 50 premières pages ; produits plus anciens
+  absents, rayon jamais marqué synchronisé.
+
+Les 13 cas initiaux :
 
 - règle de recherche ;
 - page partielle sans suppression ;
@@ -466,15 +499,50 @@ rechargement.
     ne les garde pas : 2 000 signatures au premier passage d'un grand
     rayon, à cache froid. Un contrat sans photo serait un nouveau
     paramètre d'API ; je ne l'ai pas ajouté.
-  - Au-delà de 5 000 produits, le rayon reste partiel hors ligne, et
-    l'interface l'indique.
+  - **Rayons de plus de 5 000 produits : toujours partiels.** Le plafond
+    vaut par passage, sans continuation : chaque passage (au plus un par
+    15 min) recommence en tête et relit les **5 000 plus récents**. Les
+    plus anciens ne sont présents hors ligne que s'ils ont été affichés
+    en ligne (pages consultées, recherche), avec la date de cette
+    lecture. Le rayon n'est jamais marqué synchronisé, et le navigateur
+    hors ligne affiche « Liste partielle ». Les absents n'étant jamais
+    supprimés par un passage tronqué, un produit ancien mis à la corbeille
+    sans que cet onglet le voie peut y rester. Compléter ces rayons
+    demanderait une continuation sur plusieurs passages, avec ses propres
+    règles de fraîcheur ; je ne l'ai pas faite.
   - Un rayon jamais ouvert en ligne n'est pas disponible hors ligne, comme
     avant.
-- **Écart de 15 min au plus.** Hors ligne, un produit d'une page jamais
-  affichée peut avoir jusqu'à 15 min de retard, ou être resté dans son
-  ancien rayon après un déplacement non signalé à cet onglet. Avant, la
-  copie avait l'âge de la dernière ouverture du rayon. Le stock indicatif
-  reste exact vis-à-vis des ventes locales, grâce aux dates par produit.
+- **Fraîcheur des données hors ligne.** Il n'y a **pas** de borne de
+  15 min. La copie d'un produit est rafraîchie seulement :
+  - quand il est **affiché** en ligne (page, recherche, relecture ciblée
+    après une vente) ;
+  - quand son rayon (s'il a plusieurs pages) est **ouvert en ligne** dans
+    un onglet, que sa dernière synchronisation terminée date de plus de
+    15 min, et que le passage va à son terme (ou reprend à temps) ;
+  - quand son rayon tient sur une page et est ouvert en ligne (réponse
+    complète, comme avant) ;
+  - par retrait, sur un signal de corbeille, de purge ou de déplacement
+    reçu par une page de rayon ouverte.
+
+  Les données restent donc plus anciennes, sans limite fixe, quand :
+  - le rayon n'est pas rouvert en ligne ;
+  - la synchronisation a eu lieu il y a moins de 15 min (rien n'est relu
+    avant) ;
+  - le passage a été interrompu et n'est pas repris dans les 10 min (il
+    recommence alors à la prochaine ouverture) ;
+  - il échoue de façon répétée ;
+  - le produit est au-delà des 5 000 plus récents d'un grand rayon ;
+  - le produit a changé de rayon sans que cet onglet le voie : il reste
+    dans l'ancien rayon jusqu'à la prochaine synchronisation complète de
+    celui-ci.
+
+  La validité du cache (72 h, 1-11B) porte sur sa **dernière écriture,
+  tous rayons confondus**. Un rayon peut donc y figurer avec des données
+  de plus de 72 h si d'autres rayons ont été écrits depuis (comportement
+  antérieur, inchangé). Le stock indicatif reste exact vis-à-vis des
+  ventes **locales**, grâce à la date de lecture de chaque produit ; il
+  ne reflète pas les ventes des autres membres faites depuis cette
+  lecture.
 - **Navigation séquentielle.** Pas de saut vers une page numérotée ni de
   « dernière page ». La position exacte n'est pas affichée.
 - **Hors périmètre, signalés.** `GET /products` sans `limit` reste
