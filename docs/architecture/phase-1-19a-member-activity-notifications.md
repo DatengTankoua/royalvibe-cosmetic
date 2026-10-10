@@ -407,3 +407,4 @@ Limites restantes :
 - les regroupements qui chevauchent deux fenêtres d'une minute ;
 - aucun parcours de rejet explicite par l'invité (non créé, conformément à
   la consigne).
+
