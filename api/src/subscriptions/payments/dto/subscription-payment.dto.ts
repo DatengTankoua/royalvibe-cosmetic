@@ -24,9 +24,14 @@ export class CreateSubscriptionPaymentDto {
   term: SubscriptionTerm;
 
   /** Normalisé et validé par le service (`INVALID_PAYER_PHONE`). */
+  /**
+   * 1-21B — facultatif : exigé seulement par un prestataire qui pousse la
+   * collecte sur le téléphone ; inutile pour une page de paiement hébergée.
+   */
+  @IsOptional()
   @IsString()
   @MaxLength(PAYER_PHONE_INPUT_MAX_LENGTH)
-  payerPhone: string;
+  payerPhone?: string;
 
   /** Généré UNE fois par le client, stable sur tous les rejeux. */
   @IsUUID('4')

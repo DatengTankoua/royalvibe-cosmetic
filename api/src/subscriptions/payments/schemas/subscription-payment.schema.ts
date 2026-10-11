@@ -35,6 +35,13 @@ export enum SubscriptionPaymentIncident {
   PROVIDER_UNAVAILABLE = 'provider_unavailable',
   PROVIDER_MISMATCH = 'provider_mismatch',
   LATE_FAILURE_AFTER_SUCCESS = 'late_failure_after_success',
+  /**
+   * 1-21B — page de paiement close ou tentative échouée sans succès
+   * constaté : paiement OUVERT, à vérifier (succès tardif encore accepté).
+   */
+  CHECKOUT_UNRESOLVED = 'checkout_unresolved',
+  /** 1-21B — réponses du prestataire incohérentes : vérification opérateur. */
+  PROVIDER_INCONSISTENT = 'provider_inconsistent',
 }
 
 /**
@@ -124,8 +131,27 @@ export class SubscriptionPayment {
   @Prop({ type: Boolean, required: true })
   open: boolean;
 
-  @Prop({ type: String, required: true, immutable: true })
-  payerPhoneMasked: string;
+  /**
+   * 1-21B — `null` quand le prestataire n'a demandé aucun numéro (page de
+   * paiement hébergée) ; jamais le numéro en clair.
+   */
+  @Prop({ type: String, default: null, immutable: true })
+  payerPhoneMasked: string | null;
+
+  /**
+   * 1-21B — Page de paiement hébergée VALIDÉE (HTTPS, hôte autorisé du
+   * prestataire), rouverte telle quelle par le payeur : jamais une nouvelle
+   * session pour un retour ou un rechargement. Aucun secret.
+   */
+  @Prop({ type: String, default: null })
+  providerCheckoutUrl: string | null;
+
+  /**
+   * 1-21B — Transaction du prestataire RATTACHÉE (lue sur sa session) :
+   * unique par prestataire (index partiel), jamais deux paiements internes.
+   */
+  @Prop({ type: String, default: null })
+  providerTransactionId: string | null;
 
   @Prop({
     type: MongooseSchema.Types.ObjectId,

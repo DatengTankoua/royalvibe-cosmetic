@@ -244,6 +244,7 @@ export class CamPayPaymentProvider implements PaymentProvider {
       !Number.isSafeInteger(request.amount) ||
       request.amount <= 0 ||
       request.currency !== PAYMENT_CURRENCY ||
+      typeof request.payerPhone !== 'string' ||
       !NORMALIZED_PHONE.test(request.payerPhone) ||
       typeof request.merchantReference !== 'string' ||
       request.merchantReference.length === 0

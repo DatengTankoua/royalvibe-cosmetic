@@ -18,6 +18,7 @@ import { SKIP_SUPPORT_THROTTLER } from '../../support/support-rate-limiting';
 import type { Response } from 'express';
 import type { Observable } from 'rxjs';
 import { CurrentOrganization } from '../../auth/decorators/current-organization.decorator';
+import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { OwnerOnly } from '../../auth/decorators/permissions.decorator';
 import type { ResolvedOrganizationContext } from '../../organizations/organizations.service';
 import { AllowInactiveSubscription } from '../subscription-access';
@@ -95,17 +96,34 @@ export class SubscriptionPaymentsController {
   @SkipThrottle({ ...OTHER_THROTTLERS, [PAYMENT_READ_THROTTLER]: true })
   async create(
     @CurrentOrganization() organizationContext: ResolvedOrganizationContext,
+    @CurrentUser() user: { name?: unknown; email?: unknown } | undefined,
     @Body() dto: CreateSubscriptionPaymentDto,
   ) {
     const { payment, replayed } = await this.payments.createPayment(
       toContext(organizationContext),
       {
         term: dto.term,
-        payerPhone: dto.payerPhone,
+        payerPhone: dto.payerPhone ?? null,
         clientOperationId: dto.clientOperationId,
+        // 1-21B : payeur = compte AUTHENTIFIÉ (e-mail vérifié), jamais le
+        // corps ; transmis au seul prestataire qui l'exige.
+        payer:
+          typeof user?.email === 'string' && typeof user.name === 'string'
+            ? { email: user.email, name: user.name }
+            : undefined,
       },
     );
     return { ...payment, replayed };
+  }
+
+  /**
+   * 1-21B — Moyen de paiement des nouvelles tentatives (page hébergée ou
+   * numéro Mobile Money), sans aucun secret. Déclarée AVANT `:paymentId`.
+   */
+  @Get('capabilities')
+  @SkipThrottle({ ...OTHER_THROTTLERS, [PAYMENT_WRITE_THROTTLER]: true })
+  capabilities() {
+    return this.payments.capabilities();
   }
 
   @Get()

@@ -171,6 +171,8 @@ const subscriptionEn: Translation<typeof subscriptionFr> = {
         "Payment being confirmed. Check again in a moment.",
     },
     messages: {
+      checkoutReady:
+        "Payment link ready. Continue to the payment page: the subscription becomes active once our server confirms the payment.",
       offlineCreate: "Offline: creating a payment needs the Internet.",
       termRequired: "Choose a length.",
       phoneRequired: "Enter the payer's Mobile Money number.",
@@ -189,6 +191,17 @@ const subscriptionEn: Translation<typeof subscriptionFr> = {
     reference: "Reference",
     requestedOn: "Requested on",
     confirmedOn: "Confirmed on",
+    checkout: {
+      formTitle: "Pay online",
+      help: "Payment happens on SasPay's secure page (MTN or Orange Mobile Money). No number or secret code is requested here.",
+      continue: "Continue to payment",
+      notice:
+        "Then come back to Stock Master: the subscription is activated only after our server confirms the payment, never just by returning from the page.",
+      pendingDetail:
+        "Finish the payment on the SasPay page, then come back here and press “Check payment”.",
+      lockedIntent:
+        "An earlier request got no answer. Submit again to find it: no second payment will be requested. Length: <b>{{term}}</b>.",
+    },
     pinNotice:
       "The Mobile Money PIN is entered only on the payer's phone. Stock Master never asks for it.",
     checking: "Checking…",

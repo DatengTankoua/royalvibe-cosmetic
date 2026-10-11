@@ -18,14 +18,14 @@ const A = require('./actions');
 const HELP = `Recette locale des paiements (1-14D.2H) — tout est fictif, aucun appel CamPay réel.
 
 Stack (terminal 1, reste au premier plan ; Ctrl+C nettoie) :
-  start [--provider=simulated|campay] [--keep-logs] [--anti-bot=simulated]
+  start [--provider=simulated|campay|saspay] [--keep-logs] [--anti-bot=simulated]
         (--anti-bot=simulated : inscription et défi de connexion simulés ;
          API en NODE_ENV=development, la simulation étant refusée en production)
 
 Pilotage (terminal 2, recette démarrée) :
   status                          état, URLs, fournisseur
   stop                            arrêt et nettoyage complets
-  provider simulated|campay       redémarre l'API avec ce fournisseur (base conservée)
+  provider simulated|campay|saspay redémarre l'API avec ce fournisseur (base conservée)
   restart-api                     redémarre l'API (compteurs de limitation remis à zéro)
   accounts                        comptes fictifs et mot de passe
   owner --label=<x> [--expired]   nouveau propriétaire (inscription + vérification via l'API)

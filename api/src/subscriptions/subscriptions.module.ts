@@ -34,10 +34,9 @@ import {
   SubscriptionPaymentReconciliationSchema,
 } from './payments/reconciliation/subscription-payment-reconciliation.schema';
 import { PaymentReconciliationService } from './payments/reconciliation/payment-reconciliation.service';
-import {
-  PAYMENT_PROVIDER,
-  UnavailablePaymentProvider,
-} from './payments/payment-provider';
+import { PAYMENT_PROVIDER_WIRING } from './payments/payment-providers.wiring';
+import { SasPayWebhookController } from './payments/saspay/saspay-webhook.controller';
+import { SasPayWebhookService } from './payments/saspay/saspay-webhook.service';
 import {
   PaymentWebhookThrottlerGuard,
   SubscriptionPaymentThrottlerGuard,
@@ -57,8 +56,9 @@ import { PushModule } from '../push/push.module';
  * en lecture.
  *
  * 1-14D.2B — paiements d'abonnement : `PAYMENT_PROVIDER` vaut
- * `UnavailablePaymentProvider` (aucun réseau, 503) tant qu'aucun adaptateur
- * réel n'est branché ; seuls les tests le remplacent (`overrideProvider`).
+ * `UnavailablePaymentProvider` (aucun réseau, 503) par défaut. 1-21B :
+ * SasPay seulement avec `PAYMENT_PROVIDER_ACTIVE=saspay` et une clé
+ * cohérente (`payment-providers.wiring.ts`) ; CamPay jamais par variable.
  *
  * 1-14D.2F — webhook CamPay : `CAMPAY_WEBHOOK_CONFIG` vaut
  * `DISABLED_CAMPAY_WEBHOOK` (503 sans lecture, sans base ni prestataire).
@@ -96,6 +96,8 @@ import { PushModule } from '../push/push.module';
     SubscriptionsController,
     SubscriptionPaymentsController,
     CamPayWebhookController,
+    // 1-21B : webhook SasPay (503 tant que `SASPAY_WEBHOOK_SECRET` est vide).
+    SasPayWebhookController,
   ],
   providers: [
     SubscriptionsService,
@@ -109,7 +111,11 @@ import { PushModule } from '../push/push.module';
     SubscriptionPaymentsService,
     SubscriptionPaymentIndexCheck,
     SubscriptionPaymentThrottlerGuard,
-    { provide: PAYMENT_PROVIDER, useClass: UnavailablePaymentProvider },
+    // 1-21B : `PAYMENT_PROVIDER` (nouvelles tentatives, `none` par défaut =
+    // indisponible), prestataires de confirmation, webhook SasPay, origine
+    // de retour — tous dérivés de `resolvePaymentConfig`.
+    ...PAYMENT_PROVIDER_WIRING,
+    SasPayWebhookService,
     PaymentWebhookThrottlerGuard,
     CamPayWebhookService,
     { provide: CAMPAY_WEBHOOK_CONFIG, useValue: DISABLED_CAMPAY_WEBHOOK },

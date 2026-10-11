@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from 'fs';
 import { createServer, Server } from 'http';
 import { join } from 'path';
 import { SubscriptionsModule } from '../../subscriptions.module';
+import { resolvePaymentConfig } from '../saspay/saspay-config';
 import { AddressInfo } from 'net';
 import {
   PAYMENT_PROVIDER,
@@ -836,19 +837,31 @@ describe('Transport `fetch` de production (serveur LOCAL, aucun domaine CamPay)'
 });
 
 describe('Fournisseur de production inchangé (aucune activation de CamPay)', () => {
-  it('`SubscriptionsModule` injecte toujours `UnavailablePaymentProvider`', () => {
+  // 1-21B : fabrique pilotée par `resolvePaymentConfig` ; sans configuration,
+  // toujours `UnavailablePaymentProvider` ; CamPay jamais sélectionnable.
+  it('`SubscriptionsModule` : `UnavailablePaymentProvider` par défaut, CamPay jamais activable', () => {
     const providers = Reflect.getMetadata(
       'providers',
       SubscriptionsModule,
     ) as unknown[];
     const payment = providers.filter(
-      (p): p is { provide: unknown; useClass?: unknown } =>
+      (
+        p,
+      ): p is {
+        provide: unknown;
+        useFactory: (...args: unknown[]) => unknown;
+      } =>
         typeof p === 'object' &&
         p !== null &&
         (p as { provide?: unknown }).provide === PAYMENT_PROVIDER,
     );
     expect(payment).toHaveLength(1);
-    expect(payment[0].useClass).toBe(UnavailablePaymentProvider);
+    expect(
+      payment[0].useFactory(resolvePaymentConfig({}), null),
+    ).toBeInstanceOf(UnavailablePaymentProvider);
+    expect(() =>
+      resolvePaymentConfig({ PAYMENT_PROVIDER_ACTIVE: 'campay' }),
+    ).toThrow();
     expect(providers).not.toContain(CamPayPaymentProvider);
   });
 

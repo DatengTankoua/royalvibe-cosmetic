@@ -45,6 +45,15 @@ export const SUBSCRIPTION_PAYMENT_INDEXES: readonly RequiredPaymentIndex[] =
         providerReference: Object.freeze({ $type: 'string' }),
       }),
     }),
+    // 1-21B : une transaction du prestataire ne sert qu'à UN paiement.
+    Object.freeze({
+      name: 'provider_1_providerTransactionId_1',
+      key: Object.freeze({ provider: 1, providerTransactionId: 1 } as const),
+      unique: true,
+      partialFilterExpression: Object.freeze({
+        providerTransactionId: Object.freeze({ $type: 'string' }),
+      }),
+    }),
     Object.freeze({
       name: 'organizationId_1_single_open_payment',
       key: Object.freeze({ organizationId: 1 } as const),

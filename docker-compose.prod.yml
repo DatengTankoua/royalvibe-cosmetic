@@ -74,6 +74,12 @@ services:
       # défauts serveur (10 échecs / 900 s par compte, 5 e-mails / 24 h par
       # destinataire d'invitation).
       TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      # 1-21B — paiements SasPay : désactivés par défaut (`none`) ; secrets
+      # vides par défaut (voir .env.prod.example).
+      PAYMENT_PROVIDER_ACTIVE: ${PAYMENT_PROVIDER_ACTIVE:-none}
+      SASPAY_ENVIRONMENT: ${SASPAY_ENVIRONMENT:-}
+      SASPAY_SECRET_KEY: ${SASPAY_SECRET_KEY:-}
+      SASPAY_WEBHOOK_SECRET: ${SASPAY_WEBHOOK_SECRET:-}
       TURNSTILE_ALLOWED_HOSTNAMES: ${TURNSTILE_ALLOWED_HOSTNAMES:-}
       TURNSTILE_TIMEOUT_MS: ${TURNSTILE_TIMEOUT_MS:-}
       AUTH_ACCOUNT_FAILURE_LIMIT: ${AUTH_ACCOUNT_FAILURE_LIMIT:-}

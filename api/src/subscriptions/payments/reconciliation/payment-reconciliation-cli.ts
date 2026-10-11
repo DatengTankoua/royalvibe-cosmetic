@@ -33,6 +33,8 @@ export const RECONCILIATION_USAGE = [
   'Usage :',
   '  inspect   --payment-id=<id>',
   '  reconcile --payment-id=<id> [--reference=<uuid>]            (simulation)',
+  '            [--close-unresolved]  page de paiement close sans succès,',
+  '                                  absence de débit confirmée par le prestataire',
   '  reconcile --payment-id=<id> [--reference=<uuid>] --apply --plan=<jeton>',
   '            --operation-id=<uuid v4> --operator=<identifiant>',
   `            --reason=${Object.values(ReconciliationReason).join('|')} [--ticket=<référence>]`,
@@ -45,6 +47,7 @@ export type ReconciliationCommand =
       paymentId: string;
       reference: string | null;
       apply: false;
+      closeUnresolved?: boolean;
     }
   | {
       command: 'reconcile';
@@ -56,6 +59,7 @@ export type ReconciliationCommand =
       operatorId: string;
       reasonCode: ReconciliationReason;
       reasonTicket: string | null;
+      closeUnresolved?: boolean;
     };
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
@@ -94,10 +98,17 @@ export function parseReconciliationArguments(
   }
   const values: Record<string, string> = {};
   let apply = false;
+  let closeUnresolved = false;
   for (const arg of rest) {
     if (arg === '--apply') {
       if (apply) return { error: '--apply dupliqué' };
       apply = true;
+      continue;
+    }
+    // 1-21B : clôture explicite d'une page de paiement close sans succès.
+    if (arg === '--close-unresolved') {
+      if (closeUnresolved) return { error: '--close-unresolved dupliqué' };
+      closeUnresolved = true;
       continue;
     }
     const separator = arg.indexOf('=');
@@ -118,7 +129,7 @@ export function parseReconciliationArguments(
   }
   const paymentId = values.paymentId.toLowerCase();
   if (command === 'inspect') {
-    if (apply || Object.keys(values).length !== 1) {
+    if (apply || closeUnresolved || Object.keys(values).length !== 1) {
       return { error: 'inspect accepte seulement --payment-id' };
     }
     return { command, paymentId };
@@ -131,7 +142,13 @@ export function parseReconciliationArguments(
     if (APPLY_ONLY.some((field) => values[field] !== undefined)) {
       return { error: 'options d’application sans --apply' };
     }
-    return { command, paymentId, reference, apply: false };
+    return {
+      command,
+      paymentId,
+      reference,
+      apply: false,
+      ...(closeUnresolved ? { closeUnresolved } : {}),
+    };
   }
   if (!values.planToken || !PLAN_TOKEN.test(values.planToken)) {
     return { error: '--plan=<jeton de 32 hexadécimaux> requis' };
@@ -163,6 +180,7 @@ export function parseReconciliationArguments(
     operatorId: values.operatorId,
     reasonCode: values.reasonCode as ReconciliationReason,
     reasonTicket: values.reasonTicket ?? null,
+    ...(closeUnresolved ? { closeUnresolved } : {}),
   };
 }
 
@@ -200,19 +218,26 @@ export async function runReconciliationCommand(
       return RECONCILIATION_EXIT.OK;
     }
     if (!command.apply) {
-      const plan = await service.plan(command.paymentId, command.reference);
+      const plan = await service.plan(command.paymentId, command.reference, {
+        closeUnresolved: command.closeUnresolved === true,
+      });
       output.out({ command: 'reconcile', mode: 'simulation', plan });
       return plan.decision === 'ready'
         ? RECONCILIATION_EXIT.OK
         : RECONCILIATION_EXIT.BLOCKED;
     }
-    const result = await service.apply(command.paymentId, command.reference, {
-      operationId: command.operationId,
-      operatorId: command.operatorId,
-      reasonCode: command.reasonCode,
-      reasonTicket: command.reasonTicket,
-      planToken: command.planToken,
-    });
+    const result = await service.apply(
+      command.paymentId,
+      command.reference,
+      {
+        operationId: command.operationId,
+        operatorId: command.operatorId,
+        reasonCode: command.reasonCode,
+        reasonTicket: command.reasonTicket,
+        planToken: command.planToken,
+      },
+      { closeUnresolved: command.closeUnresolved === true },
+    );
     if ('decision' in result) {
       output.out({
         command: 'reconcile',

@@ -11,16 +11,23 @@ import type { ProviderPaymentStatus } from './payment-provider';
  *   référence ; rapprochement : référence consultée, toujours exigée) ;
  * - montant : NOMBRE entier sûr, égal au montant figé (le montant est déjà
  *   validé lexicalement par l'adaptateur, 1-14D.2D : `null` sinon) ;
- * - devise : égale.
+ * - devise : égale ;
+ * - 1-21B — transaction du prestataire : une fois RATTACHÉE au paiement,
+ *   le statut doit porter la même (jamais une autre transaction).
  */
 export interface FrozenPaymentValues {
   merchantReference: string;
   amount: number;
   currency: string;
+  providerTransactionId?: string | null;
 }
 
 export type ConcordanceField =
-  'merchantReference' | 'providerReference' | 'amount' | 'currency';
+  | 'merchantReference'
+  | 'providerReference'
+  | 'amount'
+  | 'currency'
+  | 'providerTransactionId';
 
 export function paymentConcordanceMismatches(
   payment: FrozenPaymentValues,
@@ -47,5 +54,12 @@ export function paymentConcordanceMismatches(
     mismatches.push('amount');
   }
   if (status.currency !== payment.currency) mismatches.push('currency');
+  if (
+    typeof payment.providerTransactionId === 'string' &&
+    status.providerTransactionId !== undefined &&
+    status.providerTransactionId !== payment.providerTransactionId
+  ) {
+    mismatches.push('providerTransactionId');
+  }
   return mismatches;
 }

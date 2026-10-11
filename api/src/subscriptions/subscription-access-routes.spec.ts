@@ -15,6 +15,7 @@ import { TrashController } from '../trash/trash.controller';
 import { SubscriptionsController } from './subscriptions.controller';
 import { SubscriptionPaymentsController } from './payments/subscription-payments.controller';
 import { CamPayWebhookController } from './payments/campay/campay-webhook.controller';
+import { SasPayWebhookController } from './payments/saspay/saspay-webhook.controller';
 import { PushController } from '../push/push.controller';
 import { NotificationsController } from '../notifications/notifications.controller';
 import { SupportController } from '../support/support.controller';
@@ -49,6 +50,7 @@ const CONTROLLERS = [
   SubscriptionsController,
   SubscriptionPaymentsController,
   CamPayWebhookController,
+  SasPayWebhookController,
   TrashController,
   PushController,
   NotificationsController,
@@ -117,6 +119,8 @@ describe('Matrice des routes — contrôle commercial (1-14C.1)', () => {
         'GET /health',
         'GET /payments/webhooks/campay',
         'POST /payments/webhooks/campay',
+        // 1-21B : webhook SasPay (signature HMAC du corps brut).
+        'POST /payments/webhooks/saspay',
         'POST /auth/email-verification/confirm',
         'POST /auth/email-verification/request',
         // 1-18B : demande du lien de création et création du compte invité.
@@ -216,6 +220,8 @@ describe('Matrice des routes — contrôle commercial (1-14C.1)', () => {
         'GET /organizations/current/subscription',
         'GET /organizations/current/subscription/payments',
         'GET /organizations/current/subscription/payments/:paymentId',
+        // 1-21B : moyen de paiement des nouvelles tentatives (aucun secret).
+        'GET /organizations/current/subscription/payments/capabilities',
         'POST /organizations/current/subscription/payments',
         'POST /organizations/current/subscription/payments/:paymentId/refresh',
       ].sort((a, b) => a.localeCompare(b)),

@@ -60,6 +60,15 @@ async function main() {
   const { CAMPAY_WEBHOOK_CONFIG } = C.dist(
     'subscriptions/payments/campay/campay-webhook.config',
   );
+  const { PAYMENT_CONFIRMATION_PROVIDERS } = C.dist(
+    'subscriptions/payments/payment-provider',
+  );
+  const { SASPAY_WEBHOOK_CONFIG } = C.dist(
+    'subscriptions/payments/saspay/saspay-webhook.service',
+  );
+  const { PAYMENT_RETURN_ORIGIN } = C.dist(
+    'subscriptions/payments/subscription-payments.service',
+  );
 
   const corsAllowlist = buildOriginAllowlist(
     parseCORSOrigin(process.env.CORS_ORIGIN, 'production'),
@@ -70,7 +79,22 @@ async function main() {
     .overrideProvider(EMAIL_SENDER)
     .useValue(fileEmailSender())
     .overrideProvider(PAYMENT_PROVIDER)
-    .useValue(provider === 'campay' ? campayProvider() : simulatedProvider());
+    .useValue(
+      provider === 'campay'
+        ? campayProvider()
+        : provider === 'saspay'
+          ? sasPayRecipeProvider()
+          : simulatedProvider(),
+    );
+  if (provider === 'saspay') {
+    builder = builder
+      .overrideProvider(PAYMENT_CONFIRMATION_PROVIDERS)
+      .useValue([sasPayRecipeProvider()])
+      .overrideProvider(SASPAY_WEBHOOK_CONFIG)
+      .useValue({ enabled: true, secret: C.FAKE.saspayWebhookSecret })
+      .overrideProvider(PAYMENT_RETURN_ORIGIN)
+      .useValue(C.WEB_ORIGIN);
+  }
   if (provider === 'campay') {
     builder = builder
       .overrideProvider(CAMPAY_WEBHOOK_CONFIG)
@@ -240,6 +264,39 @@ function campayProvider() {
     password: C.FAKE.campayPassword,
     transport: loopbackTransport,
   });
+}
+
+/**
+ * 1-21B — VRAI adaptateur SasPay (checkout hébergé) + VRAI transport de
+ * production ; seule l'origine officielle de l'API est remplacée par le faux
+ * SasPay local (`/saspay/api/v1` du serveur de contrôle). Toute autre URL
+ * est refusée. Une seule instance (création et confirmation).
+ */
+let sasPayInstance = null;
+function sasPayRecipeProvider() {
+  if (sasPayInstance) return sasPayInstance;
+  const { SasPayPaymentProvider, SASPAY_API_ORIGIN } = C.dist(
+    'subscriptions/payments/saspay/saspay-payment-provider',
+  );
+  const { fetchSasPayTransport, SasPayTransportError } = C.dist(
+    'subscriptions/payments/saspay/saspay-transport',
+  );
+  const loopback = (request) => {
+    const url = new URL(request.url);
+    if (url.origin !== SASPAY_API_ORIGIN) {
+      return Promise.reject(new SasPayTransportError('not-sent'));
+    }
+    return fetchSasPayTransport({
+      ...request,
+      url: `${C.CONTROL_URL}/saspay${url.pathname}${url.search}`,
+    });
+  };
+  sasPayInstance = new SasPayPaymentProvider({
+    environment: 'sandbox',
+    secretKey: C.FAKE.saspayKey,
+    transport: loopback,
+  });
+  return sasPayInstance;
 }
 
 if (require.main === module) {

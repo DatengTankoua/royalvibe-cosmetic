@@ -41,11 +41,14 @@ const FAKE = Object.freeze({
   campayUsername: 'recipe-fictitious-campay-app-username',
   campayPassword: 'recipe-fictitious-campay-app-password',
   campayToken: 'recipe.fictitious.campay.token',
+  // 1-21B : faux SasPay (préfixe de bac à sable, valeurs fictives).
+  saspayKey: 'sk_test_fake-recipe-saspay-0001',
+  saspayWebhookSecret: 'recipe-21b-fictitious-saspay-webhook-secret',
 });
 
 const PASSWORD = 'Recette-locale-14d2h!';
 const PHONE = '677123456';
-const PROVIDERS = Object.freeze(['simulated', 'campay']);
+const PROVIDERS = Object.freeze(['simulated', 'campay', 'saspay']);
 
 /** Répertoire d'état de la recette en cours (un seul lanceur à la fois). */
 const STATE_DIR = path.join(os.tmpdir(), 'stockmaster-recipe-14d2h');

@@ -171,7 +171,7 @@ describe('CLI de rapprochement — binaire réel, aucune écriture implicite (e2
     await ensureReconciliationIndexes(connection);
   }
 
-  async function insertUncertainPayment(dbName: string) {
+  async function insertUncertainPayment(dbName: string, provider = 'campay') {
     const _id = new Types.ObjectId();
     await db(dbName)
       .db!.collection(SUBSCRIPTION_PAYMENTS_COLLECTION)
@@ -185,7 +185,7 @@ describe('CLI de rapprochement — binaire réel, aucune écriture implicite (e2
         amount: 3000,
         currency: 'XAF',
         pricingVersion: 1,
-        provider: 'campay',
+        provider,
         merchantReference: `SM${_id.toHexString().toUpperCase()}`,
         providerReference: null,
         status: 'uncertain',
@@ -384,6 +384,47 @@ describe('CLI de rapprochement — binaire réel, aucune écriture implicite (e2
     },
     240_000,
   );
+
+  // 1-21B — garde-fou : clé SasPay de BAC À SABLE en production, nouvelles
+  // tentatives coupées (`none`) → le CLI refuse de démarrer (configuration
+  // invalide), aucune consultation ni écriture, aucun secret affiché. Les
+  // chemins HTTP (refresh, webhook) chargent la même configuration.
+  it('production + clé SasPay sandbox (none) : rapprochement impossible, code 1, aucune écriture ni fuite', async () => {
+    const dbName = 'cli_21b_sandbox_production';
+    await migrate(dbName);
+    const paymentId = await insertUncertainPayment(dbName, 'saspay');
+    await startProfiling(dbName);
+    const payments = db(dbName).db!.collection(
+      SUBSCRIPTION_PAYMENTS_COLLECTION,
+    );
+    const paymentBefore = await payments.findOne({ _id: paymentId });
+    const sandboxKey = 'sk_test_fake-cli-sandbox-0001';
+    const env = {
+      ...envFor(dbName, 'production'),
+      PAYMENT_PROVIDER_ACTIVE: 'none',
+      SASPAY_ENVIRONMENT: 'sandbox',
+      SASPAY_SECRET_KEY: sandboxKey,
+    };
+    const id = paymentId.toHexString();
+    const sim = await cli(
+      ['reconcile', `--payment-id=${id}`, `--reference=${randomUUID()}`],
+      env,
+    );
+    const applied = await cli(applyArgs(id), env);
+    for (const result of [sim, applied]) {
+      expect(result.code).toBe(1);
+      expect(result.stdout).toBe('');
+      expectNoLeak(result, env.MONGODB_URI);
+      expect(result.stdout + result.stderr).not.toContain(sandboxKey);
+    }
+    expect(await payments.findOne({ _id: paymentId })).toEqual(paymentBefore);
+    expect(
+      await db(dbName)
+        .db!.collection(SUBSCRIPTION_PAYMENT_RECONCILIATIONS_COLLECTION)
+        .countDocuments(),
+    ).toBe(0);
+    expect((await processOperations(dbName)).writes).toEqual([]);
+  }, 240_000);
 
   // ─── Arguments et régression de l'incident (.env) ──────────────────────────
 

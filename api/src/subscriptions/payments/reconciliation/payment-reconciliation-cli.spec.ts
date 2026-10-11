@@ -260,6 +260,50 @@ const parsed = (argv: string[]) => {
   return command;
 };
 
+describe('1-21B — clôture explicite d’une page de paiement close sans succès', () => {
+  it('--close-unresolved : accepté en simulation et en application, transmis au service ; refusé avec inspect ou dupliqué', async () => {
+    const simulation = parseReconciliationArguments([
+      'reconcile',
+      `--payment-id=${PAYMENT_ID}`,
+      '--close-unresolved',
+    ]);
+    expect(simulation).toMatchObject({ apply: false, closeUnresolved: true });
+    expect(
+      parseReconciliationArguments([...applyArgs(), '--close-unresolved']),
+    ).toMatchObject({ apply: true, closeUnresolved: true });
+    expect(
+      parseReconciliationArguments([
+        'inspect',
+        `--payment-id=${PAYMENT_ID}`,
+        '--close-unresolved',
+      ]),
+    ).toHaveProperty('error');
+    expect(
+      parseReconciliationArguments([
+        'reconcile',
+        `--payment-id=${PAYMENT_ID}`,
+        '--close-unresolved',
+        '--close-unresolved',
+      ]),
+    ).toHaveProperty('error');
+
+    const plan = jest.fn().mockResolvedValue(blockedPlan);
+    await run(
+      parsed(['reconcile', `--payment-id=${PAYMENT_ID}`, '--close-unresolved']),
+      fakeService({ plan, apply: jest.fn() }),
+    );
+    expect(plan).toHaveBeenCalledWith(PAYMENT_ID, null, {
+      closeUnresolved: true,
+    });
+    const apply = jest.fn().mockResolvedValue(blockedPlan);
+    await run(
+      parsed([...applyArgs(), '--close-unresolved']),
+      fakeService({ plan: jest.fn(), apply }),
+    );
+    expect(apply.mock.calls[0][3]).toEqual({ closeUnresolved: true });
+  });
+});
+
 describe('Codes de sortie', () => {
   it('simulation prête → 0 ; bloquée → 4 ; jamais d’application', async () => {
     const apply = jest.fn();
@@ -481,6 +525,8 @@ describe('Index d’audit et module', () => {
     expect(controllers.map((c) => c.name).sort()).toEqual(
       [
         'CamPayWebhookController',
+        // 1-21B : webhook SasPay (notification signée, aucun rapprochement).
+        'SasPayWebhookController',
         'SubscriptionPaymentsController',
         'SubscriptionsController',
       ].sort(),

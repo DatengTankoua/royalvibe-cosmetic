@@ -17,6 +17,11 @@ export enum ReconciliationReason {
   REVIEW_INVESTIGATION = 'review-investigation',
   /** Initiation au résultat inconnu (`uncertain`). */
   UNCERTAIN_INITIATION = 'uncertain-initiation',
+  /**
+   * 1-21B — Page de paiement close sans succès (`checkout_unresolved`) :
+   * le prestataire a confirmé à l'opérateur qu'aucun débit n'a eu lieu.
+   */
+  PROVIDER_CHECKOUT_CLOSED = 'provider-checkout-closed',
 }
 
 /** Action appliquée : déduite du statut VÉRIFIÉ, jamais saisie. */

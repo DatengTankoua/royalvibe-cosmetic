@@ -27,6 +27,32 @@
 
 export const PAYMENT_PROVIDER = Symbol('PAYMENT_PROVIDER');
 
+/**
+ * 1-21B — Prestataires de CONFIRMATION : adaptateurs capables de consulter
+ * les paiements déjà engagés chez eux, même quand les NOUVELLES tentatives
+ * sont désactivées (`PAYMENT_PROVIDER` indisponible). Chaque paiement est
+ * confirmé par l'adaptateur dont le nom est enregistré sur lui
+ * (`subscription_payments.provider`), jamais par un autre. Facultatif :
+ * absent = seul `PAYMENT_PROVIDER` confirme ses propres paiements.
+ */
+export const PAYMENT_CONFIRMATION_PROVIDERS = Symbol(
+  'PAYMENT_CONFIRMATION_PROVIDERS',
+);
+
+/**
+ * Adaptateur qui confirme un paiement enregistré sous `name` : le
+ * fournisseur des nouvelles tentatives s'il porte ce nom, sinon un
+ * prestataire de confirmation ; `null` si aucun n'est disponible (503).
+ */
+export function confirmationProviderFor(
+  name: string,
+  active: PaymentProvider,
+  confirmers: readonly PaymentProvider[] | undefined,
+): PaymentProvider | null {
+  if (active.available && active.name === name) return active;
+  return (confirmers ?? []).find((p) => p.available && p.name === name) ?? null;
+}
+
 export const PAYMENT_CURRENCY = 'XAF';
 
 export interface PaymentCollectionRequest {
@@ -35,14 +61,32 @@ export interface PaymentCollectionRequest {
   /** Montant TOTAL figé (XAF, entier). */
   amount: number;
   currency: typeof PAYMENT_CURRENCY;
-  /** Téléphone normalisé (`237XXXXXXXXX`) — transitoire, jamais stocké. */
-  payerPhone: string;
+  /**
+   * Téléphone normalisé (`237XXXXXXXXX`) — transitoire, jamais stocké ;
+   * `null` pour un prestataire à page hébergée (`requiresPayerPhone: false`).
+   */
+  payerPhone: string | null;
   description: string;
+  /**
+   * 1-21B — Payeur (compte AUTORISÉ du demandeur, lu côté serveur) : requis
+   * par un checkout hébergé ; jamais fourni par le corps de la requête.
+   */
+  customer?: { email: string; name: string };
+  /** 1-21B — URL de retour construite par le SERVEUR (configuration). */
+  returnUrl?: string;
 }
 
 export type PaymentInitiationResult =
   /** Collecte créée chez le prestataire (invite envoyée au payeur). */
-  | { outcome: 'accepted'; providerReference: string }
+  | {
+      outcome: 'accepted';
+      providerReference: string;
+      /**
+       * 1-21B — Page de paiement hébergée VALIDÉE par l'adaptateur (HTTPS,
+       * hôte autorisé) ; absente pour une collecte poussée sur le téléphone.
+       */
+      redirectUrl?: string;
+    }
   /** Refus DÉFINITIF avant toute collecte (numéro refusé, opérateur…). */
   | { outcome: 'rejected' };
 
@@ -50,7 +94,15 @@ export type PaymentStatusLookup =
   | { by: 'provider'; providerReference: string }
   | { by: 'merchant'; merchantReference: string };
 
-export type ProviderPaymentState = 'pending' | 'succeeded' | 'failed';
+/**
+ * 1-21B — `unresolved` : la page de paiement est close (expirée, annulée)
+ * ou la dernière tentative a échoué, SANS succès constaté. Le prestataire
+ * n'a pas établi qu'aucun succès tardif ni nouvelle tentative ne peut
+ * suivre : le paiement reste OUVERT, à vérifier (jamais `failed`
+ * automatique, aucune nouvelle tentative libérée).
+ */
+export type ProviderPaymentState =
+  'pending' | 'succeeded' | 'failed' | 'unresolved';
 
 /** Statut BRUT renvoyé par le prestataire (jamais cru sans vérification). */
 export interface ProviderPaymentStatus {
@@ -59,6 +111,14 @@ export interface ProviderPaymentStatus {
   merchantReference: string | null;
   amount: unknown;
   currency: unknown;
+  /**
+   * 1-21B — Transaction du prestataire RATTACHÉE à cette collecte (lue par
+   * l'adaptateur sur la session du prestataire, jamais déduite d'une
+   * notification) ; `null` tant qu'aucune n'existe.
+   */
+  providerTransactionId?: string | null;
+  /** 1-21B — Page de paiement encore utilisable (validée), sinon `null`. */
+  checkoutUrl?: string | null;
 }
 
 export interface PaymentProvider {
@@ -68,6 +128,11 @@ export interface PaymentProvider {
   readonly available: boolean;
   readonly supportsMerchantReferenceLookup: boolean;
   readonly idempotentInitiation: boolean;
+  /**
+   * 1-21B — `false` : aucun numéro demandé (page hébergée). Absent = `true`
+   * (collecte Mobile Money poussée, contrat 1-14D.2B).
+   */
+  readonly requiresPayerPhone?: boolean;
   initiate(request: PaymentCollectionRequest): Promise<PaymentInitiationResult>;
   /**
    * `null` : transaction introuvable (recherche par référence marchand).
@@ -83,6 +148,18 @@ export class PaymentProviderUnavailableError extends Error {
   constructor() {
     super('Prestataire de paiement indisponible.');
     this.name = 'PaymentProviderUnavailableError';
+  }
+}
+
+/**
+ * 1-21B — Réponses du prestataire INCOHÉRENTES entre elles (plusieurs
+ * collectes portant notre référence, transaction rattachée différente selon
+ * la route…) : jamais départagées arbitrairement ; vérification opérateur.
+ */
+export class PaymentProviderInconsistencyError extends Error {
+  constructor(readonly reason: 'ambiguous-lookup' | 'inconsistent-attachment') {
+    super('Réponses du prestataire incohérentes.');
+    this.name = 'PaymentProviderInconsistencyError';
   }
 }
 

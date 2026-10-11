@@ -26,7 +26,13 @@ export interface ApiSubscriptionPayment {
   /** Montant TOTAL figé à la création (XAF). */
   amount: number;
   currency: "XAF";
-  payerPhoneMasked: string;
+  /** 1-21B : `null` quand aucun numéro n'a été demandé (page hébergée). */
+  payerPhoneMasked: string | null;
+  /**
+   * 1-21B : page de paiement hébergée à rouvrir (paiement ouvert seulement ;
+   * absente d'une API antérieure). Ouvrir cette page ne prouve rien.
+   */
+  checkoutUrl?: string | null;
   createdAt: string | null;
   initiatedAt: string | null;
   confirmedAt: string | null;
@@ -49,10 +55,54 @@ const PAYMENTS_PATH = "/organizations/current/subscription/payments";
 const explicitBearer = (token?: string) =>
   token ? { headers: { Authorization: `Bearer ${token}` } } : undefined;
 
+/** 1-21B — moyen de paiement des NOUVELLES tentatives (aucun secret). */
+export interface PaymentCapabilities {
+  available: boolean;
+  method: "hosted-checkout" | "mobile-money" | null;
+}
+
+/**
+ * 1-21B — Moyen proposé par le serveur. API antérieure (route absente) :
+ * numéro Mobile Money, comme avant ; toute autre erreur est propagée.
+ */
+export async function fetchPaymentCapabilities(
+  token?: string,
+): Promise<PaymentCapabilities> {
+  try {
+    const { data } = await apiClient.get<PaymentCapabilities>(
+      `${PAYMENTS_PATH}/capabilities`,
+      explicitBearer(token),
+    );
+    return data;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) {
+      return { available: true, method: "mobile-money" };
+    }
+    throw error;
+  }
+}
+
+/**
+ * 1-21B — Page de paiement : ouverte seulement si elle est en HTTPS (le
+ * serveur a déjà vérifié l'hôte du prestataire). Jamais construite ici.
+ */
+export function safeCheckoutUrl(
+  value: string | null | undefined,
+): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function createSubscriptionPayment(
   input: {
     term: SubscriptionTerm;
-    payerPhone: string;
+    /** 1-21B : absent pour une page de paiement hébergée. */
+    payerPhone?: string;
     clientOperationId: string;
   },
   token?: string,
@@ -63,7 +113,9 @@ export async function createSubscriptionPayment(
     PAYMENTS_PATH,
     {
       term: input.term,
-      payerPhone: input.payerPhone,
+      ...(input.payerPhone !== undefined
+        ? { payerPhone: input.payerPhone }
+        : {}),
       clientOperationId: input.clientOperationId,
     },
     explicitBearer(token),

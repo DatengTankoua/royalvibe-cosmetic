@@ -32,6 +32,7 @@ const {
   providerStatus,
   campayRoute,
 } = require('./simulators');
+const { SasPaySimulation } = require('./saspay-sim');
 const { ACCOUNTS } = require('./fixtures');
 const { prepareIsolatedWeb, removeIsolatedWeb } = require('./web-copy');
 
@@ -301,6 +302,15 @@ function startControlServer(stack) {
     }
     const url = new URL(req.url, C.CONTROL_URL);
     try {
+      if (url.pathname.startsWith('/saspay/api/v1/')) {
+        const reply = stack.saspay.route(
+          req.method,
+          url.pathname.slice('/saspay/api/v1'.length),
+          req.headers,
+          body,
+        );
+        return send(reply.status, reply.body);
+      }
       if (url.pathname.startsWith('/campay/')) {
         const reply = campayRoute(
           sim,
@@ -345,6 +355,56 @@ function startControlServer(stack) {
           return send(200, providerInitiate(sim, body));
         case 'POST /sim/provider/status':
           return send(200, providerStatus(sim, body));
+        // 1-21B : page de paiement SasPay simulée (recette navigateur).
+        case 'POST /sim/saspay/pay': {
+          const paid = stack.saspay.pay(body.slug, body.outcome);
+          if (!paid) return send(404, { ok: false, error: 'session inconnue' });
+          let webhookStatus = null;
+          if (body.notify) {
+            const event =
+              body.outcome === 'SUCCESS'
+                ? 'transaction.success'
+                : 'transaction.failed';
+            const signed = stack.saspay.signedWebhook(
+              C.FAKE.saspayWebhookSecret,
+              event,
+              paid.transactionId,
+              paid.session,
+            );
+            const res = await fetch(`${C.API_URL}/payments/webhooks/saspay`, {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                'x-webhook-signature': signed.signature,
+                'x-webhook-timestamp': signed.timestamp,
+                'x-webhook-event': event,
+              },
+              body: signed.raw,
+            });
+            webhookStatus = res.status;
+          }
+          return send(200, {
+            ok: true,
+            returnUrl: paid.session.return_url,
+            webhookStatus,
+          });
+        }
+        case 'POST /sim/saspay/lookup': {
+          const session = stack.saspay.bySlug(body.slug);
+          return session
+            ? send(200, {
+                ok: true,
+                returnUrl: session.return_url,
+                status: session.status,
+              })
+            : send(404, { ok: false });
+        }
+        case 'GET /sim/saspay/stats':
+          return send(200, {
+            sessions: stack.saspay.sessions.size,
+            transactions: stack.saspay.transactions.size,
+            calls: stack.saspay.calls.length,
+          });
         default:
           return send(404, { error: 'route inconnue' });
       }
@@ -369,6 +429,8 @@ async function start(options) {
 
   const stack = {
     sim: new SimulationState(),
+    // 1-21B : faux SasPay (mode `saspay`).
+    saspay: new SasPaySimulation(C.FAKE.saspayKey),
     provider,
     replSet: null,
     uri: null,

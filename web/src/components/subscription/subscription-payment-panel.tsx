@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { RefreshCwIcon, SmartphoneIcon } from "lucide-react";
+import { ExternalLinkIcon, RefreshCwIcon, SmartphoneIcon } from "lucide-react";
 import { useT } from "next-i18next/client";
 import { useFormat } from "@/i18n/use-format";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -17,11 +17,13 @@ import {
   PAYMENT_HISTORY_PAGE_SIZE,
   classifyPaymentError,
   createSubscriptionPayment,
+  fetchPaymentCapabilities,
   fetchSubscriptionPayment,
   isDefinitiveCreationRefusal,
   listSubscriptionPayments,
   newClientOperationId,
   refreshSubscriptionPayment,
+  safeCheckoutUrl,
   type ApiSubscriptionPayment,
   type PaymentErrorKind,
   type SubscriptionPaymentStatus,
@@ -68,6 +70,17 @@ import { rich } from "@/i18n/rich";
 //   (relecture redemandée), ou pour un paiement qui n'est plus celui affiché ;
 // - `succeeded` est définitif : une réponse ancienne ne réaffiche jamais
 //   `pending` après `succeeded` (le serveur ne régresse jamais un succès).
+//
+// 1-21B — page de paiement hébergée (SasPay) quand le serveur l'indique
+// (`capabilities`) :
+// - aucun numéro demandé ; le serveur crée la page et la conserve ;
+//   « Continuer vers le paiement » rouvre CETTE page (jamais une nouvelle,
+//   même après un retour, un rechargement ou une reconnexion) ;
+// - retour dans Stock Master (`?payment=<id>` du paiement ouvert affiché) :
+//   UNE vérification serveur (`…/refresh`), comme le bouton ; le paramètre
+//   est retiré de l'adresse. Ni le paramètre, ni la redirection, ni la
+//   fermeture de la page ne prouvent un paiement : seul le statut renvoyé
+//   par le serveur fait foi.
 
 const PAYMENT_SIGNALS = ["payments:changed"] as const;
 const NO_SIGNALS: readonly string[] = [];
@@ -108,6 +121,7 @@ type MessageKey =
       | "phoneRequired"
       | "replayed"
       | "sent"
+      | "checkoutReady"
       | "confirmed"
       | "offlineVerify"}`;
 
@@ -176,6 +190,10 @@ export function SubscriptionPaymentPanel({
   const [phone, setPhone] = useState("");
   const [online, setOnline] = useState(true);
   const [retryAt, setRetryAt] = useState<number | null>(null);
+  // 1-21B : moyen proposé par le serveur ; API antérieure → Mobile Money.
+  const [hosted, setHosted] = useState(false);
+  // 1-21B : paiement désigné par l'adresse de retour (une vérification).
+  const returnedPayment = useRef<string | null>(null);
   // Verrou SYNCHRONE contre le double clic (l'état React est asynchrone).
   const inFlight = useRef(false);
   const mounted = useRef(true);
@@ -269,6 +287,15 @@ export function SubscriptionPaymentPanel({
     setIntent(stored);
     setLoading(true);
     const requestedAt = Date.now();
+    const returnedParam =
+      typeof window === "undefined"
+        ? null
+        : new URLSearchParams(window.location.search).get("payment");
+    void fetchPaymentCapabilities(token)
+      .then((capabilities) => {
+        if (!cancelled) setHosted(capabilities.method === "hosted-checkout");
+      })
+      .catch(() => undefined);
     void (async () => {
       let page: { items: ApiSubscriptionPayment[]; nextCursor: string | null } =
         { items: [], nextCursor: null };
@@ -310,6 +337,20 @@ export function SubscriptionPaymentPanel({
       if (cancelled) return;
       actionEpoch.current += 1;
       setLoadedAt(requestedAt);
+      // 1-21B : retour de la page de paiement pour le paiement OUVERT affiché.
+      if (
+        returnedParam &&
+        found &&
+        found.paymentId === returnedParam &&
+        BLOCKING_PAYMENT_STATUSES.has(found.status)
+      ) {
+        returnedPayment.current = found.paymentId;
+      }
+      if (returnedParam && typeof window !== "undefined") {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("payment");
+        window.history.replaceState(window.history.state, "", url.toString());
+      }
       if (found) {
         setCurrent(found);
         if (found.status === "succeeded") {
@@ -428,7 +469,7 @@ export function SubscriptionPaymentPanel({
       setMessage({ tone: "error", key: "payment.messages.termRequired" });
       return;
     }
-    if (phone.trim().length === 0) {
+    if (!hosted && phone.trim().length === 0) {
       setMessage({ tone: "error", key: "payment.messages.phoneRequired" });
       return;
     }
@@ -454,7 +495,7 @@ export function SubscriptionPaymentPanel({
       const created = await createSubscriptionPayment(
         {
           term: active.term,
-          payerPhone: phone,
+          ...(hosted ? {} : { payerPhone: phone }),
           clientOperationId: active.clientOperationId as string,
         },
         token,
@@ -467,7 +508,9 @@ export function SubscriptionPaymentPanel({
         tone: "info",
         key: created.replayed
           ? "payment.messages.replayed"
-          : "payment.messages.sent",
+          : safeCheckoutUrl(created.checkoutUrl)
+            ? "payment.messages.checkoutReady"
+            : "payment.messages.sent",
       });
     } catch (error) {
       if (!mounted.current) return;
@@ -547,6 +590,18 @@ export function SubscriptionPaymentPanel({
     }
   };
 
+  // 1-21B : retour de la page de paiement → UNE vérification serveur.
+  const verifyRef = useRef(verify);
+  useEffect(() => {
+    verifyRef.current = verify;
+  });
+  useEffect(() => {
+    if (loading || !current) return;
+    if (returnedPayment.current !== current.paymentId) return;
+    returnedPayment.current = null;
+    void verifyRef.current();
+  }, [loading, current]);
+
   /** Nouvel essai après `failed` : action explicite + relecture serveur. */
   const startNewAttempt = async () => {
     if (!current || inFlight.current) return;
@@ -618,10 +673,14 @@ export function SubscriptionPaymentPanel({
     );
   }
 
+  const checkoutUrl = current ? safeCheckoutUrl(current.checkoutUrl) : null;
   const copy = current
     ? {
         label: t(`payment.status.${current.status}.label`),
-        detail: t(`payment.status.${current.status}.detail`),
+        detail:
+          current.status === "pending" && checkoutUrl
+            ? t("payment.checkout.pendingDetail")
+            : t(`payment.status.${current.status}.detail`),
       }
     : null;
   const messageText = (m: Message) =>
@@ -667,10 +726,12 @@ export function SubscriptionPaymentPanel({
                 {format.fcfa(current.amount)}
               </dd>
             </div>
-            <div>
-              <dt className="text-muted-foreground">{t("payment.payer")}</dt>
-              <dd data-testid="payment-phone">{current.payerPhoneMasked}</dd>
-            </div>
+            {current.payerPhoneMasked && (
+              <div>
+                <dt className="text-muted-foreground">{t("payment.payer")}</dt>
+                <dd data-testid="payment-phone">{current.payerPhoneMasked}</dd>
+              </div>
+            )}
             <div>
               <dt className="text-muted-foreground">
                 {t("payment.reference")}
@@ -696,13 +757,30 @@ export function SubscriptionPaymentPanel({
               </div>
             )}
           </dl>
-          {current.status === "pending" && (
+          {current.status === "pending" && !checkoutUrl && (
             <p className="flex items-start gap-2 text-xs text-muted-foreground">
               <SmartphoneIcon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
               {t("payment.pinNotice")}
             </p>
           )}
+          {checkoutUrl && (
+            <p className="text-xs text-muted-foreground">
+              {t("payment.checkout.notice")}
+            </p>
+          )}
           <div className="flex flex-col gap-2 sm:flex-row">
+            {checkoutUrl && (
+              <a
+                href={checkoutUrl}
+                rel="noopener noreferrer"
+                referrerPolicy="no-referrer"
+                data-testid="payment-continue"
+                className={`${buttonVariants()} h-11 px-5`}
+              >
+                <ExternalLinkIcon className="h-4 w-4" aria-hidden />
+                {t("payment.checkout.continue")}
+              </a>
+            )}
             {current.status !== "succeeded" && current.status !== "failed" && (
               <Button
                 type="button"
@@ -745,7 +823,7 @@ export function SubscriptionPaymentPanel({
         </section>
       )}
 
-      {message && (
+      {message && !(formOpen && !blocking) && (
         <p
           role={message.tone === "error" ? "alert" : "status"}
           aria-live={message.tone === "error" ? "assertive" : "polite"}
@@ -780,16 +858,22 @@ export function SubscriptionPaymentPanel({
           noValidate
         >
           <h3 id="subscription-payment-form-title" className="font-semibold">
-            {t("payment.formTitle")}
+            {hosted ? t("payment.checkout.formTitle") : t("payment.formTitle")}
           </h3>
           {lockedTerm ? (
             <p
               className="rounded-lg bg-muted p-3 text-sm"
               data-testid="payment-locked-intent"
             >
-              {rich(t("payment.lockedIntent", { term: termText(lockedTerm) }), {
-                b: (chunk) => <strong>{chunk}</strong>,
-              })}
+              {rich(
+                t(
+                  hosted
+                    ? "payment.checkout.lockedIntent"
+                    : "payment.lockedIntent",
+                  { term: termText(lockedTerm) },
+                ),
+                { b: (chunk) => <strong>{chunk}</strong> },
+              )}
             </p>
           ) : (
             <>
@@ -797,25 +881,34 @@ export function SubscriptionPaymentPanel({
               <OfferConditions />
             </>
           )}
-          <div className="space-y-2">
-            <Label htmlFor="payer-phone">{t("payment.phoneLabel")}</Label>
-            <Input
-              id="payer-phone"
-              name="payerPhone"
-              type="tel"
-              inputMode="tel"
-              autoComplete="tel"
-              placeholder="6XX XX XX XX"
-              maxLength={32}
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              aria-describedby="payer-phone-help"
-              className="h-11"
-            />
-            <p id="payer-phone-help" className="text-xs text-muted-foreground">
-              {t("payment.phoneHelp")}
+          {hosted ? (
+            <p className="text-xs text-muted-foreground">
+              {t("payment.checkout.help")}
             </p>
-          </div>
+          ) : (
+            <div className="space-y-2">
+              <Label htmlFor="payer-phone">{t("payment.phoneLabel")}</Label>
+              <Input
+                id="payer-phone"
+                name="payerPhone"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                placeholder="6XX XX XX XX"
+                maxLength={32}
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                aria-describedby="payer-phone-help"
+                className="h-11"
+              />
+              <p
+                id="payer-phone-help"
+                className="text-xs text-muted-foreground"
+              >
+                {t("payment.phoneHelp")}
+              </p>
+            </div>
+          )}
           <div
             role="status"
             aria-live="polite"
@@ -870,7 +963,9 @@ export function SubscriptionPaymentPanel({
         </form>
       )}
 
-      {message && (
+      {/* 1-21B : un seul emplacement du message — sous le formulaire quand
+          il est ouvert, plus haut sinon (auparavant affiché deux fois). */}
+      {message && !blocking && formOpen && (
         <p
           role={message.tone === "error" ? "alert" : "status"}
           aria-live={message.tone === "error" ? "assertive" : "polite"}

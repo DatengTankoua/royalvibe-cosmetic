@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import type { Connection } from 'mongoose';
 import { Model, Types } from 'mongoose';
@@ -14,7 +14,12 @@ import {
   SubscriptionPaymentDocument,
   SubscriptionPaymentStatus,
 } from '../schemas/subscription-payment.schema';
-import { PAYMENT_PROVIDER } from '../payment-provider';
+import {
+  PAYMENT_CONFIRMATION_PROVIDERS,
+  PAYMENT_PROVIDER,
+  PaymentProviderInconsistencyError,
+  confirmationProviderFor,
+} from '../payment-provider';
 import type {
   PaymentProvider,
   ProviderPaymentStatus,
@@ -88,7 +93,12 @@ export type ReconciliationBlockReason =
   | 'reference-already-attached'
   | 'provider-status-unavailable'
   | 'provider-transaction-not-found'
-  | 'mismatch';
+  | 'mismatch'
+  // 1-21B : session close sans succès ; clôture seulement sur demande
+  // explicite de l'opérateur (`--close-unresolved`).
+  | 'provider-unresolved'
+  | 'close-unresolved-not-applicable'
+  | 'provider-inconsistent';
 
 /** Faits VÉRIFIÉS exposés (normalisés) ; jamais la réponse brute. */
 export interface VerifiedFacts {
@@ -130,6 +140,16 @@ export type ReconciliationPlan =
       };
       planToken: string;
     };
+
+/** 1-21B — options de plan (simulation ET application, même jeton). */
+export interface ReconciliationOptions {
+  /**
+   * Clôturer (`failed`) un paiement dont la page de paiement est close sans
+   * succès : l'opérateur atteste que le prestataire a confirmé l'absence de
+   * débit. Sans effet sur tout autre état vérifié.
+   */
+  closeUnresolved?: boolean;
+}
 
 export interface ReconciliationOperation {
   operationId: string;
@@ -227,7 +247,10 @@ type InternalPlan =
     };
 
 const ACTION_BY_STATE: Readonly<
-  Record<ProviderPaymentStatus['state'], ReconciliationAction>
+  Record<
+    Exclude<ProviderPaymentStatus['state'], 'unresolved'>,
+    ReconciliationAction
+  >
 > = Object.freeze({
   succeeded: ReconciliationAction.SUCCEED,
   pending: ReconciliationAction.MARK_PENDING,
@@ -268,6 +291,9 @@ export class PaymentReconciliationService {
     private readonly payments: SubscriptionPaymentsService,
     @Inject(PAYMENT_PROVIDER) private readonly provider: PaymentProvider,
     @Inject(SUBSCRIPTION_CLOCK) private readonly clock: SubscriptionClock,
+    @Optional()
+    @Inject(PAYMENT_CONFIRMATION_PROVIDERS)
+    private readonly confirmers?: readonly PaymentProvider[],
   ) {}
 
   /** Normalise une référence candidate (UUID, minuscules) ; sinon erreur. */
@@ -276,7 +302,7 @@ export class PaymentReconciliationService {
     if (!UUID.test(reference)) {
       throw new ReconciliationError(
         'INVALID_REFERENCE',
-        'Référence CamPay invalide (UUID attendu).',
+        'Référence du prestataire invalide (UUID attendu).',
       );
     }
     return reference.toLowerCase();
@@ -330,8 +356,9 @@ export class PaymentReconciliationService {
   async plan(
     paymentId: string,
     candidateReference: string | null,
+    options: ReconciliationOptions = {},
   ): Promise<ReconciliationPlan> {
-    return (await this.buildPlan(paymentId, candidateReference)).plan;
+    return (await this.buildPlan(paymentId, candidateReference, options)).plan;
   }
 
   // ─── Application ───────────────────────────────────────────────────────────
@@ -340,6 +367,7 @@ export class PaymentReconciliationService {
     paymentId: string,
     candidateReference: string | null,
     operation: ReconciliationOperation,
+    options: ReconciliationOptions = {},
   ): Promise<AppliedReconciliation | ReconciliationPlan> {
     // Index requis AVANT toute mutation (aucune création automatique).
     await verifySubscriptionPaymentIndexes(this.connection);
@@ -355,6 +383,8 @@ export class PaymentReconciliationService {
       operation.reasonCode,
       operation.reasonTicket,
       operation.planToken,
+      // 1-21B : absent des anciennes empreintes (rejeu inchangé).
+      ...(options.closeUnresolved ? ['close-unresolved'] : []),
     ]);
 
     // 1. Rejeu AVANT tout réseau : même identifiant → même résultat.
@@ -362,7 +392,7 @@ export class PaymentReconciliationService {
     if (previous) return this.replay(previous, fingerprint);
 
     // 2. Plan RECALCULÉ (relecture + reconsultation) ; jeton identique exigé.
-    const built = await this.buildPlan(paymentId, candidate);
+    const built = await this.buildPlan(paymentId, candidate, options);
     if (!('status' in built)) return built.plan;
     if (built.plan.planToken !== operation.planToken) {
       throw new ReconciliationError(
@@ -559,6 +589,7 @@ export class PaymentReconciliationService {
   private async buildPlan(
     paymentId: string,
     candidateReference: string | null,
+    options: ReconciliationOptions = {},
   ): Promise<InternalPlan> {
     const candidate =
       PaymentReconciliationService.normalizeReference(candidateReference);
@@ -588,9 +619,13 @@ export class PaymentReconciliationService {
     if (!RECONCILABLE_STATUSES.includes(payment.status)) {
       return blocked('status-not-reconcilable');
     }
-    if (!this.provider.available || payment.provider !== this.provider.name) {
-      return blocked('provider-unavailable');
-    }
+    // 1-21B : adaptateur DU paiement (jamais celui d'un autre prestataire).
+    const provider = confirmationProviderFor(
+      payment.provider,
+      this.provider,
+      this.confirmers,
+    );
+    if (!provider) return blocked('provider-unavailable');
     const persisted = payment.providerReference ?? null;
     if (persisted !== null && candidate !== null && candidate !== persisted) {
       return blocked('reference-differs-from-persisted', persisted);
@@ -613,11 +648,14 @@ export class PaymentReconciliationService {
     // Consultation HORS transaction (budget HTTP de l'adaptateur).
     let status: ProviderPaymentStatus | null;
     try {
-      status = await this.provider.fetchStatus({
+      status = await provider.fetchStatus({
         by: 'provider',
         providerReference: reference,
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof PaymentProviderInconsistencyError) {
+        return blocked('provider-inconsistent', reference);
+      }
       return blocked('provider-status-unavailable', reference);
     }
     if (!status) return blocked('provider-transaction-not-found', reference);
@@ -628,7 +666,16 @@ export class PaymentReconciliationService {
       return blocked('mismatch', reference, verified, mismatches);
     }
 
-    const action = ACTION_BY_STATE[status.state];
+    if (options.closeUnresolved && status.state !== 'unresolved') {
+      return blocked('close-unresolved-not-applicable', reference, verified);
+    }
+    if (status.state === 'unresolved' && !options.closeUnresolved) {
+      return blocked('provider-unresolved', reference, verified);
+    }
+    const action =
+      status.state === 'unresolved'
+        ? ReconciliationAction.FAIL
+        : ACTION_BY_STATE[status.state];
     if (action === ReconciliationAction.MARK_PENDING && !payment.open) {
       // `review` issu d'un paiement fermé : jamais de réouverture (index du
       // paiement ouvert unique), traitement hors de ce CLI.
@@ -652,6 +699,7 @@ export class PaymentReconciliationService {
       reference,
       action,
       verified,
+      ...(options.closeUnresolved ? ['close-unresolved'] : []),
     ]).slice(0, 32);
     return {
       plan: {

@@ -174,6 +174,8 @@ const subscriptionFr = {
         "Paiement en cours de confirmation. Vérifiez de nouveau dans un instant.",
     },
     messages: {
+      checkoutReady:
+        "Lien de paiement prêt. Continuez vers la page de paiement : l'abonnement sera actif une fois le paiement confirmé par notre serveur.",
       offlineCreate:
         "Hors connexion : la création d'un paiement nécessite Internet.",
       termRequired: "Choisissez une durée.",
@@ -194,6 +196,17 @@ const subscriptionFr = {
     reference: "Référence",
     requestedOn: "Demandé le",
     confirmedOn: "Confirmé le",
+    checkout: {
+      formTitle: "Payer en ligne",
+      help: "Le paiement se fait sur la page sécurisée de SasPay (Mobile Money MTN ou Orange). Aucun numéro ni code secret n'est demandé ici.",
+      continue: "Continuer vers le paiement",
+      notice:
+        "Revenez ensuite dans Stock Master : l'abonnement n'est activé qu'après confirmation par notre serveur, jamais par le simple retour de la page.",
+      pendingDetail:
+        "Terminez le paiement sur la page SasPay, puis revenez ici et appuyez sur « Vérifier le paiement ».",
+      lockedIntent:
+        "Une demande précédente n'a pas reçu de réponse. Validez de nouveau pour la retrouver : aucun second paiement ne sera demandé. Durée : <b>{{term}}</b>.",
+    },
     pinNotice:
       "Le code secret Mobile Money se saisit uniquement sur le téléphone du payeur. Stock Master ne le demande jamais.",
     checking: "Vérification…",

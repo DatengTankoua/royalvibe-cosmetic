@@ -28,10 +28,13 @@ import {
   SubscriptionPaymentStatus,
 } from './schemas/subscription-payment.schema';
 import {
+  PAYMENT_CONFIRMATION_PROVIDERS,
   PAYMENT_CURRENCY,
   PAYMENT_PROVIDER,
   PaymentInitiationResult,
+  PaymentProviderInconsistencyError,
   PaymentProviderUnavailableError,
+  confirmationProviderFor,
 } from './payment-provider';
 import type {
   PaymentProvider,
@@ -69,6 +72,18 @@ import {
  */
 export const PAYMENT_CONFIRMATION_BUDGET_MS = 30_000;
 
+/**
+ * 1-21B — Origine publique du web (`PUBLIC_APP_URL` validée) pour l'URL de
+ * retour d'une page de paiement hébergée ; jamais une valeur du client.
+ */
+export const PAYMENT_RETURN_ORIGIN = Symbol('PAYMENT_RETURN_ORIGIN');
+
+/**
+ * Page du web où revient le payeur : un retour ne prouve RIEN (le web
+ * demande seulement une vérification serveur).
+ */
+export const PAYMENT_RETURN_PATH = '/app/organization/subscription';
+
 /** Contexte SERVEUR de la requête (jamais le corps). */
 export interface PaymentRequestContext {
   organizationId: string;
@@ -77,8 +92,23 @@ export interface PaymentRequestContext {
 
 export interface CreatePaymentInput {
   term: string;
-  payerPhone: string;
+  /**
+   * 1-21B — facultatif : exigé seulement par un prestataire qui pousse la
+   * collecte sur le téléphone (`requiresPayerPhone`) ; ignoré sinon.
+   */
+  payerPhone?: string | null;
   clientOperationId: string;
+  /**
+   * 1-21B — compte AUTORISÉ du demandeur (lu par le contrôleur sur
+   * l'utilisateur authentifié), transmis au seul prestataire qui l'exige.
+   */
+  payer?: { email: string; name: string };
+}
+
+/** 1-21B — moyen de paiement des NOUVELLES tentatives (jamais un secret). */
+export interface PaymentCapabilities {
+  available: boolean;
+  method: 'hosted-checkout' | 'mobile-money' | null;
 }
 
 /** Projection EXPLICITE exposée au propriétaire. */
@@ -89,7 +119,12 @@ export interface SubscriptionPaymentView {
   term: SubscriptionTerm;
   amount: number;
   currency: 'XAF';
-  payerPhoneMasked: string;
+  payerPhoneMasked: string | null;
+  /**
+   * 1-21B — page de paiement hébergée à rouvrir (paiement ouvert
+   * seulement) ; aucun secret, aucune nouvelle session.
+   */
+  checkoutUrl: string | null;
   createdAt: string | null;
   initiatedAt: string | null;
   confirmedAt: string | null;
@@ -146,10 +181,36 @@ export class SubscriptionPaymentsService {
     config: ConfigService,
     // 1-16A : optionnel (tests unitaires construits sans module push).
     @Optional() private readonly pushOutbox?: PushOutboxService,
+    // 1-21B : adaptateurs des paiements déjà engagés (facultatif).
+    @Optional()
+    @Inject(PAYMENT_CONFIRMATION_PROVIDERS)
+    private readonly confirmers?: readonly PaymentProvider[],
+    // 1-21B : origine publique du web (URL de retour), jamais une requête.
+    @Optional()
+    @Inject(PAYMENT_RETURN_ORIGIN)
+    private readonly returnOrigin?: string | null,
   ) {
     this.fingerprintKey = derivePaymentFingerprintKey(
       config.getOrThrow<string>('JWT_SECRET'),
     );
+  }
+
+  /** 1-21B — vérifications concurrentes d'un même paiement regroupées. */
+  private readonly confirmations = new Map<
+    string,
+    Promise<SubscriptionPaymentView>
+  >();
+
+  /** 1-21B — moyen de paiement proposé pour une NOUVELLE tentative. */
+  capabilities(): PaymentCapabilities {
+    if (!this.provider.available) return { available: false, method: null };
+    return {
+      available: true,
+      method:
+        this.provider.requiresPayerPhone === false
+          ? 'hosted-checkout'
+          : 'mobile-money',
+    };
   }
 
   // ─── Initiation ────────────────────────────────────────────────────────────
@@ -170,8 +231,17 @@ export class SubscriptionPaymentsService {
       }
       throw error;
     }
-    const payerPhone = normalizePayerPhone(input.payerPhone);
-    if (!payerPhone) throw invalidPayerPhone();
+    // 1-21B : numéro facultatif ; s'il est fourni, il doit être valide et
+    // entre dans l'empreinte (rejeu identique quel que soit le prestataire
+    // actif au moment du rejeu).
+    const provided =
+      input.payerPhone === undefined ||
+      input.payerPhone === null ||
+      input.payerPhone.trim() === ''
+        ? null
+        : input.payerPhone;
+    const payerPhone = provided === null ? null : normalizePayerPhone(provided);
+    if (provided !== null && !payerPhone) throw invalidPayerPhone();
 
     const organizationId = new Types.ObjectId(context.organizationId);
     const requestedBy = new Types.ObjectId(context.userId);
@@ -179,7 +249,7 @@ export class SubscriptionPaymentsService {
     const fingerprint = computePaymentRequestFingerprint(this.fingerprintKey, {
       requestedBy: requestedBy.toHexString(),
       term: price.term,
-      payerPhone,
+      payerPhone: payerPhone ?? '',
     });
 
     // 1. Rejeu AVANT toute nouvelle initiation (aucun réseau).
@@ -191,6 +261,9 @@ export class SubscriptionPaymentsService {
 
     // 2. Prestataire indisponible : aucune écriture, aucun réseau.
     if (!this.provider.available) throw paymentServiceUnavailable();
+    const needsPhone = this.provider.requiresPayerPhone !== false;
+    if (needsPhone && !payerPhone) throw invalidPayerPhone();
+    if (!needsPhone && !input.payer) throw paymentServiceUnavailable();
 
     // 3. Un seul paiement ouvert par organisation.
     const open = await this.paymentModel
@@ -219,7 +292,8 @@ export class SubscriptionPaymentsService {
         providerReference: null,
         status: SubscriptionPaymentStatus.INITIATING,
         open: true,
-        payerPhoneMasked: maskPayerPhone(payerPhone),
+        payerPhoneMasked:
+          needsPhone && payerPhone ? maskPayerPhone(payerPhone) : null,
       });
     } catch (error) {
       const index = subscriptionPaymentDuplicateKeyIndex(error);
@@ -245,7 +319,12 @@ export class SubscriptionPaymentsService {
     // 1-15F : paiement créé (écriture validée) → un signal en fin de
     // traitement, quelle que soit l'issue de l'initiation.
     try {
-      return await this.initiateReserved(_id, price, payerPhone);
+      return await this.initiateReserved(
+        _id,
+        price,
+        needsPhone ? payerPhone : null,
+        needsPhone ? undefined : input.payer,
+      );
     } finally {
       this.signalPayments(organizationId);
     }
@@ -255,9 +334,13 @@ export class SubscriptionPaymentsService {
   private async initiateReserved(
     _id: Types.ObjectId,
     price: ReturnType<typeof getSubscriptionPrice>,
-    payerPhone: string,
+    payerPhone: string | null,
+    payer: { email: string; name: string } | undefined,
   ): Promise<{ payment: SubscriptionPaymentView; replayed: boolean }> {
     const merchantReference = merchantReferenceFor(_id);
+    const returnUrl = this.returnOrigin
+      ? `${this.returnOrigin}${PAYMENT_RETURN_PATH}?payment=${_id.toHexString()}`
+      : undefined;
     // 5. UN SEUL appel réseau, hors de toute transaction.
     let result: PaymentInitiationResult;
     try {
@@ -266,7 +349,13 @@ export class SubscriptionPaymentsService {
         amount: price.amount,
         currency: PAYMENT_CURRENCY,
         payerPhone,
-        description: `Abonnement Stock Master (${price.months} mois)`,
+        // 1-21B : page hébergée → référence aussi dans le libellé (indice
+        // lisible par l'opérateur, jamais une preuve) ; CamPay inchangé.
+        description: payer
+          ? `Abonnement Stock Master (${price.months} mois) ${merchantReference}`
+          : `Abonnement Stock Master (${price.months} mois)`,
+        ...(payer ? { customer: payer } : {}),
+        ...(returnUrl ? { returnUrl } : {}),
       });
     } catch (error) {
       if (error instanceof PaymentProviderUnavailableError) {
@@ -296,9 +385,12 @@ export class SubscriptionPaymentsService {
         incidentCode: SubscriptionPaymentIncident.INITIATION_REJECTED,
       });
     } else {
-      await this.recordPending(_id, result.providerReference, [
-        SubscriptionPaymentStatus.INITIATING,
-      ]);
+      await this.recordPending(
+        _id,
+        result.providerReference,
+        [SubscriptionPaymentStatus.INITIATING],
+        { checkoutUrl: result.redirectUrl ?? null },
+      );
     }
     return { payment: await this.viewById(_id), replayed: false };
   }
@@ -349,7 +441,7 @@ export class SubscriptionPaymentsService {
     paymentId: string,
   ): Promise<SubscriptionPaymentView> {
     const payment = await this.findScoped(context, paymentId);
-    return this.confirmPayment(payment._id);
+    return this.confirmPaymentShared(payment._id);
   }
 
   /**
@@ -364,7 +456,31 @@ export class SubscriptionPaymentsService {
    * - refus confirmé → `failed` (jamais après un succès) ;
    * - succès concordant → attribution + `succeeded`, atomiquement.
    */
-  async confirmPayment(
+  confirmPayment(paymentId: Types.ObjectId): Promise<SubscriptionPaymentView> {
+    return this.confirmOnce(paymentId);
+  }
+
+  /**
+   * 1-21B — Même confirmation, REGROUPÉE : une seule vérification en cours
+   * par paiement dans ce processus (refresh, retour du payeur, webhooks
+   * SasPay concurrents) ; les appels simultanés partagent son résultat et
+   * n'appellent le prestataire qu'une fois. La garantie d'attribution
+   * unique reste celle de la transaction (plusieurs processus).
+   */
+  confirmPaymentShared(
+    paymentId: Types.ObjectId,
+  ): Promise<SubscriptionPaymentView> {
+    const key = paymentId.toHexString();
+    const running = this.confirmations.get(key);
+    if (running) return running;
+    const started = this.confirmOnce(paymentId).finally(() => {
+      this.confirmations.delete(key);
+    });
+    this.confirmations.set(key, started);
+    return started;
+  }
+
+  private async confirmOnce(
     paymentId: Types.ObjectId,
   ): Promise<SubscriptionPaymentView> {
     const payment = await this.findById(paymentId);
@@ -375,19 +491,36 @@ export class SubscriptionPaymentsService {
     if (payment.status === SubscriptionPaymentStatus.REVIEW) {
       return this.toView(payment);
     }
-    if (!this.provider.available || payment.provider !== this.provider.name) {
-      throw paymentServiceUnavailable();
-    }
+    // 1-21B : chaque paiement est confirmé par SON prestataire, jamais par
+    // un autre ; disponible même si les nouvelles tentatives sont coupées.
+    const provider = confirmationProviderFor(
+      payment.provider,
+      this.provider,
+      this.confirmers,
+    );
+    if (!provider) throw paymentServiceUnavailable();
 
-    const lookup = this.lookupFor(payment);
+    const lookup = this.lookupFor(payment, provider);
     // Initiation incertaine sans recherche par référence marchand : rien ne
     // permet de conclure ; état conservé (jamais une nouvelle collecte).
     if (!lookup) return this.toView(payment);
 
     let status: ProviderPaymentStatus | null;
     try {
-      status = await this.provider.fetchStatus(lookup);
-    } catch {
+      status = await provider.fetchStatus(lookup);
+    } catch (error) {
+      if (error instanceof PaymentProviderInconsistencyError) {
+        // Jamais départagé arbitrairement : vérification opérateur.
+        if (
+          await this.markReview(
+            payment._id,
+            SubscriptionPaymentIncident.PROVIDER_INCONSISTENT,
+          )
+        ) {
+          this.signalPayments(payment.organizationId);
+        }
+        return this.viewById(payment._id);
+      }
       throw paymentStatusUnavailable();
     }
     // Date de consultation seule : absente de la vue, aucun signal.
@@ -416,9 +549,17 @@ export class SubscriptionPaymentsService {
             status.providerReference,
             [
               SubscriptionPaymentStatus.INITIATING,
+              SubscriptionPaymentStatus.PENDING,
               SubscriptionPaymentStatus.UNCERTAIN,
             ],
+            {
+              checkoutUrl: status.checkoutUrl,
+              providerTransactionId: status.providerTransactionId,
+            },
           );
+          break;
+        case 'unresolved':
+          changed = await this.recordUnresolved(payment._id, status);
           break;
         case 'failed':
           changed = await this.recordFailure(
@@ -490,11 +631,14 @@ export class SubscriptionPaymentsService {
 
   // ─── Internes ──────────────────────────────────────────────────────────────
 
-  private lookupFor(payment: PaymentRecord): PaymentStatusLookup | null {
+  private lookupFor(
+    payment: PaymentRecord,
+    provider: PaymentProvider,
+  ): PaymentStatusLookup | null {
     if (payment.providerReference) {
       return { by: 'provider', providerReference: payment.providerReference };
     }
-    return this.provider.supportsMerchantReferenceLookup
+    return provider.supportsMerchantReferenceLookup
       ? { by: 'merchant', merchantReference: payment.merchantReference }
       : null;
   }
@@ -507,7 +651,11 @@ export class SubscriptionPaymentsService {
   private concordant(
     payment: Pick<
       PaymentRecord,
-      'merchantReference' | 'providerReference' | 'amount' | 'currency'
+      | 'merchantReference'
+      | 'providerReference'
+      | 'amount'
+      | 'currency'
+      | 'providerTransactionId'
     >,
     status: ProviderPaymentStatus,
   ): boolean {
@@ -569,9 +717,10 @@ export class SubscriptionPaymentsService {
         throw paymentConfirmationPending();
       }
       // Référence prestataire déjà portée par un autre paiement : anomalie.
+      const duplicate = subscriptionPaymentDuplicateKeyIndex(error);
       if (
-        subscriptionPaymentDuplicateKeyIndex(error) ===
-        'provider_1_providerReference_1'
+        duplicate === 'provider_1_providerReference_1' ||
+        duplicate === 'provider_1_providerTransactionId_1'
       ) {
         return (await this.markReview(paymentId)) ? 'review' : 'unchanged';
       }
@@ -617,6 +766,10 @@ export class SubscriptionPaymentsService {
             open: false,
             periodId,
             providerReference: verified.providerReference,
+            ...(typeof verified.providerTransactionId === 'string'
+              ? { providerTransactionId: verified.providerTransactionId }
+              : {}),
+            providerCheckoutUrl: null,
             confirmedAt: this.clock(),
           },
         },
@@ -637,7 +790,16 @@ export class SubscriptionPaymentsService {
     paymentId: Types.ObjectId,
     providerReference: string,
     from: readonly SubscriptionPaymentStatus[],
+    attached: {
+      checkoutUrl?: string | null;
+      providerTransactionId?: string | null;
+    } = {},
   ): Promise<boolean> {
+    const before = await this.findById(paymentId);
+    const transactionId =
+      typeof attached.providerTransactionId === 'string'
+        ? attached.providerTransactionId
+        : null;
     try {
       const updated = await this.paymentModel
         .updateOne(
@@ -645,22 +807,41 @@ export class SubscriptionPaymentsService {
             _id: paymentId,
             status: { $in: from },
             providerReference: { $in: [null, providerReference] },
+            // 1-21B : une transaction rattachée n'est jamais remplacée.
+            ...(transactionId
+              ? { providerTransactionId: { $in: [null, transactionId] } }
+              : {}),
           },
           {
             $set: {
               status: SubscriptionPaymentStatus.PENDING,
               providerReference,
-              initiatedAt: this.clock(),
+              initiatedAt: before?.initiatedAt ?? this.clock(),
               incidentCode: null,
+              ...(transactionId
+                ? { providerTransactionId: transactionId }
+                : {}),
+              ...(attached.checkoutUrl !== undefined
+                ? { providerCheckoutUrl: attached.checkoutUrl }
+                : {}),
             },
           },
         )
         .exec();
-      if (updated.matchedCount === 1) return true;
+      if (updated.matchedCount === 1) {
+        // Visible seulement si l'état, l'incident ou la page ont changé.
+        return (
+          before?.status !== SubscriptionPaymentStatus.PENDING ||
+          before?.incidentCode !== null ||
+          (attached.checkoutUrl !== undefined &&
+            before?.providerCheckoutUrl !== attached.checkoutUrl)
+        );
+      }
     } catch (error) {
+      const duplicate = subscriptionPaymentDuplicateKeyIndex(error);
       if (
-        subscriptionPaymentDuplicateKeyIndex(error) !==
-        'provider_1_providerReference_1'
+        duplicate !== 'provider_1_providerReference_1' &&
+        duplicate !== 'provider_1_providerTransactionId_1'
       ) {
         throw error;
       }
@@ -671,12 +852,128 @@ export class SubscriptionPaymentsService {
     const current = await this.findById(paymentId);
     if (
       current &&
-      current.providerReference !== null &&
-      current.providerReference !== providerReference
+      ((current.providerReference !== null &&
+        current.providerReference !== providerReference) ||
+        (transactionId !== null &&
+          current.providerTransactionId !== null &&
+          current.providerTransactionId !== transactionId))
     ) {
       return this.markReview(paymentId);
     }
     return false;
+  }
+
+  /**
+   * 1-21B — Page de paiement close ou tentative échouée SANS succès
+   * constaté : le paiement reste OUVERT (`uncertain`, incident
+   * `checkout_unresolved`), toujours vérifiable (succès tardif accepté) ;
+   * aucune nouvelle tentative libérée, aucune relance de débit. Clôture par
+   * le rapprochement opérateur seulement. Vrai si l'état visible a changé.
+   */
+  private async recordUnresolved(
+    paymentId: Types.ObjectId,
+    status: ProviderPaymentStatus,
+  ): Promise<boolean> {
+    const before = await this.findById(paymentId);
+    if (!before) return false;
+    const transactionId =
+      typeof status.providerTransactionId === 'string'
+        ? status.providerTransactionId
+        : null;
+    try {
+      const updated = await this.paymentModel
+        .updateOne(
+          {
+            _id: paymentId,
+            status: {
+              $in: [
+                SubscriptionPaymentStatus.INITIATING,
+                SubscriptionPaymentStatus.PENDING,
+                SubscriptionPaymentStatus.UNCERTAIN,
+              ],
+            },
+            providerReference: { $in: [null, status.providerReference] },
+            ...(transactionId
+              ? { providerTransactionId: { $in: [null, transactionId] } }
+              : {}),
+          },
+          {
+            $set: {
+              status: SubscriptionPaymentStatus.UNCERTAIN,
+              incidentCode: SubscriptionPaymentIncident.CHECKOUT_UNRESOLVED,
+              providerReference: status.providerReference,
+              providerCheckoutUrl: status.checkoutUrl ?? null,
+              ...(transactionId
+                ? { providerTransactionId: transactionId }
+                : {}),
+            },
+          },
+        )
+        .exec();
+      if (updated.matchedCount !== 1) return false;
+    } catch (error) {
+      const duplicate = subscriptionPaymentDuplicateKeyIndex(error);
+      if (
+        duplicate !== 'provider_1_providerReference_1' &&
+        duplicate !== 'provider_1_providerTransactionId_1'
+      ) {
+        throw error;
+      }
+      return this.markReview(paymentId);
+    }
+    return (
+      before.status !== SubscriptionPaymentStatus.UNCERTAIN ||
+      before.incidentCode !== SubscriptionPaymentIncident.CHECKOUT_UNRESOLVED
+    );
+  }
+
+  /**
+   * 1-21B — Paiement auquel une transaction du prestataire est RATTACHÉE
+   * (notification) ; `null` sinon. Lecture seule.
+   */
+  async findByProviderTransaction(
+    providerName: string,
+    providerTransactionId: string,
+  ): Promise<Types.ObjectId | null> {
+    const found = await this.paymentModel
+      .findOne({ provider: providerName, providerTransactionId })
+      .select({ _id: 1 })
+      .lean<{ _id: Types.ObjectId }>()
+      .exec();
+    return found?._id ?? null;
+  }
+
+  /**
+   * 1-21B — Candidats BORNÉS au rattachement d'une transaction notifiée
+   * avant d'être connue : paiements ouverts de ce prestataire, session
+   * connue, aucune transaction rattachée, initiés depuis `since` ; les plus
+   * récents d'abord, au plus `limit`. Jamais tous les paiements ouverts.
+   */
+  async unattachedCandidates(
+    providerName: string,
+    since: Date,
+    limit: number,
+  ): Promise<Types.ObjectId[]> {
+    const rows = await this.paymentModel
+      .find({
+        provider: providerName,
+        open: true,
+        status: {
+          $in: [
+            SubscriptionPaymentStatus.PENDING,
+            SubscriptionPaymentStatus.UNCERTAIN,
+          ],
+        },
+        providerReference: { $type: 'string' },
+        providerTransactionId: null,
+        initiatedAt: { $gte: since },
+      })
+      .sort({ initiatedAt: -1 })
+      .limit(limit)
+      .select({ _id: 1 })
+      .lean<{ _id: Types.ObjectId }[]>()
+      .exec();
+    return rows.map((r) => r._id);
   }
 
   /**
@@ -728,10 +1025,13 @@ export class SubscriptionPaymentsService {
    * Discordance : `review`, `open` conservé ; jamais depuis `succeeded`.
    * Vrai si le paiement est passé à `review`.
    */
-  private async markReview(paymentId: Types.ObjectId): Promise<boolean> {
+  private async markReview(
+    paymentId: Types.ObjectId,
+    incident: SubscriptionPaymentIncident = SubscriptionPaymentIncident.PROVIDER_MISMATCH,
+  ): Promise<boolean> {
     return this.transition(paymentId, FINALIZABLE_STATUSES, {
       status: SubscriptionPaymentStatus.REVIEW,
-      incidentCode: SubscriptionPaymentIncident.PROVIDER_MISMATCH,
+      incidentCode: incident,
     });
   }
 
@@ -812,7 +1112,8 @@ export class SubscriptionPaymentsService {
       term: payment.term,
       amount: payment.amount,
       currency: payment.currency,
-      payerPhoneMasked: payment.payerPhoneMasked,
+      payerPhoneMasked: payment.payerPhoneMasked ?? null,
+      checkoutUrl: payment.open ? (payment.providerCheckoutUrl ?? null) : null,
       createdAt: iso(payment.createdAt),
       initiatedAt: iso(payment.initiatedAt),
       confirmedAt: iso(payment.confirmedAt),

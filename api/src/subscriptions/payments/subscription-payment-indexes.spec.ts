@@ -24,16 +24,17 @@ const exact = () => [
 ];
 
 describe('Index subscription_payments (1-14D.2B)', () => {
-  it('5 index attendus, dont 4 uniques et 2 partiels ; aucun TTL', () => {
+  it('6 index attendus, dont 5 uniques et 3 partiels (1-21B : transaction du prestataire) ; aucun TTL', () => {
     expect(SUBSCRIPTION_PAYMENT_INDEXES.map((i) => i.name)).toEqual([
       'organizationId_1_clientOperationId_1',
       'merchantReference_1',
       'provider_1_providerReference_1',
+      'provider_1_providerTransactionId_1',
       'organizationId_1_single_open_payment',
       'organizationId_1__id_-1',
     ]);
     expect(SUBSCRIPTION_PAYMENT_INDEXES.filter((i) => i.unique)).toHaveLength(
-      4,
+      5,
     );
     expect(describeSubscriptionPaymentIndexProblem(exact())).toBeNull();
   });

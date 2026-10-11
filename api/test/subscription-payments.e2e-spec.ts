@@ -94,6 +94,8 @@ const MIGRATION_SCRIPT = join(
 
 const VIEW_KEYS = [
   'amount',
+  // 1-21B : page de paiement hébergée (null hors SasPay).
+  'checkoutUrl',
   'confirmedAt',
   'createdAt',
   'currency',
